@@ -48,16 +48,13 @@ function toggleSettingsKeyVisibility() {
   inp.type = inp.type === "password" ? "text" : "password";
 }
 
-// Show / hide API key input when provider changes
-document.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
-  radio.addEventListener("change", () => {
-    const needsKey = radio.value !== "local";
-    document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
-    document.getElementById("settings-error").textContent = "";
-  });
-});
+function onAiProviderChange(radio) {
+  const needsKey = radio.value !== "local";
+  document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
+  document.getElementById("settings-error").textContent = "";
+}
 
-document.getElementById("settings-save").addEventListener("click", () => {
+function saveSettings() {
   const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "local";
   if (prov !== "local") {
     const key = document.getElementById("settings-api-key").value.trim();
@@ -73,11 +70,11 @@ document.getElementById("settings-save").addEventListener("click", () => {
   document.getElementById("settings-overlay").classList.remove("open");
   _updateAiModeLabel();
   toast(prov === "local" ? "已切換為本機 Claude 模式" : "API Key 已儲存");
-});
+}
 
-document.getElementById("settings-skip").addEventListener("click", () => {
+function closeSettings() {
   document.getElementById("settings-overlay").classList.remove("open");
-});
+}
 
 /* ── API helpers ── */
 async function api(method, path, body) {

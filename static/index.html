@@ -245,28 +245,28 @@
     <div id="settings-body">
       <div class="settings-providers">
         <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="local" checked />
+          <input type="radio" name="ai-provider" value="local" checked onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>本機 Claude（建議）</strong>
             <small>使用此裝置已安裝的 Claude Desktop / CLI，不需 API Key</small>
           </div>
         </label>
         <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="anthropic" />
+          <input type="radio" name="ai-provider" value="anthropic" onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>Claude API</strong>
             <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a></small>
           </div>
         </label>
         <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="openai" />
+          <input type="radio" name="ai-provider" value="openai" onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>ChatGPT</strong>
             <small>OpenAI · 取得 Key：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a></small>
           </div>
         </label>
         <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="gemini" />
+          <input type="radio" name="ai-provider" value="gemini" onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>Gemini</strong>
             <small>Google · 取得 Key：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></small>
@@ -280,12 +280,12 @@
       <div id="settings-error"></div>
     </div>
     <div id="settings-footer">
-      <button class="btn btn-ghost" id="settings-skip">取消</button>
-      <button class="btn btn-primary" id="settings-save">確認</button>
+      <button class="btn btn-ghost" onclick="closeSettings()">取消</button>
+      <button class="btn btn-primary" onclick="saveSettings()">確認</button>
     </div>
   </div>
 </div>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>
