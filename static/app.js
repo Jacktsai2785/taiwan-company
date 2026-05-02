@@ -719,10 +719,6 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   }
 });
 
-document.getElementById("memo-drop-label").addEventListener("click", () => {
-  document.getElementById("memo-file-input").click();
-});
-
 /* ── Tabs ── */
 document.getElementById("tab-group").addEventListener("click", e => {
   const btn = e.target.closest(".tab-btn");
