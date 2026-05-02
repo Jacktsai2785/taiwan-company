@@ -48,37 +48,35 @@ function toggleSettingsKeyVisibility() {
   inp.type = inp.type === "password" ? "text" : "password";
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  // Show / hide API key input when provider changes
-  document.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
-    radio.addEventListener("change", () => {
-      const needsKey = radio.value !== "local";
-      document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
-      document.getElementById("settings-error").textContent = "";
-    });
+// Show / hide API key input when provider changes
+document.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    const needsKey = radio.value !== "local";
+    document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
+    document.getElementById("settings-error").textContent = "";
   });
+});
 
-  document.getElementById("settings-save").addEventListener("click", () => {
-    const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "local";
-    if (prov !== "local") {
-      const key = document.getElementById("settings-api-key").value.trim();
-      if (!key) {
-        document.getElementById("settings-error").textContent = "請輸入 API Key";
-        return;
-      }
-      localStorage.setItem("ai_api_key", key);
-    } else {
-      localStorage.removeItem("ai_api_key");
+document.getElementById("settings-save").addEventListener("click", () => {
+  const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "local";
+  if (prov !== "local") {
+    const key = document.getElementById("settings-api-key").value.trim();
+    if (!key) {
+      document.getElementById("settings-error").textContent = "請輸入 API Key";
+      return;
     }
-    localStorage.setItem("ai_provider", prov);
-    document.getElementById("settings-overlay").classList.remove("open");
-    _updateAiModeLabel();
-    toast(prov === "local" ? "已切換為本機 Claude 模式" : "API Key 已儲存");
-  });
+    localStorage.setItem("ai_api_key", key);
+  } else {
+    localStorage.removeItem("ai_api_key");
+  }
+  localStorage.setItem("ai_provider", prov);
+  document.getElementById("settings-overlay").classList.remove("open");
+  _updateAiModeLabel();
+  toast(prov === "local" ? "已切換為本機 Claude 模式" : "API Key 已儲存");
+});
 
-  document.getElementById("settings-skip").addEventListener("click", () => {
-    document.getElementById("settings-overlay").classList.remove("open");
-  });
+document.getElementById("settings-skip").addEventListener("click", () => {
+  document.getElementById("settings-overlay").classList.remove("open");
 });
 
 /* ── API helpers ── */
