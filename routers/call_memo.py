@@ -2,6 +2,7 @@ import io
 import tempfile
 import os
 from datetime import date
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from services import data_store, memo_extractor
 from services.ai_deps import ai_from_headers
 from services.file_parser import extract_text
+from services import whisper_transcriber
 
 router = APIRouter(prefix="/api/companies", tags=["call_memo"])
 
@@ -78,6 +80,31 @@ async def extract_memo(company_id: str, file: UploadFile = File(...), ai: dict =
     fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
     fields["interview_date"] = date.today().strftime("%Y/%m/%d")
     return fields
+
+
+@router.post("/{company_id}/memo/transcribe-audio")
+async def transcribe_audio_memo(
+    company_id: str,
+    file: UploadFile = File(...),
+    ai: dict = Depends(ai_from_headers),
+):
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    suffix = Path(file.filename or "audio.mp3").suffix.lower()
+    if suffix not in whisper_transcriber.SUPPORTED_EXTS:
+        raise HTTPException(status_code=422, detail=f"不支援的音訊格式：{suffix}，請上傳 MP3 / WAV / M4A / OGG / WEBM / FLAC")
+
+    content = await file.read()
+    transcript = await whisper_transcriber.transcribe_audio(content, suffix)
+
+    if not transcript.strip():
+        raise HTTPException(status_code=422, detail="無法辨識音訊內容，請確認檔案包含清晰語音")
+
+    fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
+    fields["interview_date"] = date.today().strftime("%Y/%m/%d")
+    return {"transcript": transcript, "fields": fields}
 
 
 @router.get("/{company_id}/memo/download")

@@ -719,6 +719,46 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   }
 });
 
+/* ── Audio transcription ── */
+document.getElementById("memo-audio-input").addEventListener("change", async function() {
+  const file = this.files[0];
+  if (!file) return;
+  this.value = "";
+  const id = _modalCompanyId;
+  if (!id) return;
+
+  const status = document.getElementById("memo-audio-status");
+  const transcriptBox = document.getElementById("memo-transcript-box");
+  transcriptBox.style.display = "none";
+
+  status.textContent = "⏳ Whisper 語音辨識中，依錄音長度約需 1–3 分鐘…";
+  status.className = "memo-status-info";
+
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const result = await api("POST", `/api/companies/${id}/memo/transcribe-audio`, fd);
+    document.getElementById("memo-transcript-text").value = result.transcript;
+    transcriptBox.style.display = "";
+    document.getElementById("memo-transcript-toggle").textContent = "▲";
+    document.getElementById("memo-transcript-text").style.display = "";
+    _renderMemoFields(result.fields);
+    status.textContent = "✅ 語音辨識完成，欄位已自動填寫，請確認後儲存";
+    status.className = "memo-status-ok";
+  } catch (err) {
+    status.textContent = `❌ ${err.message}`;
+    status.className = "memo-status-error";
+  }
+});
+
+function toggleTranscript() {
+  const text = document.getElementById("memo-transcript-text");
+  const toggle = document.getElementById("memo-transcript-toggle");
+  const collapsed = text.style.display === "none";
+  text.style.display = collapsed ? "" : "none";
+  toggle.textContent = collapsed ? "▲" : "▼";
+}
+
 /* ── Tabs ── */
 document.getElementById("tab-group").addEventListener("click", e => {
   const btn = e.target.closest(".tab-btn");

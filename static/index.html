@@ -143,6 +143,21 @@
       <input type="file" id="memo-file-input" accept=".txt,.pdf,.doc,.docx" style="display:none" />
       <div id="memo-extract-status"></div>
     </div>
+    <div id="memo-audio-area">
+      <label id="memo-audio-label" for="memo-audio-input">
+        <span class="memo-upload-icon">🎙️</span>
+        <span>上傳錄音檔以語音辨識並自動填寫</span>
+        <small>MP3 / WAV / M4A / OGG / WEBM / FLAC</small>
+      </label>
+      <input type="file" id="memo-audio-input" accept=".mp3,.wav,.m4a,.ogg,.webm,.flac,.aac" style="display:none" />
+      <div id="memo-audio-status"></div>
+      <div id="memo-transcript-box" style="display:none">
+        <div id="memo-transcript-header" onclick="toggleTranscript()">
+          <span>📝 辨識逐字稿</span><span id="memo-transcript-toggle">▼</span>
+        </div>
+        <textarea id="memo-transcript-text" readonly rows="6"></textarea>
+      </div>
+    </div>
     <div id="memo-fields"></div>
   </div>
 </div>
