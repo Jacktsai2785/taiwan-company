@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>台灣產業商情平台</title>
+  <link rel="stylesheet" href="/static/style.css?v=7" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── Sidebar ── -->
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <div id="platform-name">台灣產業商情平台</div>
+      <div id="sidebar-section-label">你每日最佳的資訊來源</div>
+      <button id="settings-btn" onclick="openSettings()" title="AI 設定">⚙</button>
+    </div>
+    <nav id="industry-list"><!-- rendered by JS --></nav>
+    <button id="add-industry-btn">＋ 新增產業別</button>
+    <div id="upload-zone">
+      <div id="drop-target">
+        <span class="upload-icon">⬆️</span>
+        <span>上傳檔案<small>PDF / Word / Excel / 圖片</small></span>
+      </div>
+      <input type="file" id="file-input"
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp" />
+      <button id="manual-input-btn">✏️ 手動輸入公司</button>
+      <div id="upload-progress"></div>
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main id="main">
+    <div id="toolbar">
+      <div id="tab-group">
+        <button class="tab-btn active" data-tab="all">所有公司</button>
+        <button class="tab-btn" data-tab="watched">⭐ 追蹤<span id="watch-count"></span></button>
+      </div>
+      <h2 id="toolbar-title"></h2>
+      <input type="search" id="search-box" placeholder="搜尋公司名稱…" autocomplete="off" />
+      <div id="sort-group">
+        <button class="sort-btn active" data-sort="capital">資本額 ▼</button>
+        <button class="sort-btn" data-sort="name">A → Z</button>
+      </div>
+    </div>
+    <div id="industry-panel" style="display:none">
+      <div class="ind-panel-row">
+        <div class="ind-panel-block">
+          <div class="ind-panel-block-header">
+            <span class="ind-panel-icon">📰</span>
+            <span class="ind-panel-block-title">熱門日報</span>
+            <span class="ind-panel-block-date" id="ind-daily-date"></span>
+          </div>
+          <div class="ind-panel-block-body" id="ind-daily-body">
+            <div class="ind-placeholder-line w80"></div>
+            <div class="ind-placeholder-line w60"></div>
+            <div class="ind-placeholder-line w70"></div>
+            <div class="ind-placeholder-line w50"></div>
+          </div>
+        </div>
+        <div class="ind-panel-divider"></div>
+        <div class="ind-panel-block">
+          <div class="ind-panel-block-header">
+            <span class="ind-panel-icon">💬</span>
+            <span class="ind-panel-block-title">近一季熱門討論</span>
+            <span class="ind-panel-block-date" id="ind-discuss-date"></span>
+          </div>
+          <div class="ind-panel-block-body" id="ind-discuss-body">
+            <div class="ind-placeholder-line w70"></div>
+            <div class="ind-placeholder-line w85"></div>
+            <div class="ind-placeholder-line w55"></div>
+            <div class="ind-placeholder-line w65"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="company-grid">
+      <div id="empty-state">
+        <div class="empty-icon">🏢</div>
+        <div>尚無公司資料<br><small>請上傳檔案以開始辨識</small></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Company Detail Modal ── -->
+<div id="modal-overlay">
+  <div id="modal" role="dialog" aria-modal="true">
+    <div id="modal-header">
+      <button id="modal-close" aria-label="關閉">✕</button>
+      <div id="modal-name"></div>
+      <div id="modal-labels"></div>
+    </div>
+    <div id="modal-body">
+
+      <div class="modal-section">
+        <h4>基本資料</h4>
+        <div class="info-grid" id="modal-info"></div>
+      </div>
+
+      <div class="modal-section" id="modal-directors-section">
+        <h4>董監事名單</h4>
+        <table class="director-table">
+          <thead>
+            <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th></tr>
+          </thead>
+          <tbody id="modal-directors"></tbody>
+        </table>
+      </div>
+
+      <div class="modal-section">
+        <h4>公司簡介 <button id="modal-regen-btn" onclick="regenSummary()">🔄 重新生成</button></h4>
+        <div id="modal-summary"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Call Memo Side Panel ── -->
+<div id="memo-panel">
+  <div id="memo-panel-header">
+    <div id="memo-panel-title">訪談備忘錄</div>
+    <div id="memo-panel-actions">
+      <button class="memo-action-btn" onclick="saveMemo()">💾 儲存</button>
+      <button class="memo-action-btn" onclick="downloadMemo()">⬇ 下載 .docx</button>
+      <button id="memo-panel-close" onclick="closeMemoPanel()">✕</button>
+    </div>
+  </div>
+  <div id="memo-panel-body">
+    <div id="memo-upload-area">
+      <label id="memo-drop-label" for="memo-file-input">
+        <span class="memo-upload-icon">📄</span>
+        <span>上傳逐字稿以自動填寫</span>
+        <small>TXT / PDF / Word</small>
+      </label>
+      <input type="file" id="memo-file-input" accept=".txt,.pdf,.doc,.docx" style="display:none" />
+      <div id="memo-extract-status"></div>
+    </div>
+    <div id="memo-fields"></div>
+  </div>
+</div>
+
+<!-- ── Upload Confirm Dialog ── -->
+<div id="confirm-overlay">
+  <div id="confirm-dialog">
+    <div id="confirm-header">
+      <h3>確認辨識結果</h3>
+      <p id="confirm-subtitle"></p>
+    </div>
+    <div id="confirm-body">
+      <div class="confirm-row" style="font-weight:700;font-size:11px;color:var(--muted);padding-bottom:6px;">
+        <span>公司名稱</span><span>標籤</span><span>產業別</span>
+      </div>
+      <div id="confirm-rows"></div>
+    </div>
+    <div id="confirm-footer">
+      <button class="btn btn-ghost" id="confirm-cancel">取消</button>
+      <button class="btn btn-primary" id="confirm-ok">確認並儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Name Review Dialog ── -->
+<div id="name-review-overlay">
+  <div id="name-review-dialog">
+    <div id="name-review-header">
+      <h3>校對公司名稱</h3>
+      <p>請確認 OCR 辨識結果是否正確，可直接編輯或刪除錯誤名稱，再進行下一步</p>
+    </div>
+    <div id="name-review-body">
+      <div id="name-review-rows"></div>
+    </div>
+    <div id="name-review-footer">
+      <button class="btn btn-ghost" id="name-review-cancel">取消</button>
+      <button class="btn btn-primary" id="name-review-ok">下一步 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Manual Input Dialog ── -->
+<div id="manual-overlay">
+  <div id="manual-dialog">
+    <div id="manual-header">
+      <h3>手動輸入公司名稱</h3>
+      <p>每行輸入一個公司名稱，系統將自動比對既有資料</p>
+    </div>
+    <div id="manual-body">
+      <textarea id="manual-names" placeholder="例：&#10;台積電股份有限公司&#10;鴻海精密工業股份有限公司"></textarea>
+      <div class="manual-fields">
+        <div class="manual-field">
+          <label>標籤</label>
+          <input id="manual-label" type="text" placeholder="例：2026Q1" />
+        </div>
+        <div class="manual-field">
+          <label>產業別</label>
+          <select id="manual-industry"></select>
+        </div>
+      </div>
+    </div>
+    <div id="manual-footer">
+      <button class="btn btn-ghost" id="manual-cancel">取消</button>
+      <button class="btn btn-primary" id="manual-ok">下一步 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Industry Suggest Dialog ── -->
+<div id="ind-suggest-overlay">
+  <div id="ind-suggest-dialog">
+    <div id="ind-suggest-header">
+      <h3 id="ind-suggest-title">分析中…</h3>
+      <p id="ind-suggest-subtitle"></p>
+    </div>
+    <div id="ind-suggest-body">
+      <div id="ind-suggest-loading">
+        <div class="suggest-spinner"></div>
+        <span>Claude 正在分析公司清單，約需 10–30 秒…</span>
+      </div>
+      <div id="ind-suggest-rows"></div>
+    </div>
+    <div id="ind-suggest-footer">
+      <button class="btn btn-ghost" id="ind-suggest-cancel">取消</button>
+      <button class="btn btn-primary" id="ind-suggest-ok" disabled>確認並套用</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ── -->
+<div id="toast-container"></div>
+
+<!-- ── AI Settings Modal ── -->
+<div id="settings-overlay">
+  <div id="settings-dialog">
+    <div id="settings-header">
+      <h3>設定 AI API Key</h3>
+      <p>請選擇您使用的 AI 平台並輸入 API Key，系統才能協助分析公司資料。<br>API Key 僅儲存在您的瀏覽器，不會傳送至本平台伺服器以外的地方。</p>
+    </div>
+    <div id="settings-body">
+      <div class="settings-providers">
+        <label class="settings-provider-opt">
+          <input type="radio" name="ai-provider" value="anthropic" checked />
+          <div class="provider-card">
+            <strong>Claude</strong>
+            <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a></small>
+          </div>
+        </label>
+        <label class="settings-provider-opt">
+          <input type="radio" name="ai-provider" value="openai" />
+          <div class="provider-card">
+            <strong>ChatGPT</strong>
+            <small>OpenAI · 取得 Key：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a></small>
+          </div>
+        </label>
+        <label class="settings-provider-opt">
+          <input type="radio" name="ai-provider" value="gemini" />
+          <div class="provider-card">
+            <strong>Gemini</strong>
+            <small>Google · 取得 Key：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></small>
+          </div>
+        </label>
+      </div>
+      <div class="settings-key-row">
+        <input type="password" id="settings-api-key" placeholder="貼上 API Key…" autocomplete="off" spellcheck="false" />
+        <button class="key-toggle-btn" onclick="toggleSettingsKeyVisibility()" title="顯示 / 隱藏">👁</button>
+      </div>
+      <div id="settings-error"></div>
+    </div>
+    <div id="settings-footer">
+      <button class="btn btn-ghost" id="settings-skip">稍後再設定</button>
+      <button class="btn btn-primary" id="settings-save">開始使用</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=7"></script>
+</body>
+</html>

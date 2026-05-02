@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+
+# Data (user-specific runtime data)
+data/companies.json
+data/config.json
+data/temp/
+
+# Keep the template file
+!data/call_memo_template.docx
+
+# OS
+.DS_Store
+Thumbs.db

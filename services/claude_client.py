@@ -1,0 +1,285 @@
+"""
+Wrapper for Claude / OpenAI / Gemini calls.
+Priority: per-request api_key → ANTHROPIC_API_KEY env → local Claude CLI
+Supported providers: anthropic (default), openai, gemini
+"""
+import base64
+import logging
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+MODEL_ANTHROPIC = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+MODEL_OPENAI    = os.getenv("OPENAI_MODEL",  "gpt-4o")
+MODEL_GEMINI    = os.getenv("GEMINI_MODEL",  "gemini-2.0-flash")
+
+# ── Anthropic API ──────────────────────────────────────────────────────────────
+
+def _ask_anthropic(
+    prompt: str,
+    timeout: int = 120,
+    allowed_tools: list[str] | None = None,
+    api_key: str = "",
+) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    use_web = bool(allowed_tools and any(t in {"WebSearch", "WebFetch"} for t in allowed_tools))
+    tools: list[dict[str, Any]] = [{"type": "web_search_20250305"}] if use_web else []
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+
+    for _round in range(10):
+        kwargs: dict[str, Any] = {"model": MODEL_ANTHROPIC, "max_tokens": 8096, "messages": messages}
+        if tools:
+            kwargs["tools"] = tools
+        response = client.messages.create(**kwargs)
+        log.debug("Anthropic round %d stop=%s", _round, response.stop_reason)
+
+        if response.stop_reason == "end_turn":
+            return _text_from_anthropic(response)
+
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+            results = [
+                {"type": "tool_result", "tool_use_id": b.id, "content": ""}
+                for b in response.content if getattr(b, "type", None) == "tool_use"
+            ]
+            if results:
+                messages.append({"role": "user", "content": results})
+            continue
+
+        return _text_from_anthropic(response)
+
+    raise RuntimeError("Claude API exceeded max tool rounds")
+
+
+def _text_from_anthropic(response) -> str:
+    return "\n".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
+
+
+def _ask_anthropic_image(
+    prompt: str, image_content: bytes, suffix: str, api_key: str = ""
+) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    suffix_clean = suffix.lstrip(".").lower()
+    _MEDIA = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+              "gif": "image/gif", "webp": "image/webp"}
+    media_type = _MEDIA.get(suffix_clean)
+    if media_type is None:
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(image_content)).save(buf, format="PNG")
+        image_content, media_type = buf.getvalue(), "image/png"
+
+    img_data = base64.standard_b64encode(image_content).decode()
+    response = client.messages.create(
+        model=MODEL_ANTHROPIC, max_tokens=2048,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},
+            {"type": "text", "text": prompt},
+        ]}],
+    )
+    return _text_from_anthropic(response)
+
+
+# ── OpenAI API ─────────────────────────────────────────────────────────────────
+
+def _ask_openai(
+    prompt: str, allowed_tools: list[str] | None = None, api_key: str = ""
+) -> str:
+    import httpx
+    use_web = bool(allowed_tools and any(t in {"WebSearch", "WebFetch"} for t in allowed_tools))
+    model = "gpt-4o-search-preview" if use_web else MODEL_OPENAI
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 8096,
+    }
+    with httpx.Client(timeout=300) as c:
+        resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def _ask_openai_image(
+    prompt: str, image_content: bytes, suffix: str, api_key: str = ""
+) -> str:
+    import httpx
+    suffix_clean = suffix.lstrip(".").lower()
+    img_type = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif", "webp": "webp"}.get(suffix_clean, "jpeg")
+    img_b64 = base64.b64encode(image_content).decode()
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body: dict[str, Any] = {
+        "model": MODEL_OPENAI,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/{img_type};base64,{img_b64}"}},
+            {"type": "text", "text": prompt},
+        ]}],
+        "max_tokens": 2048,
+    }
+    with httpx.Client(timeout=120) as c:
+        resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+# ── Gemini API ─────────────────────────────────────────────────────────────────
+
+def _ask_gemini(
+    prompt: str, allowed_tools: list[str] | None = None, api_key: str = ""
+) -> str:
+    import httpx
+    use_web = bool(allowed_tools and any(t in {"WebSearch", "WebFetch"} for t in allowed_tools))
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}"
+    body: dict[str, Any] = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 8096},
+    }
+    if use_web:
+        body["tools"] = [{"google_search": {}}]
+    with httpx.Client(timeout=300) as c:
+        resp = c.post(url, json=body)
+        resp.raise_for_status()
+        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def _ask_gemini_image(
+    prompt: str, image_content: bytes, suffix: str, api_key: str = ""
+) -> str:
+    import httpx
+    suffix_clean = suffix.lstrip(".").lower()
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "gif": "image/gif", "webp": "image/webp"}.get(suffix_clean, "image/jpeg")
+    img_b64 = base64.b64encode(image_content).decode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GEMINI}:generateContent?key={api_key}"
+    body: dict[str, Any] = {
+        "contents": [{"role": "user", "parts": [
+            {"inline_data": {"mime_type": mime, "data": img_b64}},
+            {"text": prompt},
+        ]}],
+        "generationConfig": {"maxOutputTokens": 2048},
+    }
+    with httpx.Client(timeout=120) as c:
+        resp = c.post(url, json=body)
+        resp.raise_for_status()
+        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+# ── Local CLI fallback ─────────────────────────────────────────────────────────
+
+_CLI_PATH: str | None = None
+
+
+def _find_cli() -> str:
+    import shutil
+    env_path = os.getenv("CLAUDE_CLI_PATH", "").strip()
+    if env_path and Path(env_path).exists():
+        return env_path
+    found = shutil.which("claude") or shutil.which("claude.exe")
+    if found:
+        return found
+    bun_base = Path.home() / ".bun" / "install" / "cache" / "@anthropic-ai"
+    for pkg_name in ["claude-agent-sdk-win32-x64", "claude-code-win32-x64"]:
+        pkg_dir = bun_base / pkg_name
+        if pkg_dir.exists():
+            for v in sorted(pkg_dir.iterdir(), reverse=True):
+                candidate = v / "claude.exe"
+                if candidate.exists():
+                    return str(candidate)
+    gstack_nm = Path.home() / ".claude" / "skills" / "gstack" / "node_modules"
+    for candidate in gstack_nm.rglob("claude.exe"):
+        return str(candidate)
+    raise FileNotFoundError(
+        "找不到 Claude CLI。請設定 API Key 或安裝 Claude Desktop。"
+    )
+
+
+def _cli() -> str:
+    global _CLI_PATH
+    if _CLI_PATH is None:
+        _CLI_PATH = _find_cli()
+    return _CLI_PATH
+
+
+def _ask_cli(prompt: str, timeout: int = 120, allowed_tools: list[str] | None = None) -> str:
+    cmd = [_cli(), "-p", prompt, "--output-format", "text"]
+    if allowed_tools:
+        cmd += ["--allowedTools", ",".join(allowed_tools)]
+    result = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    stdout = result.stdout.decode("utf-8", errors="replace").strip()
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Claude CLI 錯誤 (exit {result.returncode}):\n{stderr[:400]}")
+    if stdout.lower().startswith("execution error") or stdout.lower() == "error":
+        raise RuntimeError(f"Claude CLI 執行錯誤：{stdout[:200]}")
+    return stdout
+
+
+def _ask_cli_image(prompt: str, image_content: bytes, suffix: str, timeout: int = 120) -> str:
+    import tempfile
+    suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        tmp.write(image_content); tmp.flush(); tmp.close()
+        full_prompt = f"請先用 Read tool 讀取以下圖片，然後回答問題。\n\n圖片路徑：{tmp.name}\n\n{prompt}"
+        cmd = [_cli(), "-p", full_prompt, "--output-format", "text",
+               "--allowedTools", "Read", "--add-dir", str(Path(tmp.name).parent)]
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(f"Claude CLI 圖片辨識錯誤 (exit {result.returncode}):\n{stderr[:400]}")
+        if stdout.lower().startswith("execution error") or stdout.lower() == "error":
+            raise RuntimeError(f"Claude CLI 執行錯誤：{stdout[:200]}")
+        return stdout
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
+
+def ask(
+    prompt: str,
+    timeout: int = 120,
+    allowed_tools: list[str] | None = None,
+    api_key: str = "",
+    provider: str = "anthropic",
+) -> str:
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        provider = "anthropic"
+    if not api_key:
+        return _ask_cli(prompt, timeout, allowed_tools)
+    if provider == "openai":
+        return _ask_openai(prompt, allowed_tools, api_key)
+    if provider == "gemini":
+        return _ask_gemini(prompt, allowed_tools, api_key)
+    return _ask_anthropic(prompt, timeout, allowed_tools, api_key)
+
+
+def ask_with_image(
+    prompt: str,
+    image_content: bytes,
+    suffix: str,
+    timeout: int = 120,
+    api_key: str = "",
+    provider: str = "anthropic",
+) -> str:
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        provider = "anthropic"
+    if not api_key:
+        return _ask_cli_image(prompt, image_content, suffix, timeout)
+    if provider == "openai":
+        return _ask_openai_image(prompt, image_content, suffix, api_key)
+    if provider == "gemini":
+        return _ask_gemini_image(prompt, image_content, suffix, api_key)
+    return _ask_anthropic_image(prompt, image_content, suffix, api_key)
