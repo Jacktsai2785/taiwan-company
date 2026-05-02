@@ -15,7 +15,10 @@
     <div id="sidebar-header">
       <div id="platform-name">台灣產業商情平台</div>
       <div id="sidebar-section-label">你每日最佳的資訊來源</div>
-      <button id="settings-btn" onclick="openSettings()" title="AI 設定">⚙</button>
+      <div id="ai-mode-wrap">
+        <span id="ai-mode-label"></span>
+        <button id="settings-btn" onclick="openSettings()" title="AI 設定">⚙</button>
+      </div>
     </div>
     <nav id="industry-list"><!-- rendered by JS --></nav>
     <button id="add-industry-btn">＋ 新增產業別</button>
@@ -236,15 +239,22 @@
 <div id="settings-overlay">
   <div id="settings-dialog">
     <div id="settings-header">
-      <h3>設定 AI API Key</h3>
-      <p>請選擇您使用的 AI 平台並輸入 API Key，系統才能協助分析公司資料。<br>API Key 僅儲存在您的瀏覽器，不會傳送至本平台伺服器以外的地方。</p>
+      <h3>選擇 AI 模式</h3>
+      <p>在本機執行時，建議使用「本機 Claude」，不需要 API Key。<br>如需在其他環境使用，可改選雲端 API 模式。</p>
     </div>
     <div id="settings-body">
       <div class="settings-providers">
         <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="anthropic" checked />
+          <input type="radio" name="ai-provider" value="local" checked />
           <div class="provider-card">
-            <strong>Claude</strong>
+            <strong>本機 Claude（建議）</strong>
+            <small>使用此裝置已安裝的 Claude Desktop / CLI，不需 API Key</small>
+          </div>
+        </label>
+        <label class="settings-provider-opt">
+          <input type="radio" name="ai-provider" value="anthropic" />
+          <div class="provider-card">
+            <strong>Claude API</strong>
             <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a></small>
           </div>
         </label>
@@ -263,15 +273,15 @@
           </div>
         </label>
       </div>
-      <div class="settings-key-row">
+      <div class="settings-key-row" id="settings-key-section" style="display:none">
         <input type="password" id="settings-api-key" placeholder="貼上 API Key…" autocomplete="off" spellcheck="false" />
         <button class="key-toggle-btn" onclick="toggleSettingsKeyVisibility()" title="顯示 / 隱藏">👁</button>
       </div>
       <div id="settings-error"></div>
     </div>
     <div id="settings-footer">
-      <button class="btn btn-ghost" id="settings-skip">稍後再設定</button>
-      <button class="btn btn-primary" id="settings-save">開始使用</button>
+      <button class="btn btn-ghost" id="settings-skip">取消</button>
+      <button class="btn btn-primary" id="settings-save">確認</button>
     </div>
   </div>
 </div>

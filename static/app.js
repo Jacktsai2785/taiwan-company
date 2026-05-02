@@ -20,14 +20,25 @@ let _modalCompanyId = null;
 
 /* ── AI settings (localStorage) ── */
 function getAiKey()      { return localStorage.getItem("ai_api_key") || ""; }
-function getAiProvider() { return localStorage.getItem("ai_provider") || "anthropic"; }
+function getAiProvider() { return localStorage.getItem("ai_provider") || "local"; }
+function isLocalMode()   { return getAiProvider() === "local"; }
+
+function _updateAiModeLabel() {
+  const el = document.getElementById("ai-mode-label");
+  if (!el) return;
+  const prov = getAiProvider();
+  const labels = { local: "本機 Claude", anthropic: "Claude API", openai: "OpenAI", gemini: "Gemini" };
+  el.textContent = labels[prov] || prov;
+}
 
 function openSettings() {
-  const key = getAiKey();
   const prov = getAiProvider();
-  document.getElementById("settings-api-key").value = key;
+  const key  = getAiKey();
   const radio = document.querySelector(`input[name="ai-provider"][value="${prov}"]`);
   if (radio) radio.checked = true;
+  const keyInp = document.getElementById("settings-api-key");
+  if (keyInp) keyInp.value = key;
+  document.getElementById("settings-key-section").style.display = prov === "local" ? "none" : "";
   document.getElementById("settings-error").textContent = "";
   document.getElementById("settings-overlay").classList.add("open");
 }
@@ -38,17 +49,31 @@ function toggleSettingsKeyVisibility() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  // Show / hide API key input when provider changes
+  document.querySelectorAll('input[name="ai-provider"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      const needsKey = radio.value !== "local";
+      document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
+      document.getElementById("settings-error").textContent = "";
+    });
+  });
+
   document.getElementById("settings-save").addEventListener("click", () => {
-    const key = document.getElementById("settings-api-key").value.trim();
-    if (!key) {
-      document.getElementById("settings-error").textContent = "請輸入 API Key";
-      return;
+    const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "local";
+    if (prov !== "local") {
+      const key = document.getElementById("settings-api-key").value.trim();
+      if (!key) {
+        document.getElementById("settings-error").textContent = "請輸入 API Key";
+        return;
+      }
+      localStorage.setItem("ai_api_key", key);
+    } else {
+      localStorage.removeItem("ai_api_key");
     }
-    const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "anthropic";
-    localStorage.setItem("ai_api_key", key);
     localStorage.setItem("ai_provider", prov);
     document.getElementById("settings-overlay").classList.remove("open");
-    toast("API Key 已儲存");
+    _updateAiModeLabel();
+    toast(prov === "local" ? "已切換為本機 Claude 模式" : "API Key 已儲存");
   });
 
   document.getElementById("settings-skip").addEventListener("click", () => {
@@ -84,7 +109,9 @@ async function boot() {
   computeGroups();
   renderSidebar();
   renderGrid();
-  if (!getAiKey()) openSettings();
+  _updateAiModeLabel();
+  // Show settings only on very first visit (localStorage never set)
+  if (localStorage.getItem("ai_provider") === null) openSettings();
 }
 
 async function loadIndustries() {

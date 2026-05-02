@@ -1436,7 +1436,19 @@ body {
 
 #sidebar-header {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#ai-mode-wrap {
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+#ai-mode-label {
+  font-size: 10px;
+  color: var(--sb-muted);
+  flex: 1;
 }
