@@ -168,6 +168,62 @@ async def suggest_companies_for_industry(industry: str, companies: list[dict], a
     return []
 
 
+async def suggest_industries_for_companies(
+    companies: list[dict],
+    industries: list[str],
+    api_key: str = "",
+    provider: str = "anthropic",
+) -> dict[str, str]:
+    """For each company, pick the best-fit industry from the given list.
+
+    Returns {company_id: industry_name}. Companies with no good match are omitted.
+    """
+    if not companies or not industries:
+        return {}
+
+    lines = []
+    for c in companies:
+        name = c.get("name", "")
+        blurb = (c.get("blurb") or "").strip()
+        summary = (c.get("summary") or "").strip()
+        excerpt = summary[:400].replace("\n", " ")
+        parts = [f'{c["id"]}: {name}']
+        if blurb:
+            parts.append(f"一句話：{blurb}")
+        if excerpt:
+            parts.append(f"摘要：{excerpt}")
+        lines.append(" | ".join(parts))
+
+    industry_list = "\n".join(f"- {i}" for i in industries)
+    prompt = (
+        f"以下是既有的產業別清單與公司清單。請為每家公司從產業別清單中選一個最適合的，"
+        f"判斷依據是公司業務描述（一句話與摘要）。\n"
+        f"若沒有任何產業別合適，回傳空字串。\n"
+        f"只輸出 JSON 物件，鍵為公司 ID、值為產業別名稱（必須是清單內的名稱或空字串），不要任何其他文字。\n"
+        f"範例：{{\"id1\": \"前瞻科技\", \"id2\": \"\"}}\n\n"
+        f"產業別清單：\n{industry_list}\n\n"
+        f"公司清單：\n" + "\n".join(lines)
+    )
+
+    valid_ids = {c["id"] for c in companies}
+    valid_inds = set(industries)
+    try:
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 120, None, api_key, provider)
+        log.info("Industry classify raw: %s", raw[:300])
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            obj = json.loads(raw[start:end + 1])
+            return {
+                cid: ind for cid, ind in obj.items()
+                if isinstance(cid, str) and cid in valid_ids
+                and isinstance(ind, str) and ind in valid_inds
+            }
+    except Exception as e:
+        log.error("Industry classify failed: %s", e)
+    return {}
+
+
 def build_candidate(name: str, source_label: str) -> dict:
     """Turn an uncertain name (confirmed by user) into a valid candidate dict."""
     existing = data_store.find_company_by_name(name)

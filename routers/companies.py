@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import data_store, gcis_client, report_generator
+from services import company_extractor, data_store, gcis_client, report_generator
 from services.ai_deps import ai_from_headers, ai_from_query
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
@@ -25,6 +25,24 @@ class ConfirmItem(BaseModel):
 
 class ConfirmRequest(BaseModel):
     companies: list[ConfirmItem]
+    enrich: bool = True
+
+
+class EnrichBatchRequest(BaseModel):
+    company_ids: list[str]
+
+
+class SuggestIndustriesRequest(BaseModel):
+    company_ids: list[str] | None = None
+
+
+class IndustryUpdate(BaseModel):
+    id: str
+    industry: str
+
+
+class BatchIndustryRequest(BaseModel):
+    updates: list[IndustryUpdate]
 
 
 class UpdateRequest(BaseModel):
@@ -61,6 +79,44 @@ def list_companies(industry: str | None = None, group: str | None = None, sort_b
     return companies
 
 
+@router.put("/batch-industry")
+def batch_update_industry(req: BatchIndustryRequest):
+    """Apply industry updates to multiple companies in a single read-modify-write to avoid races."""
+    updated = data_store.update_companies_industry({u.id: u.industry for u in req.updates})
+    return {"updated": updated}
+
+
+@router.post("/suggest-industries")
+async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(ai_from_headers)):
+    """Use AI to assign each given company an industry from the existing list.
+
+    If `company_ids` is omitted, defaults to all companies missing an industry.
+    Does not write changes — caller applies via PUT.
+    """
+    industries = data_store.get_industries()
+    if not industries:
+        raise HTTPException(status_code=422, detail="尚未建立任何產業別，請先新增至少一個產業別")
+
+    all_companies = data_store.get_all_companies()
+    if req.company_ids:
+        wanted = set(req.company_ids)
+        targets = [c for c in all_companies if c["id"] in wanted]
+    else:
+        targets = [c for c in all_companies if not (c.get("industry") or "")]
+
+    if not targets:
+        return {"suggestions": {}, "industries": industries, "targets": []}
+
+    suggestions = await company_extractor.suggest_industries_for_companies(
+        targets, industries, **ai
+    )
+    return {
+        "suggestions": suggestions,
+        "industries": industries,
+        "targets": [{"id": c["id"], "name": c["name"], "blurb": c.get("blurb") or ""} for c in targets],
+    }
+
+
 @router.get("/{company_id}")
 def get_company(company_id: str):
     company = data_store.get_company(company_id)
@@ -80,20 +136,37 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
         if item.is_new:
             company = data_store.create_company(item.name, item.label, item.industry)
             saved_ids.append(company["id"])
-            enriching.append(company["id"])
-            _running.add(company["id"])
-            asyncio.create_task(_enrich_company(company["id"], **ai))
+            if req.enrich:
+                enriching.append(company["id"])
+                _running.add(company["id"])
+                asyncio.create_task(_enrich_company(company["id"], **ai))
         else:
             if item.existing_id:
                 updated = data_store.add_label_to_company(item.existing_id, item.label)
                 if updated:
                     saved_ids.append(item.existing_id)
-                    if item.existing_id not in _running:
+                    if req.enrich and item.existing_id not in _running:
                         enriching.append(item.existing_id)
                         _running.add(item.existing_id)
                         asyncio.create_task(_enrich_company(item.existing_id, **ai))
 
     return {"saved": len(saved_ids), "saved_ids": saved_ids, "enriching": enriching}
+
+
+@router.post("/enrich-batch")
+async def enrich_batch(req: EnrichBatchRequest, ai: dict = Depends(ai_from_headers)):
+    """Spawn enrichment tasks for the given company IDs (skips ones already running)."""
+    known = {c["id"] for c in data_store.get_all_companies()}
+    started: list[str] = []
+    for cid in req.company_ids:
+        if cid not in known:
+            continue
+        if cid in _running:
+            continue
+        _running.add(cid)
+        asyncio.create_task(_enrich_company(cid, **ai))
+        started.append(cid)
+    return {"started": started}
 
 
 @router.get("/enrich/{company_id}")

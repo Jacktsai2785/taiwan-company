@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
-  <link rel="stylesheet" href="/static/style.css?v=7" />
+  <link rel="stylesheet" href="/static/style.css?v=27" />
 </head>
 <body>
 
@@ -171,7 +171,7 @@
     </div>
     <div id="confirm-body">
       <div class="confirm-row" style="font-weight:700;font-size:11px;color:var(--muted);padding-bottom:6px;">
-        <span>公司名稱</span><span>標籤</span><span>產業別</span>
+        <span>公司名稱</span><span>標籤</span><span>生成 AI 摘要</span>
       </div>
       <div id="confirm-rows"></div>
     </div>
@@ -213,10 +213,6 @@
           <label>標籤</label>
           <input id="manual-label" type="text" placeholder="例：2026Q1" />
         </div>
-        <div class="manual-field">
-          <label>產業別</label>
-          <select id="manual-industry"></select>
-        </div>
       </div>
     </div>
     <div id="manual-footer">
@@ -243,6 +239,41 @@
     <div id="ind-suggest-footer">
       <button class="btn btn-ghost" id="ind-suggest-cancel">取消</button>
       <button class="btn btn-primary" id="ind-suggest-ok" disabled>確認並套用</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Industry Classify Dialog ── -->
+<div id="classify-overlay">
+  <div id="classify-dialog">
+    <div id="classify-header">
+      <h3>AI 自動分類產業別</h3>
+      <p id="classify-subtitle"></p>
+    </div>
+    <div id="classify-body">
+      <div id="classify-loading">
+        <div class="suggest-spinner"></div>
+        <span>Claude 正在根據摘要分類，約需 30–90 秒…</span>
+      </div>
+      <div id="classify-rows"></div>
+    </div>
+    <div id="classify-footer">
+      <button class="btn btn-ghost" id="classify-cancel">取消</button>
+      <button class="btn btn-primary" id="classify-ok" disabled>套用所選分類</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Batch Continue Dialog ── -->
+<div id="batch-overlay">
+  <div id="batch-dialog">
+    <div id="batch-header">
+      <h3 id="batch-title">批次完成</h3>
+      <p id="batch-subtitle"></p>
+    </div>
+    <div id="batch-footer">
+      <button class="btn btn-ghost" id="batch-cancel">中止</button>
+      <button class="btn btn-primary" id="batch-ok">繼續下一批</button>
     </div>
   </div>
 </div>
@@ -301,6 +332,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=9"></script>
+<script src="/static/app.js?v=29"></script>
 </body>
 </html>

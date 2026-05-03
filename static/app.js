@@ -105,8 +105,51 @@ async function boot() {
   renderSidebar();
   renderGrid();
   _updateAiModeLabel();
+  // Request notification permission early (must be from a page-load context, not a background task)
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+  // Auto-stop title flash when user returns to the tab (for non-modal notifications)
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && _titleFlashTimer && !document.getElementById("batch-overlay").classList.contains("open")) {
+      stopTitleFlash();
+    }
+  });
   // Show settings only on very first visit (localStorage never set)
   if (localStorage.getItem("ai_provider") === null) openSettings();
+}
+
+/* ── Notify helper ── */
+// Send OS notification + start title flash when the page is not in the foreground.
+// Call after any long-running AI task completes.
+function alertDone(flashMsg, notifBody) {
+  if (document.visibilityState !== "visible") {
+    startTitleFlash(flashMsg);
+    notifyUser("台灣產業商情平台", notifBody);
+  }
+}
+
+function notifyUser(title, body) {
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification(title, { body, icon: "/static/favicon.ico" });
+  }
+}
+
+let _titleFlashTimer = null;
+let _titleFlashOriginal = null;
+
+function startTitleFlash(msg) {
+  if (_titleFlashTimer) return; // already flashing
+  _titleFlashOriginal = document.title;
+  let flip = false;
+  _titleFlashTimer = setInterval(() => {
+    document.title = (flip = !flip) ? msg : _titleFlashOriginal;
+  }, 1000);
+}
+
+function stopTitleFlash() {
+  if (_titleFlashTimer) { clearInterval(_titleFlashTimer); _titleFlashTimer = null; }
+  if (_titleFlashOriginal !== null) { document.title = _titleFlashOriginal; _titleFlashOriginal = null; }
 }
 
 async function loadIndustries() {
@@ -156,6 +199,23 @@ function renderSidebar() {
     renderGrid();
   });
   list.appendChild(allDiv);
+
+  // Unclassified badge — only shown when companies exist without an industry
+  const unclassifiedCount = state.companies.filter(c => !c.industry).length;
+  if (unclassifiedCount > 0) {
+    const badgeDiv = document.createElement("div");
+    badgeDiv.id = "unclassified-badge";
+    badgeDiv.innerHTML = `
+      <span class="unclassified-dot"></span>
+      <span class="unclassified-label">${unclassifiedCount} 間未分類</span>
+      <button class="unclassified-classify-btn" title="AI 自動分類">✨ 自動分類</button>
+    `;
+    badgeDiv.querySelector(".unclassified-classify-btn").addEventListener("click", e => {
+      e.stopPropagation();
+      runClassify();
+    });
+    list.appendChild(badgeDiv);
+  }
 
   for (const ind of state.industries) {
     const indCount = state.companies.filter(c => c.industry === ind).length;
@@ -343,6 +403,100 @@ document.getElementById("add-industry-btn").addEventListener("click", async () =
   };
 });
 
+/* ── AI Auto-classify Industry ── */
+async function runClassify() {
+  if (state.industries.length === 0) {
+    toast("請先新增至少一個產業別", true);
+    return;
+  }
+
+  const overlay = document.getElementById("classify-overlay");
+  const subtitle = document.getElementById("classify-subtitle");
+  const loading = document.getElementById("classify-loading");
+  const rows = document.getElementById("classify-rows");
+  const okBtn = document.getElementById("classify-ok");
+
+  subtitle.textContent = "Claude 正在比對既有產業別清單…";
+  loading.style.display = "flex";
+  rows.innerHTML = "";
+  okBtn.disabled = true;
+  overlay.classList.add("open");
+
+  let result;
+  try {
+    result = await api("POST", "/api/companies/suggest-industries", { company_ids: null });
+  } catch (e) {
+    overlay.classList.remove("open");
+    toast(`分類失敗：${e.message}`, true);
+    return;
+  }
+
+  loading.style.display = "none";
+  const targets = result.targets || [];
+  const suggestions = result.suggestions || {};
+  const industries = result.industries || [];
+
+  alertDone("(!) 分類完成 — 請確認", `✅ AI 自動分類完成，請確認並套用`);
+
+  if (targets.length === 0) {
+    subtitle.textContent = "目前沒有缺漏產業別的公司";
+    rows.innerHTML = `<p class="suggest-empty">所有公司皆已分類</p>`;
+    okBtn.disabled = true;
+    return;
+  }
+
+  const matched = targets.filter(t => suggestions[t.id]).length;
+  subtitle.textContent = `共 ${targets.length} 家未分類，Claude 建議了 ${matched} 家（可逐家調整或取消勾選）`;
+
+  rows.innerHTML = targets.map(t => {
+    const suggested = suggestions[t.id] || "";
+    const options = [`<option value="">— 不分類 —</option>`]
+      .concat(industries.map(i => `<option value="${escHtml(i)}"${i === suggested ? " selected" : ""}>${escHtml(i)}</option>`))
+      .join("");
+    return `
+      <label class="classify-row${suggested ? " suggested" : ""}">
+        <input type="checkbox" data-id="${t.id}" ${suggested ? "checked" : ""} />
+        <div class="classify-info">
+          <span class="classify-name">${escHtml(shortName(t.name))}</span>
+          <span class="classify-blurb">${escHtml(t.blurb || "—")}</span>
+        </div>
+        <select data-id="${t.id}">${options}</select>
+      </label>`;
+  }).join("");
+
+  okBtn.disabled = false;
+
+  document.getElementById("classify-cancel").onclick = () => overlay.classList.remove("open");
+  okBtn.onclick = async () => {
+    const checks = [...rows.querySelectorAll("input[type=checkbox]:checked")];
+    const updates = checks.map(cb => {
+      const id = cb.dataset.id;
+      const sel = rows.querySelector(`select[data-id="${id}"]`);
+      return { id, industry: sel ? sel.value : "" };
+    }).filter(u => u.industry);
+
+    overlay.classList.remove("open");
+    if (updates.length === 0) {
+      toast("未套用任何分類");
+      return;
+    }
+
+    try {
+      await api("PUT", "/api/companies/batch-industry", { updates });
+      updates.forEach(u => {
+        const idx = state.companies.findIndex(c => c.id === u.id);
+        if (idx !== -1) state.companies[idx].industry = u.industry;
+      });
+      computeGroups();
+      renderSidebar();
+      renderGrid();
+      toast(`已套用 ${updates.length} 家公司的分類`);
+    } catch (e) {
+      toast(`套用失敗：${e.message}`, true);
+    }
+  };
+}
+
 /* ── Industry Panel ── */
 function renderIndustryPanel() {
   const panel = document.getElementById("industry-panel");
@@ -444,7 +598,12 @@ function companyCardHtml(c) {
         <button class="blurb-edit-btn" onclick="event.stopPropagation();startEditBlurb('${c.id}')" title="編輯簡介">✎</button>
       </div>`;
 
-  const watchPill = `<button class="watch-pill-btn${isWatched ? " is-watched" : ""}" onclick="event.stopPropagation();toggleWatch('${c.id}')">${isWatched ? "✓ 追蹤中" : "+ 追蹤"}</button>`;
+  const watchPillBtn = `<button class="watch-pill-btn${isWatched ? " is-watched" : ""}" onclick="event.stopPropagation();toggleWatch('${c.id}')">${isWatched ? "✓ 追蹤中" : "+ 追蹤"}</button>`;
+  const nameRowPill = "";
+  const labelRowPill = `<span class="watch-pill in-labels">${watchPillBtn}</span>`;
+  const industryTag = c.industry
+    ? `<span class="card-industry-tag">${escHtml(c.industry)}</span>`
+    : `<span class="card-industry-tag no-ind">未分類</span>`;
 
   return `
     <div class="company-card${cardClass}" data-id="${c.id}">
@@ -452,10 +611,11 @@ function companyCardHtml(c) {
       <div class="card-name">
         <span class="card-name-text">${escHtml(shortName(c.name))}</span>
         ${badge}
-        <span class="watch-pill">${watchPill}</span>
+        ${industryTag}
+        ${nameRowPill}
         ${statusBadge}
       </div>
-      <div class="card-labels" id="card-labels-${c.id}">${groupBadge}${labelChips}${addLabelBtn}</div>
+      <div class="card-labels" id="card-labels-${c.id}">${groupBadge}${labelChips}${addLabelBtn}${labelRowPill}</div>
       <div class="card-meta">
         <div><span>代表人：</span><strong>${escHtml(c.representative || "—")}</strong></div>
         <div><span>資本額：</span><strong>${capital}</strong></div>
@@ -714,6 +874,7 @@ document.getElementById("memo-file-input").addEventListener("change", async func
     const fields = await api("POST", `/api/companies/${id}/memo/extract`, fd);
     _renderMemoFields(fields);
     status.textContent = "✅ 自動填寫完成，請確認後儲存";
+    alertDone("(!) 逐字稿分析完成", "✅ 訪談備忘錄欄位已自動填寫，請確認後儲存");
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
   }
@@ -745,6 +906,7 @@ document.getElementById("memo-audio-input").addEventListener("change", async fun
     _renderMemoFields(result.fields);
     status.textContent = "✅ 語音辨識完成，欄位已自動填寫，請確認後儲存";
     status.className = "memo-status-ok";
+    alertDone("(!) 語音辨識完成", "✅ 語音辨識完成，訪談備忘錄已自動填寫，請確認後儲存");
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
     status.className = "memo-status-error";
@@ -951,6 +1113,7 @@ async function handleUpload(file) {
       (excludedCount ? `，排除 ${excludedCount} 間有限公司` : "");
     setTimeout(() => uploadProgress.textContent = "", 5000);
 
+    alertDone("(!) 辨識完成 — 請確認", `✅ 找到 ${validCount} 間公司，請確認辨識結果`);
     openNameReviewDialog(result.valid || [], result.uncertain || [], result.excluded || [], result.suggested_label);
   } catch (err) {
     uploadProgress.textContent = `❌ ${err.message}`;
@@ -970,10 +1133,6 @@ document.getElementById("manual-overlay").addEventListener("click", e => {
 });
 
 function openManualDialog(suggestedLabel = "") {
-  const sel = document.getElementById("manual-industry");
-  sel.innerHTML = state.industries.map(ind =>
-    `<option value="${escHtml(ind)}">${escHtml(ind)}</option>`
-  ).join("");
   document.getElementById("manual-names").value = "";
   document.getElementById("manual-label").value = suggestedLabel;
   document.getElementById("manual-overlay").classList.add("open");
@@ -983,7 +1142,7 @@ function openManualDialog(suggestedLabel = "") {
 document.getElementById("manual-ok").addEventListener("click", () => {
   const rawText = document.getElementById("manual-names").value;
   const label = document.getElementById("manual-label").value.trim();
-  const industry = document.getElementById("manual-industry").value;
+  const industry = "";
 
   const names = rawText.split("\n").map(n => n.trim()).filter(n => n.length > 0);
   if (names.length === 0) { toast("請輸入至少一個公司名稱", true); return; }
@@ -1112,10 +1271,14 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
       const existingLabels = c.existing_labels?.length
         ? `<div class="existing-labels">現有標籤：${c.existing_labels.join("、")}</div>`
         : "";
+      const hasData = !c.is_new && state.companies.find(x => x.id === c.existing_id)?.summary;
+      const checked = hasData ? "" : "checked";
+      const enrichHint = hasData ? `<span class="enrich-has-data" title="已有摘要，預設不重新生成">已生成</span>` : "";
       return `
         <div class="confirm-row">
           <div class="company-name-col">${escHtml(c.name)}${badge}${existingLabels}</div>
           <input type="text" id="label-v${i}" value="${escHtml(c.suggested_label)}" placeholder="標籤名稱" />
+          <label class="enrich-check-label" title="是否生成 AI 摘要"><input type="checkbox" id="enrich-v${i}" ${checked} />生成${enrichHint}</label>
         </div>`;
     }).join("")}` : "";
 
@@ -1199,15 +1362,19 @@ document.getElementById("confirm-cancel").addEventListener("click", () =>
   document.getElementById("confirm-overlay").classList.remove("open"));
 
 document.getElementById("confirm-ok").addEventListener("click", async () => {
-  // Collect valid candidates
-  const companies = state.pendingCandidates.map((c, i) => ({
-    name: c.name,
-    label: document.getElementById(`label-v${i}`)?.value.trim() ?? state.pendingLabel,
-    is_new: c.is_new,
-    existing_id: c.existing_id ?? null,
-  }));
+  // Collect valid candidates; track which ones user wants enriched
+  const enrichFlags_v = [];
+  const companies = state.pendingCandidates.map((c, i) => {
+    enrichFlags_v.push(document.getElementById(`enrich-v${i}`)?.checked !== false);
+    return {
+      name: c.name,
+      label: document.getElementById(`label-v${i}`)?.value.trim() ?? state.pendingLabel,
+      is_new: c.is_new,
+      existing_id: c.existing_id ?? null,
+    };
+  });
 
-  // Collect accepted uncertain candidates
+  // Collect accepted uncertain candidates (always enrich — they're always new)
   (state.pendingUncertain || []).forEach((c, i) => {
     const row = document.getElementById(`uncertain-row-${i}`);
     if (row?.dataset.accepted === "1") {
@@ -1220,7 +1387,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     }
   });
 
-  // Collect rescued excluded candidates (user confirmed they are 股份有限公司)
+  // Collect rescued excluded candidates (always enrich — they're always new)
   (state.pendingExcluded || []).forEach((c, i) => {
     const row = document.getElementById(`excluded-row-${i}`);
     if (row?.dataset.accepted === "1") {
@@ -1240,20 +1407,125 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     return;
   }
 
+  // Save first (no enrichment yet) so we control batching from the client side
+  let saved_ids;
   try {
-    const result = await api("POST", "/api/companies/confirm", { companies });
+    const result = await api("POST", "/api/companies/confirm", { companies, enrich: false });
+    saved_ids = result.saved_ids || [];
     toast(`已儲存 ${result.saved} 筆公司資料`);
-    for (const id of (result.enriching || [])) {
-      subscribeEnrichment(id);
-    }
     await loadCompanies();
     computeGroups();
     renderSidebar();
     renderGrid();
   } catch (err) {
     toast(`儲存失敗：${err.message}`, true);
+    return;
   }
+
+  if (saved_ids.length === 0) return;
+
+  // Filter to only the IDs user checked for enrichment
+  // saved_ids aligns with companies[] order (server preserves insertion order)
+  const enrichSet = new Set(
+    companies
+      .map((_, idx) => {
+        const wantEnrich = idx < enrichFlags_v.length
+          ? enrichFlags_v[idx]
+          : true; // uncertain/excluded rows always enrich
+        return wantEnrich ? saved_ids[idx] : null;
+      })
+      .filter(Boolean)
+  );
+  const enrich_ids = saved_ids.filter(id => enrichSet.has(id));
+
+  if (enrich_ids.length === 0) {
+    toast(`已儲存，所有公司均已略過生成`);
+    return;
+  }
+
+  // Decide batching strategy
+  let batchSize = enrich_ids.length;
+  if (enrich_ids.length > 10) {
+    const wantBatch = confirm(
+      `本次共需生成 ${enrich_ids.length} 間公司資料。\n` +
+      `數量較多，同時生成可能因 Claude rate limit 造成延遲或失敗。\n\n` +
+      `是否分批生成？\n[確定] = 分批  [取消] = 一次全跑`
+    );
+    if (wantBatch) {
+      const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
+      const n = parseInt(input, 10);
+      if (!input || isNaN(n) || n < 1) {
+        toast("已取消分批生成", true);
+        return;
+      }
+      batchSize = Math.max(1, n);
+    }
+  }
+
+  await runEnrichmentInBatches(enrich_ids, batchSize);
 });
+
+async function runEnrichmentInBatches(ids, batchSize) {
+  const total = ids.length;
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += batchSize) chunks.push(ids.slice(i, i + batchSize));
+
+  let done = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    console.log(`[batch] starting chunk ${i + 1}/${chunks.length}`, chunk);
+    toast(`▶ 開始第 ${i + 1}/${chunks.length} 批（${chunk.length} 間）…`);
+    try {
+      await api("POST", "/api/companies/enrich-batch", { company_ids: chunk });
+    } catch (e) {
+      toast(`啟動第 ${i + 1} 批失敗：${e.message}`, true);
+      return;
+    }
+    await Promise.allSettled(chunk.map(id => subscribeEnrichment(id)));
+    done += chunk.length;
+    console.log(`[batch] chunk ${i + 1}/${chunks.length} done, total ${done}/${total}`);
+
+    if (i === chunks.length - 1) {
+      toast(`✅ 全部 ${total} 間已完成生成`);
+      break;
+    }
+    const remaining = total - done;
+    const cont = await askBatchContinue({ batch: i + 1, totalBatches: chunks.length, done, total, remaining });
+    if (!cont) {
+      toast(`已中止，剩餘 ${remaining} 間未生成`, true);
+      return;
+    }
+  }
+}
+
+/* ── Batch continue dialog (DOM-based; survives Chrome's background-tab confirm() suppression) ── */
+function askBatchContinue({ batch, totalBatches, done, total, remaining }) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById("batch-overlay");
+    const subtitle = document.getElementById("batch-subtitle");
+    const okBtn = document.getElementById("batch-ok");
+    const cancelBtn = document.getElementById("batch-cancel");
+
+    subtitle.textContent =
+      `第 ${batch}/${totalBatches} 批已完成（累計 ${done}/${total}）。\n` +
+      `還剩 ${remaining} 間，是否繼續下一批？`;
+    overlay.classList.add("open");
+
+    // Notify + title flash unconditionally — user may have switched to another app entirely
+    notifyUser("台灣產業商情平台", `✅ 第 ${batch}/${totalBatches} 批完成，還剩 ${remaining} 間，請確認是否繼續`);
+    startTitleFlash("(!) 批次完成 — 等候確認");
+
+    const cleanup = (answer) => {
+      overlay.classList.remove("open");
+      stopTitleFlash();
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      resolve(answer);
+    };
+    okBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+  });
+}
 
 /* ── SSE Enrichment ── */
 let _enrichPollTimer = null;
@@ -1280,41 +1552,56 @@ function subscribeEnrichment(companyId) {
   const sseUrl = key
     ? `/api/companies/enrich/${companyId}?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}`
     : `/api/companies/enrich/${companyId}`;
-  const es = new EventSource(sseUrl);
-  es.onmessage = async e => {
-    const event = JSON.parse(e.data);
 
-    if (event.type === "data") {
-      const company = state.companies.find(c => c.id === companyId);
-      if (company) {
-        Object.assign(company, event.fields);
-        renderGrid();
-        if (_modalCompanyId === companyId) openModal(companyId);
+  return new Promise(resolve => {
+    const es = new EventSource(sseUrl);
+    let settled = false;
+    const settle = () => { if (!settled) { settled = true; resolve(); } };
+
+    es.onmessage = async e => {
+      const event = JSON.parse(e.data);
+
+      if (event.type === "data") {
+        const company = state.companies.find(c => c.id === companyId);
+        if (company) {
+          Object.assign(company, event.fields);
+          renderGrid();
+          if (_modalCompanyId === companyId) openModal(companyId);
+        }
+
+      } else if (event.type === "progress") {
+        toast(event.message);
+
+      } else if (event.type === "done") {
+        es.close();
+        settle();
+        state.enrichingIds.delete(companyId);
+        state.doneIds.add(companyId);
+        // Notify if user isn't looking at the page
+        alertDone("(!) 摘要生成完成", `✅ ${company?.name ?? "公司"} 摘要已生成完成`);
+        try {
+          await loadCompanies();
+          computeGroups();
+          renderSidebar();
+          renderGrid();
+          if (_modalCompanyId === companyId) openModal(companyId);
+        } catch (err) {
+          console.error("post-enrichment refresh failed:", err);
+        }
+        setTimeout(() => {
+          state.doneIds.delete(companyId);
+          stopTitleFlash();
+          renderGrid();
+        }, 2000);
       }
-
-    } else if (event.type === "progress") {
-      toast(event.message);
-
-    } else if (event.type === "done") {
+    };
+    es.onerror = () => {
       es.close();
       state.enrichingIds.delete(companyId);
-      state.doneIds.add(companyId);
-      await loadCompanies();
-      computeGroups();
-      renderSidebar();
       renderGrid();
-      if (_modalCompanyId === companyId) openModal(companyId);
-      setTimeout(() => {
-        state.doneIds.delete(companyId);
-        renderGrid();
-      }, 2000);
-    }
-  };
-  es.onerror = () => {
-    es.close();
-    state.enrichingIds.delete(companyId);
-    renderGrid();
-  };
+      settle();
+    };
+  });
 }
 
 /* ── Toast ── */

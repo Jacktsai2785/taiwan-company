@@ -93,6 +93,22 @@ def update_company(company_id: str, updates: dict) -> dict | None:
     return upsert_company(company)
 
 
+def update_companies_industry(id_to_industry: dict[str, str]) -> int:
+    """Apply industry updates to many companies atomically (one read + one write)."""
+    if not id_to_industry:
+        return 0
+    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for c in store["companies"]:
+        if c["id"] in id_to_industry:
+            c["industry"] = id_to_industry[c["id"]]
+            c["last_updated"] = now
+            count += 1
+    _write(COMPANIES_FILE, store)
+    return count
+
+
 def delete_company(company_id: str) -> bool:
     store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
     before = len(store["companies"])
