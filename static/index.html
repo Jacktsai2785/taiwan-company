@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
-  <link rel="stylesheet" href="/static/style.css?v=36" />
+  <link rel="stylesheet" href="/static/style.css?v=51" />
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
 
@@ -66,6 +67,9 @@
       <button id="modal-close" aria-label="關閉">✕</button>
       <div id="modal-name"></div>
       <div id="modal-labels"></div>
+      <div id="modal-actions">
+        <button id="modal-open-rel-btn" onclick="openRelationshipGraph()">🔗 母子公司關係圖</button>
+      </div>
     </div>
     <div id="modal-body">
 
@@ -75,10 +79,10 @@
       </div>
 
       <div class="modal-section" id="modal-directors-section">
-        <h4>董監事名單</h4>
+        <h4>董監事名單 <span class="director-hint">點 ⊕ 將該位董事設為關係圖分析錨點</span></h4>
         <table class="director-table">
           <thead>
-            <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th></tr>
+            <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th><th>分析</th></tr>
           </thead>
           <tbody id="modal-directors"></tbody>
         </table>
@@ -89,6 +93,58 @@
         <div id="modal-summary"></div>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<!-- ── Relationship Graph Modal ── -->
+<div id="rel-graph-overlay">
+  <div id="rel-graph-dialog" role="dialog" aria-modal="true">
+    <div id="rel-graph-header">
+      <button id="rel-graph-close" onclick="closeRelationshipGraph()" aria-label="關閉">✕</button>
+      <div id="rel-graph-title">母子公司關係圖</div>
+      <div id="rel-graph-subtitle"></div>
+      <div id="rel-graph-actions">
+        <button id="rel-graph-rebuild-btn" onclick="buildRelationship()">🔗 重新分析</button>
+      </div>
+    </div>
+    <div id="rel-graph-body">
+      <div id="rel-graph-status"></div>
+      <div id="rel-graph-canvas"></div>
+      <div id="rel-graph-legend">
+        <span class="legend-item"><span class="legend-dot legend-self"></span>本公司</span>
+        <span class="legend-item"><span class="legend-dot legend-parent"></span>錨點：母法人</span>
+        <span class="legend-item"><span class="legend-dot legend-anchor-person"></span>錨點：自然人</span>
+        <span class="legend-item"><span class="legend-dot legend-sibling-in"></span>相關公司（已收錄）</span>
+        <span class="legend-item"><span class="legend-dot legend-sibling-out"></span>相關公司（未收錄，可加入）</span>
+      </div>
+      <div id="rel-graph-note"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add From Graph Confirm Dialog ── -->
+<div id="from-graph-overlay">
+  <div id="from-graph-dialog">
+    <div id="from-graph-header">
+      <h3>加入公司列表？</h3>
+      <p>系統將為這家公司建立資料並自動生成簡介（約 30–60 秒）</p>
+    </div>
+    <div id="from-graph-body">
+      <div class="from-graph-row"><span>公司名稱</span><strong id="from-graph-name"></strong></div>
+      <div class="from-graph-row"><span>統一編號</span><strong id="from-graph-tax-id"></strong></div>
+      <div class="from-graph-field">
+        <label>標籤</label>
+        <select id="from-graph-label"></select>
+      </div>
+      <div class="from-graph-field">
+        <label>產業別</label>
+        <select id="from-graph-industry"></select>
+      </div>
+    </div>
+    <div id="from-graph-footer">
+      <button class="btn btn-ghost" id="from-graph-cancel">取消</button>
+      <button class="btn btn-primary" id="from-graph-ok">加入並生成內容</button>
     </div>
   </div>
 </div>
@@ -181,7 +237,11 @@
       <div class="manual-fields">
         <div class="manual-field">
           <label>標籤</label>
-          <select id="manual-label-select" onchange="onManualLabelChange()"></select>
+          <select id="manual-label-select" style="display:none"></select>
+          <div class="csel" id="manual-label-dropdown">
+            <button type="button" class="csel-trigger is-placeholder" id="manual-label-trigger">（請選擇）</button>
+            <ul class="csel-list" id="manual-label-list" style="display:none"></ul>
+          </div>
           <input id="manual-label-custom" type="text" placeholder="輸入新標籤名稱…" autocomplete="off" style="display:none" />
         </div>
       </div>
@@ -318,6 +378,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=40"></script>
+<script src="/static/app.js?v=46"></script>
 </body>
 </html>

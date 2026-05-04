@@ -9,6 +9,7 @@ const state = {
   activeGroup: null,             // null = all groups, "__ungrouped__" = no group
   activeTab: "all",              // "all" | "watched"
   sortBy: "capital",
+  sortDir: "desc",
   searchQuery: "",
   pendingCandidates: [],
   pendingUncertain: [],
@@ -608,7 +609,8 @@ function _trendsLoadingHtml(industry) {
       <span class="daily-header-icon">📰</span>
       <span class="daily-header-industry">${escHtml(industry)}</span>
       ${_viewTabsHtml(industry, "trends")}
-      <span class="daily-header-date">載入中…</span>
+      <span class="daily-header-date">AI 分析中…</span>
+      <button class="daily-refresh-btn trends-reanalyze-btn" disabled>↻ 分析中…</button>
     </div>
     <div class="daily-loading">
       <div class="ind-placeholder-line w80"></div>
@@ -728,10 +730,21 @@ async function _fetchTrends(industry, forceRefresh) {
   }
 }
 
+function _fmtGenAt(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const pad = v => String(v).padStart(2, "0");
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return t;
+  return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${t}`;
+}
+
 function _renderTrendsContent(panel, data, industry) {
-  const from = (data.date_range?.from || "").replace(/-/g, "/");
-  const to   = (data.date_range?.to   || "").replace(/-/g, "/");
-  const n    = data.days_analyzed || 0;
+  const from  = (data.date_range?.from || "").replace(/-/g, "/");
+  const to    = (data.date_range?.to   || "").replace(/-/g, "/");
+  const n     = data.days_analyzed || 0;
+  const genAt = _fmtGenAt(data.generated_at);
   const trends = data.trends || [];
   const SIG = {
     rising:  { icon: "▲", cls: "rising"  },
@@ -759,8 +772,8 @@ function _renderTrendsContent(panel, data, industry) {
       <span class="daily-header-icon">📰</span>
       <span class="daily-header-industry">${escHtml(industry)}</span>
       ${_viewTabsHtml(industry, "trends")}
-      <span class="daily-header-date">${from && to ? `${from} – ${to} · 近${n}天` : `近${n}天`}</span>
-      <button class="daily-refresh-btn" onclick="refreshPanel()" title="重新整理">↻</button>
+      <span class="daily-header-date">${from && to ? `${from} – ${to} · 近${n}天` : `近${n}天`}${genAt ? ` · 分析於 ${genAt}` : ""}</span>
+      <button class="daily-refresh-btn trends-reanalyze-btn" onclick="refreshPanel()" title="重新用 AI 分析最新新聞（約需 30 秒）">↻ 重新分析</button>
     </div>
     ${data.overview && trends.length > 0 ? `
     <div class="daily-summary">
@@ -836,7 +849,8 @@ function renderGrid() {
   if (state.sortBy === "name") {
     companies.sort((a, b) => a.name.localeCompare(b.name, "zh-TW"));
   } else {
-    companies.sort((a, b) => (b.capital || 0) - (a.capital || 0));
+    const dir = state.sortDir === "asc" ? 1 : -1;
+    companies.sort((a, b) => dir * ((a.capital || 0) - (b.capital || 0)));
   }
 
   if (companies.length === 0) {
@@ -1224,9 +1238,16 @@ document.getElementById("search-box").addEventListener("input", e => {
 document.getElementById("sort-group").addEventListener("click", e => {
   const btn = e.target.closest(".sort-btn");
   if (!btn) return;
-  state.sortBy = btn.dataset.sort;
+  if (btn.dataset.sort === "capital" && state.sortBy === "capital") {
+    state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+  } else {
+    state.sortBy = btn.dataset.sort;
+    state.sortDir = "desc";
+  }
   document.querySelectorAll(".sort-btn").forEach(b => b.classList.remove("active"));
   btn.classList.add("active");
+  document.querySelector('.sort-btn[data-sort="capital"]').textContent =
+    `資本額 ${state.sortDir === "desc" ? "▼" : "▲"}`;
   renderGrid();
 });
 
@@ -1280,18 +1301,51 @@ function openModal(id) {
         totalRatio  += d.ratio != null ? d.ratio : 0;
       }
     }
-    tbody.innerHTML = directors.map(d => `
-      <tr>
+    // Determine which director would be auto-picked (largest with representative_of)
+    let autoIdx = -1, autoMaxRatio = -1;
+    directors.forEach((d, i) => {
+      if ((d.representative_of || "").trim() && (d.ratio || 0) > autoMaxRatio) {
+        autoMaxRatio = d.ratio || 0;
+        autoIdx = i;
+      }
+    });
+    // Active anchor (from existing relationship_graph if present, else auto)
+    const rel = c.relationship_graph;
+    let activeIdx = autoIdx;
+    if (rel?.parent) {
+      directors.forEach((d, i) => {
+        if (rel.parent.kind === "person" && d.name === rel.parent.name && !d.representative_of) {
+          activeIdx = i;
+        } else if (rel.parent.kind === "legal_entity" && d.representative_of === rel.parent.name) {
+          activeIdx = i;
+        }
+      });
+    }
+
+    tbody.innerHTML = directors.map((d, i) => {
+      const isLegal = !!(d.representative_of || "").trim();
+      const isActive = i === activeIdx;
+      const isAuto = i === autoIdx;
+      const cls = isActive ? "anchor-btn anchor-active" : "anchor-btn";
+      const tip = isLegal
+        ? `將「${escAttr(d.representative_of)}」設為母法人錨點`
+        : `將「${escAttr(d.name)}」（自然人）設為錨點，查找其任職的所有公司`;
+      const badge = isAuto && !isActive ? `<span class="anchor-auto-tag" title="預設選擇">●</span>` : "";
+      return `
+      <tr${isActive ? ' class="director-row-active"' : ""}>
         <td>${escHtml(d.title || "—")}</td>
-        <td>${escHtml(d.name || "—")}</td>
+        <td>${escHtml(d.name || "—")}${badge}</td>
         <td>${escHtml(d.representative_of || "—")}</td>
         <td>${d.shares ? Number(d.shares).toLocaleString() : "—"}</td>
         <td>${d.ratio != null ? (d.ratio * 100).toFixed(2) + "%" : "—"}</td>
-      </tr>`).join("") + `
+        <td><button class="${cls}" title="${tip}" onclick="setAnchorDirector(${i})">${isActive ? "✓" : "⊕"}</button></td>
+      </tr>`;
+    }).join("") + `
       <tr class="director-total-row">
         <td colspan="3">合計</td>
         <td>${hasShares ? Number(totalShares).toLocaleString() : "—"}</td>
         <td>${hasRatio ? (totalRatio * 100).toFixed(2) + "%" : "—"}</td>
+        <td></td>
       </tr>`;
     document.getElementById("modal-directors-section").style.display = "";
   } else {
@@ -1304,6 +1358,7 @@ function openModal(id) {
   applyCollapsible(summaryEl);
 
   document.getElementById("modal-overlay").classList.add("open");
+  document.body.classList.add("detail-open");
 }
 
 
@@ -1332,15 +1387,15 @@ function regenSummary() {
   subscribeEnrichment(id);
 }
 
-document.getElementById("modal-close").addEventListener("click", () => {
+function _closeDetailModal() {
   document.getElementById("modal-overlay").classList.remove("open");
+  document.body.classList.remove("detail-open");
   closeMemoPanel();
-});
+}
+document.getElementById("modal-close").addEventListener("click", _closeDetailModal);
 document.getElementById("modal-overlay").addEventListener("click", e => {
-  if (e.target === document.getElementById("modal-overlay")) {
-    document.getElementById("modal-overlay").classList.remove("open");
-    closeMemoPanel();
-  }
+  // In side-by-side mode the overlay is pointer-events:none, so this only fires when alone
+  if (e.target === document.getElementById("modal-overlay")) _closeDetailModal();
 });
 
 /* ── Upload ── */
@@ -1417,36 +1472,82 @@ document.getElementById("manual-overlay").addEventListener("click", e => {
 function _buildLabelOptions(suggestedLabel) {
   const sel = document.getElementById("manual-label-select");
   const custom = document.getElementById("manual-label-custom");
+  const list = document.getElementById("manual-label-list");
   const labels = state.labels;
   const isKnown = suggestedLabel === "" || labels.includes(suggestedLabel);
 
   sel.innerHTML =
-    `<option value="">（不套用標籤）</option>` +
+    `<option value="" disabled selected></option>` +
     labels.map(l => `<option value="${escHtml(l)}">${escHtml(l)}</option>`).join("") +
-    `<option value="__new__">＋ 輸入新標籤…</option>`;
+    `<option value="__new__"></option>`;
 
-  if (isKnown) {
+  list.innerHTML =
+    `<li class="csel-header">（請選擇）</li>` +
+    labels.map(l => `<li data-value="${escHtml(l)}">${escHtml(l)}</li>`).join("") +
+    `<li data-value="__new__">＋ 輸入新標籤…</li>`;
+
+  list.querySelectorAll("li[data-value]").forEach(li => {
+    li.addEventListener("click", () => _selectCustomOption(li.dataset.value, li.textContent));
+  });
+
+  if (isKnown && suggestedLabel !== "") {
     sel.value = suggestedLabel;
+    _setTriggerText(suggestedLabel, false);
     custom.style.display = "none";
     custom.value = "";
-  } else {
+  } else if (!isKnown) {
     sel.value = "__new__";
+    _setTriggerText("＋ 輸入新標籤…", false);
     custom.style.display = "";
     custom.value = suggestedLabel;
+  } else {
+    _setTriggerText("（請選擇）", true);
+    custom.style.display = "none";
+    custom.value = "";
   }
 }
 
-function onManualLabelChange() {
+function _setTriggerText(text, isPlaceholder) {
+  const trigger = document.getElementById("manual-label-trigger");
+  trigger.textContent = text;
+  trigger.classList.toggle("is-placeholder", isPlaceholder);
+}
+
+function _selectCustomOption(value, text) {
   const sel = document.getElementById("manual-label-select");
   const custom = document.getElementById("manual-label-custom");
-  if (sel.value === "__new__") {
+  sel.value = value;
+  _closeCustomSelect();
+  if (value === "__new__") {
+    _setTriggerText("＋ 輸入新標籤…", false);
     custom.style.display = "";
     setTimeout(() => custom.focus(), 50);
   } else {
+    _setTriggerText(text, false);
     custom.style.display = "none";
     custom.value = "";
   }
 }
+
+function _openCustomSelect() {
+  document.getElementById("manual-label-list").style.display = "";
+}
+
+function _closeCustomSelect() {
+  const list = document.getElementById("manual-label-list");
+  if (!list) return;
+  list.style.display = "none";
+}
+
+function onManualLabelChange() {}
+
+document.getElementById("manual-label-trigger").addEventListener("click", e => {
+  e.stopPropagation();
+  const list = document.getElementById("manual-label-list");
+  list.style.display === "none" ? _openCustomSelect() : _closeCustomSelect();
+});
+document.getElementById("manual-label-list").addEventListener("click", e => e.stopPropagation());
+document.addEventListener("click", _closeCustomSelect);
 
 function _getManualLabel() {
   const sel = document.getElementById("manual-label-select");
@@ -2006,6 +2107,330 @@ function subscribeEnrichment(companyId) {
     };
   });
 }
+
+/* ── Relationship Graph (independent modal) ── */
+let _cy = null;                  // active Cytoscape instance
+let _cyResizeObserver = null;    // observes the canvas to keep the graph fitted
+let _relBuildingId = null;       // company id whose relationship is being built
+let _relGraphCompanyId = null;   // company currently shown in the relationship modal
+
+function _disposeCy() {
+  if (_cyResizeObserver) { _cyResizeObserver.disconnect(); _cyResizeObserver = null; }
+  if (_cy) { try { _cy.destroy(); } catch (_) {} _cy = null; }
+}
+
+function openRelationshipGraph(companyId) {
+  const id = companyId || _modalCompanyId;
+  if (!id) return;
+  _relGraphCompanyId = id;
+  const c = state.companies.find(x => x.id === id);
+  document.getElementById("rel-graph-title").textContent =
+    `${c ? shortName(c.name) : "公司"} — 母子公司關係圖`;
+  const sub = document.getElementById("rel-graph-subtitle");
+  if (sub) {
+    const parent = c?.relationship_graph?.parent;
+    if (parent) {
+      const kindLbl = parent.kind === "person" ? "自然人" : "法人";
+      sub.textContent = `當前錨點：${parent.name}（${kindLbl}）`;
+    } else {
+      sub.textContent = "尚未分析。點右上「🔗 重新分析」開始，或在公司詳情中於董監事表格點 ⊕ 指定錨點。";
+    }
+  }
+  const btn = document.getElementById("rel-graph-rebuild-btn");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = c?.relationship_graph ? "🔗 重新分析" : "🔗 開始分析";
+  }
+  document.getElementById("rel-graph-overlay").classList.add("open");
+  document.body.classList.add("rel-open");
+  // Cytoscape needs a layout pass after the container resizes (side-by-side mode shrinks it)
+  setTimeout(() => renderOwnershipGraph(id), 50);
+}
+
+function closeRelationshipGraph() {
+  document.getElementById("rel-graph-overlay").classList.remove("open");
+  document.body.classList.remove("rel-open");
+  _disposeCy();
+  _relGraphCompanyId = null;
+}
+
+document.getElementById("rel-graph-overlay").addEventListener("click", e => {
+  // In side-by-side mode the overlay is pointer-events:none, so this only fires when alone
+  if (e.target === document.getElementById("rel-graph-overlay")) closeRelationshipGraph();
+});
+
+async function renderOwnershipGraph(companyId) {
+  const wrap = document.getElementById("rel-graph-canvas");
+  const noteEl = document.getElementById("rel-graph-note");
+  const statusEl = document.getElementById("rel-graph-status");
+  if (!wrap) return;
+
+  _disposeCy();
+  wrap.innerHTML = "";
+  noteEl.textContent = "";
+
+  let graph;
+  try {
+    graph = await api("GET", `/api/companies/${companyId}/ownership-graph`);
+  } catch (err) {
+    statusEl.textContent = `載入關係圖失敗：${err.message}`;
+    return;
+  }
+
+  if (!graph.nodes || graph.nodes.length <= 1) {
+    statusEl.innerHTML = `<div class="rel-empty">尚未分析母子公司關係。點擊右上方「🔗 開始分析」按鈕。</div>`;
+    return;
+  }
+
+  statusEl.textContent = graph.last_updated
+    ? `關係資料更新時間：${new Date(graph.last_updated).toLocaleString("zh-TW")}`
+    : "";
+  noteEl.textContent = graph.note || "";
+
+  if (typeof cytoscape === "undefined") {
+    statusEl.textContent = "圖表元件尚未載入完成，請稍候再試";
+    return;
+  }
+
+  _cy = cytoscape({
+    container: wrap,
+    elements: { nodes: graph.nodes, edges: graph.edges },
+    layout: {
+      name: "breadthfirst",
+      roots: graph.nodes.filter(n => n.data.role === "parent").map(n => n.data.id),
+      directed: true,
+      spacingFactor: 1.4,
+      padding: 24,
+    },
+    style: [
+      {
+        selector: "node",
+        style: {
+          "label": "data(label)",
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-wrap": "wrap",
+          "text-max-width": 110,
+          "font-size": 12,
+          "font-family": "-apple-system, 'Microsoft JhengHei', sans-serif",
+          "color": "#fff",
+          "background-color": "#94a3b8",
+          "border-width": 2,
+          "border-color": "#fff",
+          "width": 100,
+          "height": 50,
+          "shape": "round-rectangle",
+        },
+      },
+      { selector: 'node[role = "self"]',
+        style: { "background-color": "#1d4ed8", "border-color": "#fbbf24", "border-width": 4, "width": 120, "height": 56, "font-size": 13 }
+      },
+      { selector: 'node[role = "parent"][kind = "legal_entity"]',
+        style: { "background-color": "#7c3aed", "width": 130, "height": 56, "font-size": 13 }
+      },
+      { selector: 'node[role = "parent"][kind = "person"]',
+        style: { "background-color": "#ea580c", "shape": "ellipse", "width": 110, "height": 60, "font-size": 13 }
+      },
+      { selector: 'node[role = "sibling"][in_db = true]',
+        style: { "background-color": "#059669" }
+      },
+      { selector: 'node[role = "sibling"][in_db = false]',
+        style: { "background-color": "#fff", "color": "#475569", "border-color": "#94a3b8", "border-style": "dashed", "border-width": 2 }
+      },
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "target-arrow-shape": "triangle",
+          "line-color": "#cbd5e1",
+          "target-arrow-color": "#cbd5e1",
+          "width": 2,
+          "label": "data(ratio)",
+          "font-size": 10,
+          "color": "#64748b",
+          "text-background-color": "#fff",
+          "text-background-opacity": 1,
+          "text-background-padding": 2,
+        },
+      },
+    ],
+  });
+
+  _cy.edges().forEach(e => {
+    const r = e.data("ratio");
+    if (r) e.data("ratio", `${(r * 100).toFixed(2)}%`);
+    else   e.data("ratio", "");
+  });
+
+  // Auto-fit graph when canvas resizes (entering/leaving side-by-side mode)
+  _cyResizeObserver = new ResizeObserver(() => {
+    if (!_cy) return;
+    _cy.resize();
+    _cy.fit(undefined, 30);
+  });
+  _cyResizeObserver.observe(wrap);
+
+  _cy.on("tap", "node", evt => {
+    const d = evt.target.data();
+    if (d.role === "self") return;
+    // Person anchor cannot be added as a company
+    if (d.role === "parent" && d.kind === "person") {
+      toast(`「${d.label}」是自然人，無法加入公司列表`);
+      return;
+    }
+    if (d.in_db && d.company_id) {
+      // Switch the relationship-graph modal to that company; also sync detail modal if open
+      _modalCompanyId = d.company_id;
+      if (document.getElementById("modal-overlay").classList.contains("open")) {
+        openModal(d.company_id);
+      }
+      openRelationshipGraph(d.company_id);
+      return;
+    }
+    // Not in DB → confirm dialog
+    _openFromGraphDialog({
+      name: d.label,
+      tax_id: d.tax_id || "",
+      role: d.role,
+    });
+  });
+}
+
+async function setAnchorDirector(idx) {
+  // Open relationship modal for the current detail-modal company, then build with that anchor
+  const id = _modalCompanyId;
+  if (!id) return;
+  openRelationshipGraph(id);
+  await buildRelationship(idx);
+}
+
+async function buildRelationship(directorIndex) {
+  // Prefer the relationship-graph modal's company; fall back to detail modal's
+  const id = _relGraphCompanyId || _modalCompanyId;
+  if (!id) return;
+  if (_relBuildingId === id) return;  // already running
+  _relBuildingId = id;
+
+  const btn = document.getElementById("rel-graph-rebuild-btn");
+  const statusEl = document.getElementById("rel-graph-status");
+  if (btn) { btn.disabled = true; btn.textContent = "🔍 分析中…"; }
+  if (statusEl) statusEl.innerHTML = `<div class="rel-progress">正在分析中…</div>`;
+
+  const url = directorIndex != null && directorIndex >= 0
+    ? `/api/companies/${id}/build-relationship?director_index=${directorIndex}`
+    : `/api/companies/${id}/build-relationship`;
+
+  await new Promise(resolve => {
+    const es = new EventSource(url);
+    es.onmessage = async e => {
+      const event = JSON.parse(e.data);
+      if (event.type === "progress" && statusEl) {
+        statusEl.innerHTML = `<div class="rel-progress">${escHtml(event.message)}</div>`;
+      } else if (event.type === "done") {
+        es.close();
+        try { await loadCompanies(); } catch (_) {}
+        if (_relGraphCompanyId === id) {
+          // Refresh subtitle with new anchor info
+          const c = state.companies.find(x => x.id === id);
+          const sub = document.getElementById("rel-graph-subtitle");
+          const parent = c?.relationship_graph?.parent;
+          if (sub && parent) {
+            const kindLbl = parent.kind === "person" ? "自然人" : "法人";
+            sub.textContent = `當前錨點：${parent.name}（${kindLbl}）`;
+          }
+          await renderOwnershipGraph(id);
+        }
+        // Also refresh the detail modal so the director ⊕/✓ marker updates
+        if (_modalCompanyId === id && document.getElementById("modal-overlay").classList.contains("open")) {
+          openModal(id);
+        }
+        if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
+        _relBuildingId = null;
+        resolve();
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      if (statusEl) statusEl.innerHTML = `<div class="rel-error">分析中斷，請重試</div>`;
+      if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
+      _relBuildingId = null;
+      resolve();
+    };
+  });
+}
+
+/* ── Add From Graph Dialog ── */
+let _fromGraphPayload = null;
+
+function _openFromGraphDialog(node) {
+  _fromGraphPayload = node;
+  document.getElementById("from-graph-name").textContent = node.name;
+  document.getElementById("from-graph-tax-id").textContent = node.tax_id || "（未知）";
+
+  const labelSel = document.getElementById("from-graph-label");
+  labelSel.innerHTML =
+    `<option value="">（無）</option>` +
+    state.labels.map(l => `<option value="${escAttr(l)}">${escHtml(l)}</option>`).join("");
+  // Default to first existing label (often the originating company's primary label)
+  const sourceCompany = state.companies.find(c => c.id === _modalCompanyId);
+  const defaultLabel = sourceCompany?.labels?.[0] || "";
+  if (defaultLabel) labelSel.value = defaultLabel;
+
+  const indSel = document.getElementById("from-graph-industry");
+  indSel.innerHTML =
+    `<option value="">— 未指定 —</option>` +
+    state.industries.map(i => `<option value="${escAttr(i)}">${escHtml(i)}</option>`).join("");
+  if (sourceCompany?.industry) indSel.value = sourceCompany.industry;
+
+  document.getElementById("from-graph-overlay").classList.add("open");
+}
+
+function _closeFromGraphDialog() {
+  document.getElementById("from-graph-overlay").classList.remove("open");
+  _fromGraphPayload = null;
+}
+
+document.getElementById("from-graph-cancel").addEventListener("click", _closeFromGraphDialog);
+document.getElementById("from-graph-overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("from-graph-overlay")) _closeFromGraphDialog();
+});
+
+document.getElementById("from-graph-ok").addEventListener("click", async () => {
+  if (!_fromGraphPayload) return;
+  const sourceId = _relGraphCompanyId || _modalCompanyId;
+  const payload = {
+    name: _fromGraphPayload.name,
+    tax_id: _fromGraphPayload.tax_id || null,
+    label: document.getElementById("from-graph-label").value || "",
+    industry: document.getElementById("from-graph-industry").value || "",
+    source_company_id: sourceId || null,
+  };
+  _closeFromGraphDialog();
+
+  try {
+    const res = await api("POST", "/api/companies/from-graph", payload);
+    if (res.existed) {
+      toast(`公司已存在：${res.name}`);
+      await loadCompanies();
+      _modalCompanyId = res.company_id;
+      openModal(res.company_id);
+      return;
+    }
+    toast(`已加入「${res.name}」，正在自動生成內容…`);
+    await loadCompanies();
+    computeGroups();
+    renderSidebar();
+    renderGrid();
+    // Subscribe to enrichment progress; when done, refresh the source graph so the new node turns green
+    subscribeEnrichment(res.company_id).then(async () => {
+      if (sourceId && _relGraphCompanyId === sourceId) {
+        await renderOwnershipGraph(sourceId);
+      }
+    });
+  } catch (err) {
+    toast(`加入失敗：${err.message}`, true);
+  }
+});
 
 /* ── Toast ── */
 function toast(message, isError = false) {

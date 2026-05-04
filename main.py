@@ -40,18 +40,14 @@ async def _daily_digest_scheduler() -> None:
         await refresh_all_digests()
 
 
-async def _weekly_trends_scheduler() -> None:
-    """Trigger trend refresh for all industries every Monday at 08:05 Taiwan time."""
+async def _daily_trends_scheduler() -> None:
+    """Trigger trend refresh for all industries every day at 08:05 Taiwan time (5 min after digest)."""
     while True:
         now = datetime.now(TAIWAN_TZ)
-        days_to_monday = (7 - now.weekday()) % 7  # weekday(): Mon=0
-        target = (now + timedelta(days=days_to_monday)).replace(
-            hour=8, minute=5, second=0, microsecond=0
-        )
-        if target <= now:  # already past this Monday's 08:05 → next Monday
-            target += timedelta(days=7)
-        wait = (target - now).total_seconds()
-        log.info("Weekly trends scheduler: next run in %.0f s", wait)
+        today_8_05 = now.replace(hour=8, minute=5, second=0, microsecond=0)
+        next_8_05 = today_8_05 if now < today_8_05 else today_8_05 + timedelta(days=1)
+        wait = (next_8_05 - now).total_seconds()
+        log.info("Daily trends scheduler: next run in %.0f s", wait)
         await asyncio.sleep(wait)
         from services.daily_digest import refresh_all_trends
         await refresh_all_trends()
@@ -60,7 +56,7 @@ async def _weekly_trends_scheduler() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     t1 = asyncio.create_task(_daily_digest_scheduler())
-    t2 = asyncio.create_task(_weekly_trends_scheduler())
+    t2 = asyncio.create_task(_daily_trends_scheduler())
     yield
     for t in (t1, t2):
         t.cancel()

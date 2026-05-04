@@ -16,6 +16,8 @@ from typing import Any
 import httpx
 
 RONNY_SEARCH = "https://company.g0v.ronny.tw/api/search"
+RONNY_FUND = "https://company.g0v.ronny.tw/api/fund"
+RONNY_NAME = "https://company.g0v.ronny.tw/api/name"
 GCIS_APP1 = (
     "https://data.gcis.nat.gov.tw/od/data/api/"
     "5F64D864-61CB-4D0D-8AD9-492047CC1EA6"
@@ -114,6 +116,194 @@ def _resolve_listing_status(tax_id: str, name: str) -> str:
     if abbrev and abbrev != name and abbrev in _by_abbrev:
         return _by_abbrev[abbrev]
     return "非公發"
+
+
+def pick_largest_legal_director(directors: list[dict]) -> dict | None:
+    """Pick the director with the highest ratio whose representative_of (法人) is set.
+
+    Falls back to None when no director represents a legal entity. The strict rule
+    (largest shareholder must already be a 法人) is intentionally relaxed here per
+    the user's directive: if the top shareholder is an 自然人, fall through to the
+    next largest with a representative_of so we can still surface a parent.
+    """
+    candidates = [
+        d for d in (directors or [])
+        if (d.get("representative_of") or "").strip()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.get("ratio") or 0)
+
+
+async def fetch_parent_entity_data(name: str, tax_id: str = "") -> dict[str, Any]:
+    """Fetch parent legal entity data by name (and tax_id if available).
+
+    Returns a flat dict with name/tax_id/capital/listing_status/representative.
+    Empty dict when API yields nothing usable.
+    """
+    if not name and not tax_id:
+        return {}
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        await _ensure_listing_cache(client)
+
+        resolved_name = name
+        if tax_id and not resolved_name:
+            resolved_name = await _ronny_name_by_tax_id(client, tax_id)
+
+        ronny: dict[str, Any] = {}
+        if resolved_name:
+            ronny = await _fetch_ronny(client, resolved_name) or {}
+
+        out: dict[str, Any] = {
+            "name": ronny.get("matched_name") or resolved_name or name,
+            "tax_id": ronny.get("tax_id") or tax_id,
+            "capital": ronny.get("capital", 0),
+            "representative": ronny.get("representative", ""),
+            "address": ronny.get("address", ""),
+        }
+
+        # GCIS supplement when we have a tax_id (authorized_capital, setup_date)
+        if out["tax_id"]:
+            gcis = await _fetch_gcis_by_tax_id(client, out["tax_id"])
+            if not out["representative"] and gcis.get("representative"):
+                out["representative"] = gcis["representative"]
+            if not out["capital"] and gcis.get("capital"):
+                out["capital"] = gcis["capital"]
+            if gcis.get("authorized_capital"):
+                out["authorized_capital"] = gcis["authorized_capital"]
+
+        out["listing_status"] = _resolve_listing_status(out["tax_id"], out["name"])
+        return out
+
+
+async def fetch_subsidiaries_of_legal_entity(name: str, tax_id: str = "") -> list[dict]:
+    """Reverse lookup: companies in which the given legal entity holds a director seat.
+
+    Uses Ronny's `/api/fund?q=` endpoint, which returns full company records (with
+    董監事名單). For each result, we identify the director(s) representing the parent
+    and compute their share ratio against that company's 已發行股份總數(股).
+
+    Returns a list of {name, tax_id, via_director, shares, ratio}, sorted by ratio desc.
+    """
+    query = (tax_id or name or "").strip()
+    if not query:
+        return []
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        try:
+            resp = await client.get(RONNY_FUND, params={"q": query}, timeout=20.0)
+            resp.raise_for_status()
+            hits = resp.json().get("data", []) or []
+        except Exception:
+            return []
+
+    out: list[dict] = []
+    for h in hits:
+        sub_name = h.get("公司名稱", "")
+        sub_tax_id = h.get("統一編號", "")
+        sub_total_shares = _parse_int(h.get("已發行股份總數(股)", "0"))
+
+        # Among directors of this subsidiary, find the one(s) representing the parent.
+        # Pick the largest such holding (some parents have multiple representatives).
+        best_director_name = ""
+        best_shares = 0
+        for d in (h.get("董監事名單") or []):
+            rep = d.get("所代表法人")
+            if not isinstance(rep, list) or len(rep) < 2:
+                continue
+            rep_tax_id = str(rep[0]) if rep[0] else ""
+            rep_name = str(rep[1]) if rep[1] else ""
+            tax_match = bool(tax_id) and rep_tax_id == tax_id
+            name_match = bool(name) and rep_name == name
+            if not (tax_match or name_match):
+                continue
+            shares = _parse_int(d.get("出資額", "0"))
+            if shares > best_shares:
+                best_shares = shares
+                best_director_name = d.get("姓名", "")
+
+        if best_shares == 0 and not best_director_name:
+            # The fund endpoint returned this row but the parent isn't actually a representative
+            # in current 董監事名單 (could be stale data). Skip.
+            continue
+
+        out.append({
+            "name": sub_name,
+            "tax_id": sub_tax_id,
+            "via_director": best_director_name,
+            "shares": best_shares,
+            "ratio": round(best_shares / sub_total_shares, 6) if sub_total_shares > 0 else 0.0,
+        })
+
+    out.sort(key=lambda s: s["ratio"], reverse=True)
+    return out
+
+
+async def fetch_companies_of_person(person_name: str) -> list[dict]:
+    """Reverse lookup: companies in which the given natural person serves as a director/supervisor.
+
+    Uses Ronny `/api/name?q=`. Caveat: results include ALL persons with this exact name,
+    so the caller / UI must warn users that homonym resolution is not possible.
+
+    Returns list of {name, tax_id, title, role_kind, ratio, shares, represents_legal_entity}.
+    """
+    name = (person_name or "").strip()
+    if not name:
+        return []
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        try:
+            resp = await client.get(RONNY_NAME, params={"q": name}, timeout=20.0)
+            resp.raise_for_status()
+            hits = resp.json().get("data", []) or []
+        except Exception:
+            return []
+
+    out: list[dict] = []
+    for h in hits:
+        co_name = h.get("公司名稱", "")
+        co_tax_id = h.get("統一編號", "")
+        co_total_shares = _parse_int(h.get("已發行股份總數(股)", "0"))
+
+        best_title = ""
+        best_shares = 0
+        represents_entity = ""
+        for d in (h.get("董監事名單") or []):
+            if d.get("姓名") != name:
+                continue
+            shares = _parse_int(d.get("出資額", "0"))
+            if shares >= best_shares:
+                best_shares = shares
+                best_title = d.get("職稱", "")
+                rep = d.get("所代表法人")
+                if isinstance(rep, list) and len(rep) > 1:
+                    represents_entity = str(rep[1])
+
+        # If the person isn't actually in current 董監事名單 (stale), fall back to representative role
+        if not best_title:
+            if h.get("代表人姓名") == name:
+                best_title = "公司代表人"
+
+        out.append({
+            "name": co_name,
+            "tax_id": co_tax_id,
+            "title": best_title,
+            "shares": best_shares,
+            "ratio": round(best_shares / co_total_shares, 6) if co_total_shares > 0 else 0.0,
+            "represents_legal_entity": represents_entity,
+        })
+
+    out.sort(key=lambda x: (x["ratio"], x["shares"]), reverse=True)
+    return out
+
+
+async def _ronny_name_by_tax_id(client: httpx.AsyncClient, tax_id: str) -> str:
+    try:
+        resp = await client.get(f"https://company.g0v.ronny.tw/api/id/{tax_id}", timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
+        data = body.get("data", {})
+        return data.get("公司名稱", "") or data.get("Company_Name", "")
+    except Exception:
+        return ""
 
 
 async def fetch_company_name_by_tax_id(tax_id: str) -> str:
@@ -246,7 +436,8 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
             {
                 "name": d.get("姓名", ""),
                 "title": d.get("職稱", ""),
-                "representative_of": _parse_representative_of(d.get("所代表法人", "")),
+                "representative_of": _parse_representative_of_name(d.get("所代表法人", "")),
+                "representative_of_tax_id": _parse_representative_of_tax_id(d.get("所代表法人", "")),
                 "shares": _parse_int(d.get("出資額", "0")),
                 "ratio": round(_parse_int(d.get("出資額", "0")) / total_shares, 6)
                 if total_shares > 0 else 0.0,
@@ -301,10 +492,17 @@ async def _fetch_gcis_by_tax_id(client: httpx.AsyncClient, tax_id: str) -> dict[
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _parse_representative_of(val: Any) -> str:
+def _parse_representative_of_name(val: Any) -> str:
     """所代表法人 is either ['統編', '公司名稱'] or an empty string."""
     if isinstance(val, list) and len(val) > 1:
         return str(val[1])
+    return ""
+
+
+def _parse_representative_of_tax_id(val: Any) -> str:
+    """First element of 所代表法人 list is the legal entity tax_id."""
+    if isinstance(val, list) and len(val) > 0 and val[0]:
+        return str(val[0])
     return ""
 
 

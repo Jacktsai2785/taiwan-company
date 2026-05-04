@@ -38,6 +38,34 @@ def find_company_by_name(name: str) -> dict | None:
     return next((c for c in get_all_companies() if c["name"] == name), None)
 
 
+def normalize_company_name(name: str) -> str:
+    """Strip company-type suffix to match short and full names interchangeably."""
+    n = (name or "").strip()
+    for sfx in ("股份有限公司", "有限公司"):
+        if n.endswith(sfx):
+            return n[: -len(sfx)]
+    return n
+
+
+def find_company_by_name_or_tax_id(name: str, tax_id: str = "") -> dict | None:
+    """Match by tax_id first (exact), then by normalized name (suffix-tolerant)."""
+    companies = get_all_companies()
+    if tax_id:
+        hit = next((c for c in companies if c.get("tax_id") == tax_id), None)
+        if hit:
+            return hit
+    if name:
+        target = normalize_company_name(name)
+        if target:
+            return next(
+                (c for c in companies if normalize_company_name(c["name"]) == target),
+                None,
+            )
+    return None
+
+
+
+
 def upsert_company(company: dict) -> dict:
     store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
     companies = store["companies"]
