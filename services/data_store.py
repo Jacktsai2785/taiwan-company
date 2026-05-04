@@ -7,6 +7,7 @@ from typing import Any
 DATA_DIR = Path(__file__).parent.parent / "data"
 COMPANIES_FILE = DATA_DIR / "companies.json"
 CONFIG_FILE = DATA_DIR / "config.json"
+KEYWORDS_FILE = DATA_DIR / "industry_keywords.json"
 
 DEFAULT_COMPANIES = {"companies": []}
 DEFAULT_CONFIG = {"industries": ["前瞻科技", "消費生活", "環保"], "labels": []}
@@ -65,6 +66,9 @@ def create_company(name: str, label: str, industry: str) -> dict:
         "total_shares": 0,
         "directors": [],
         "address": "",
+        "setup_date": "",
+        "last_change_date": "",
+        "register_org": "",
         "blurb": "",
         "summary": "",
         "watched": False,
@@ -163,3 +167,26 @@ def add_label(label: str) -> None:
     if label and label not in config["labels"]:
         config["labels"].append(label)
         _write(CONFIG_FILE, config)
+
+
+# --- Industry keywords (for daily news synonym expansion) ---
+
+def get_all_industry_keywords() -> dict[str, list[str]]:
+    """Return {industry: [keyword, ...]} from persistent storage."""
+    if not KEYWORDS_FILE.exists():
+        return {}
+    try:
+        return json.loads(KEYWORDS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def get_keywords_for_industry(industry: str) -> list[str]:
+    return get_all_industry_keywords().get(industry, [])
+
+
+def save_industry_keywords(industry: str, keywords: list[str]) -> None:
+    store = get_all_industry_keywords()
+    store[industry] = keywords
+    KEYWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    KEYWORDS_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")

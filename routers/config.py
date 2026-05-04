@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from services import data_store, company_extractor
@@ -54,8 +54,19 @@ async def suggest_industry_match(req: IndustrySuggest, ai: dict = Depends(ai_fro
 
 
 @router.post("/industries")
-def add_industry(req: IndustryAdd):
-    industries = data_store.add_industry(req.name.strip())
+async def add_industry(
+    req: IndustryAdd,
+    background_tasks: BackgroundTasks,
+    ai: dict = Depends(ai_from_headers),
+):
+    name = req.name.strip()
+    is_new = name not in data_store.get_industries()
+    industries = data_store.add_industry(name)
+    if is_new:
+        from services.daily_digest import generate_industry_keywords
+        background_tasks.add_task(
+            generate_industry_keywords, name, ai["api_key"], ai["provider"]
+        )
     return {"industries": industries}
 
 

@@ -385,21 +385,27 @@ document.getElementById("add-industry-btn").addEventListener("click", async () =
     const checked = [...rows.querySelectorAll("input[type=checkbox]:checked")].map(el => el.value);
     overlay.classList.remove("open");
 
-    await api("POST", "/api/config/industries", { name: indName });
+    try {
+      await api("POST", "/api/config/industries", { name: indName });
 
-    if (checked.length > 0) {
-      await Promise.all(checked.map(id => api("PUT", `/api/companies/${id}`, { industry: indName })));
-      checked.forEach(id => {
-        const idx = state.companies.findIndex(c => c.id === id);
-        if (idx !== -1) state.companies[idx].industry = indName;
-      });
+      if (checked.length > 0) {
+        await api("PUT", "/api/companies/batch-industry", {
+          updates: checked.map(id => ({ id, industry: indName })),
+        });
+        checked.forEach(id => {
+          const idx = state.companies.findIndex(c => c.id === id);
+          if (idx !== -1) state.companies[idx].industry = indName;
+        });
+      }
+      toast(`產業別「${indName}」已新增${checked.length > 0 ? `，${checked.length} 間公司已歸入` : ""}`);
+    } catch (e) {
+      toast(`新增失敗：${e.message}`, true);
+    } finally {
+      await loadIndustries();
+      computeGroups();
+      renderSidebar();
+      renderGrid();
     }
-
-    await loadIndustries();
-    computeGroups();
-    renderSidebar();
-    renderGrid();
-    toast(`產業別「${indName}」已新增${checked.length > 0 ? `，${checked.length} 間公司已歸入` : ""}`);
   };
 });
 
@@ -497,20 +503,291 @@ async function runClassify() {
   };
 }
 
-/* ── Industry Panel ── */
+/* ── Industry Daily Digest Panel ── */
+
+// digest cache & in-flight tracker (separate from state to avoid serialisation issues)
+const _digestCache = {};       // { industry: { data, fetchedAt } | { error, fetchedAt } }
+const _digestLoading = new Set();
+const _digestTopic = {};       // { industry: topicName | null }  — active pill per industry
+const _trendsCache = {};       // { industry: { data, fetchedAt } | { error, fetchedAt } }
+const _trendsLoading = new Set();
+const _panelView = {};         // { industry: "digest" | "trends" }
+
 function renderIndustryPanel() {
   const panel = document.getElementById("industry-panel");
   const show = state.activeTab === "all" && !!state.activeIndustry;
   panel.style.display = show ? "" : "none";
   if (!show) return;
+  _doRenderIndustryPanel(panel, state.activeIndustry);
+}
 
-  const today = new Date();
-  const fmt = d => `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`;
-  const quarterStart = new Date(today);
-  quarterStart.setMonth(today.getMonth() - 3);
-  document.getElementById("ind-daily-date").textContent = fmt(today);
-  document.getElementById("ind-discuss-date").textContent =
-    `${fmt(quarterStart)} – ${fmt(today)}`;
+function _doRenderIndustryPanel(panel, industry) {
+  if ((_panelView[industry] ?? "digest") === "trends") {
+    _doRenderTrendsPanel(panel, industry);
+  } else {
+    const cached = _digestCache[industry];
+    if (cached?.data) {
+      _renderDigestContent(panel, cached.data, industry);
+    } else if (cached?.error) {
+      panel.innerHTML = `<div class="daily-error">⚠ 無法載入日報：${escHtml(cached.error)}</div>`;
+    } else if (_digestLoading.has(industry)) {
+      if (!panel.querySelector(".daily-loading")) panel.innerHTML = _digestLoadingHtml(industry);
+    } else {
+      panel.innerHTML = _digestLoadingHtml(industry);
+      _fetchDigest(industry, false);
+    }
+  }
+}
+
+function _doRenderTrendsPanel(panel, industry) {
+  const cached = _trendsCache[industry];
+  if (cached?.data) {
+    _renderTrendsContent(panel, cached.data, industry);
+  } else if (cached?.error) {
+    panel.innerHTML = `<div class="daily-error">⚠ 無法載入趨勢：${escHtml(cached.error)}</div>`;
+  } else if (_trendsLoading.has(industry)) {
+    if (!panel.querySelector(".daily-loading")) panel.innerHTML = _trendsLoadingHtml(industry);
+  } else {
+    panel.innerHTML = _trendsLoadingHtml(industry);
+    _fetchTrends(industry, false);
+  }
+}
+
+function _viewTabsHtml(industry, activeView) {
+  return `<div class="daily-view-tabs">
+    <button class="daily-view-tab${activeView === "digest" ? " active" : ""}"
+      onclick='switchPanelView(${JSON.stringify(industry)}, "digest")'>熱門日報</button>
+    <button class="daily-view-tab${activeView === "trends" ? " active" : ""}"
+      onclick='switchPanelView(${JSON.stringify(industry)}, "trends")'>本季趨勢</button>
+  </div>`;
+}
+
+async function _fetchDigest(industry, forceRefresh) {
+  _digestLoading.add(industry);
+  try {
+    const qs = forceRefresh ? "?refresh=true" : "";
+    const data = await api("GET", `/api/industries/${encodeURIComponent(industry)}/daily${qs}`);
+    _digestCache[industry] = { data, fetchedAt: Date.now() };
+  } catch (e) {
+    _digestCache[industry] = { error: e.message, fetchedAt: Date.now() };
+  } finally {
+    _digestLoading.delete(industry);
+    if (state.activeIndustry === industry && state.activeTab === "all") {
+      const panel = document.getElementById("industry-panel");
+      if (panel) _doRenderIndustryPanel(panel, industry);
+    }
+  }
+}
+
+function _digestLoadingHtml(industry) {
+  return `<div class="daily-panel">
+    <div class="daily-header">
+      <span class="daily-header-icon">📰</span>
+      <span class="daily-header-industry">${escHtml(industry)}</span>
+      ${_viewTabsHtml(industry, "digest")}
+      <span class="daily-header-date">載入中…</span>
+    </div>
+    <div class="daily-loading">
+      <div class="ind-placeholder-line w80"></div>
+      <div class="ind-placeholder-line w55"></div>
+      <div class="ind-placeholder-line w70"></div>
+      <div class="ind-placeholder-line w60"></div>
+      <div class="ind-placeholder-line w75"></div>
+    </div>
+  </div>`;
+}
+
+function _trendsLoadingHtml(industry) {
+  return `<div class="daily-panel">
+    <div class="daily-header">
+      <span class="daily-header-icon">📰</span>
+      <span class="daily-header-industry">${escHtml(industry)}</span>
+      ${_viewTabsHtml(industry, "trends")}
+      <span class="daily-header-date">載入中…</span>
+    </div>
+    <div class="daily-loading">
+      <div class="ind-placeholder-line w80"></div>
+      <div class="ind-placeholder-line w55"></div>
+      <div class="ind-placeholder-line w70"></div>
+    </div>
+  </div>`;
+}
+
+function _renderDigestContent(panel, data, industry) {
+  const displayDate = (data.date || "").replace(/-/g, "/");
+  const topics = data.topics || [];
+  const activeTopic = _digestTopic[industry] ?? null;
+
+  // Collect articles for the active topic view
+  let articles = [];
+  if (activeTopic === null) {
+    const seen = new Set();
+    articles = topics.flatMap(t => t.articles).filter(a => {
+      if (seen.has(a.url)) return false;
+      seen.add(a.url);
+      return true;
+    });
+  } else {
+    articles = (topics.find(t => t.name === activeTopic)?.articles) || [];
+  }
+
+  const totalCount = data.article_count || 0;
+
+  // Topic pills (watchlist topic gets a star icon + accent style)
+  // Note: onclick uses single-quoted attribute so JSON.stringify's double-quoted
+  // strings can be embedded safely without HTML attribute conflict.
+  const pillsHtml = topics.length > 0 ? `
+    <div class="daily-topics-bar">
+      <button class="daily-topic-pill${activeTopic === null ? " active" : ""}"
+        onclick='selectDigestTopic(${JSON.stringify(industry)}, null)'>全部 ${totalCount}</button>
+      ${topics.map(t => {
+        const isWatchlist = t.name === "感興趣名單";
+        const cls = "daily-topic-pill" +
+          (activeTopic === t.name ? " active" : "") +
+          (isWatchlist ? " watchlist" : "");
+        const label = isWatchlist ? `⭐ ${escHtml(t.name)}` : escHtml(t.name);
+        return `<button class="${cls}"
+          onclick='selectDigestTopic(${JSON.stringify(industry)}, ${JSON.stringify(t.name)})'>
+          ${label} ${t.articles.length}
+        </button>`;
+      }).join("")}
+    </div>` : "";
+
+  // News list — show first 5 inline; collapse the rest into a <details> block
+  const MAX_NEWS = 5;
+  const renderItem = a => `
+      <div class="daily-news-item">
+        <span class="daily-news-bullet">•</span>
+        <a class="daily-news-title" href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
+        <span class="daily-news-source">${escHtml(a.source)}</span>
+        <a class="daily-news-ext" href="${escHtml(a.url)}" target="_blank" rel="noopener">↗</a>
+      </div>`;
+  const visible = articles.slice(0, MAX_NEWS);
+  const hidden = articles.slice(MAX_NEWS);
+  let newsHtml;
+  if (visible.length === 0) {
+    newsHtml = `<div class="daily-empty">${totalCount === 0 ? "📭 今日尚無相關新聞" : "此分類暫無新聞"}</div>`;
+  } else {
+    newsHtml = visible.map(renderItem).join("");
+    if (hidden.length > 0) {
+      newsHtml += `<details class="daily-news-details">
+        <summary class="daily-news-summary">
+          <span class="when-closed">▼ 顯示其他 ${hidden.length} 則新聞</span>
+          <span class="when-open">▲ 收起</span>
+        </summary>
+        ${hidden.map(renderItem).join("")}
+      </details>`;
+    }
+  }
+
+  panel.innerHTML = `<div class="daily-panel">
+    <div class="daily-header">
+      <span class="daily-header-icon">📰</span>
+      <span class="daily-header-industry">${escHtml(industry)}</span>
+      ${_viewTabsHtml(industry, "digest")}
+      <span class="daily-header-date">${escHtml(displayDate)} · 更新 ${data.generated_at ? data.generated_at.slice(11, 16) : "--:--"}</span>
+      <button class="daily-refresh-btn" onclick="refreshPanel()" title="重新整理">↻</button>
+    </div>
+    ${data.summary ? `
+    <div class="daily-summary">
+      <div class="daily-summary-bar"></div>
+      <p class="daily-summary-text">${escHtml(data.summary)}</p>
+    </div>` : ""}
+    ${pillsHtml}
+    <div class="daily-news-list">${newsHtml}</div>
+  </div>`;
+}
+
+function selectDigestTopic(industry, topicName) {
+  _digestTopic[industry] = topicName;
+  const panel = document.getElementById("industry-panel");
+  const cached = _digestCache[industry];
+  if (panel && cached?.data) _renderDigestContent(panel, cached.data, industry);
+}
+
+async function _fetchTrends(industry, forceRefresh) {
+  _trendsLoading.add(industry);
+  try {
+    const qs = forceRefresh ? "?refresh=true" : "";
+    const data = await api("GET", `/api/industries/${encodeURIComponent(industry)}/trends${qs}`);
+    _trendsCache[industry] = { data, fetchedAt: Date.now() };
+  } catch (e) {
+    _trendsCache[industry] = { error: e.message, fetchedAt: Date.now() };
+  } finally {
+    _trendsLoading.delete(industry);
+    if (state.activeIndustry === industry && state.activeTab === "all" &&
+        (_panelView[industry] ?? "digest") === "trends") {
+      const panel = document.getElementById("industry-panel");
+      if (panel) _doRenderTrendsPanel(panel, industry);
+    }
+  }
+}
+
+function _renderTrendsContent(panel, data, industry) {
+  const from = (data.date_range?.from || "").replace(/-/g, "/");
+  const to   = (data.date_range?.to   || "").replace(/-/g, "/");
+  const n    = data.days_analyzed || 0;
+  const trends = data.trends || [];
+  const SIG = {
+    rising:  { icon: "▲", cls: "rising"  },
+    falling: { icon: "▼", cls: "falling" },
+    stable:  { icon: "→", cls: "stable"  },
+  };
+  const trendsHtml = trends.length === 0
+    ? `<div class="daily-empty">${escHtml(data.overview || "尚無足夠資料生成趨勢")}</div>`
+    : trends.map(t => {
+        const sig = SIG[t.signal] || SIG.stable;
+        const tagsHtml = (t.representative_titles || [])
+          .map(ti => `<span class="trend-title-tag">${escHtml(ti)}</span>`).join("");
+        return `<div class="trend-card">
+          <div class="trend-card-header">
+            <span class="trend-signal ${sig.cls}">${sig.icon}</span>
+            <span class="trend-name">${escHtml(t.name)}</span>
+          </div>
+          <p class="trend-insight">${escHtml(t.insight)}</p>
+          ${tagsHtml ? `<div class="trend-titles">${tagsHtml}</div>` : ""}
+        </div>`;
+      }).join("");
+
+  panel.innerHTML = `<div class="daily-panel">
+    <div class="daily-header">
+      <span class="daily-header-icon">📰</span>
+      <span class="daily-header-industry">${escHtml(industry)}</span>
+      ${_viewTabsHtml(industry, "trends")}
+      <span class="daily-header-date">${from && to ? `${from} – ${to} · 近${n}天` : `近${n}天`}</span>
+      <button class="daily-refresh-btn" onclick="refreshPanel()" title="重新整理">↻</button>
+    </div>
+    ${data.overview && trends.length > 0 ? `
+    <div class="daily-summary">
+      <div class="daily-summary-bar" style="background:#7c3aed"></div>
+      <p class="daily-summary-text">${escHtml(data.overview)}</p>
+    </div>` : ""}
+    <div class="trends-list">${trendsHtml}</div>
+  </div>`;
+}
+
+function switchPanelView(industry, view) {
+  _panelView[industry] = view;
+  const panel = document.getElementById("industry-panel");
+  if (panel) _doRenderIndustryPanel(panel, industry);
+}
+
+async function refreshPanel() {
+  const industry = state.activeIndustry;
+  if (!industry) return;
+  const view = _panelView[industry] ?? "digest";
+  const panel = document.getElementById("industry-panel");
+  if (view === "trends") {
+    if (_trendsLoading.has(industry)) return;
+    delete _trendsCache[industry];
+    if (panel) panel.innerHTML = _trendsLoadingHtml(industry);
+    await _fetchTrends(industry, true);
+  } else {
+    if (_digestLoading.has(industry)) return;
+    delete _digestCache[industry];
+    if (panel) panel.innerHTML = _digestLoadingHtml(industry);
+    await _fetchDigest(industry, true);
+  }
 }
 
 /* ── Grid ── */
@@ -1578,7 +1855,7 @@ function subscribeEnrichment(companyId) {
         state.enrichingIds.delete(companyId);
         state.doneIds.add(companyId);
         // Notify if user isn't looking at the page
-        alertDone("(!) 摘要生成完成", `✅ ${company?.name ?? "公司"} 摘要已生成完成`);
+        alertDone("(!) 摘要生成完成", `✅ ${state.companies.find(c => c.id === companyId)?.name ?? "公司"} 摘要已生成完成`);
         try {
           await loadCompanies();
           computeGroups();
@@ -1592,7 +1869,7 @@ function subscribeEnrichment(companyId) {
           state.doneIds.delete(companyId);
           stopTitleFlash();
           renderGrid();
-        }, 2000);
+        }, 3000);
       }
     };
     es.onerror = () => {

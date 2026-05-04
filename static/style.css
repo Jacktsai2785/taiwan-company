@@ -529,7 +529,7 @@ body {
   position: absolute;
   top: 0;
   right: 0;
-  background: var(--card);
+  background: transparent;
   border: none;
   cursor: pointer;
   font-size: 13px;
@@ -1488,10 +1488,262 @@ body {
 
 /* ── Industry Panel ── */
 #industry-panel {
-  margin: 0 20px 0;
+  margin: 0 20px 12px;
   padding: 0;
   flex-shrink: 0;
 }
+
+/* Daily digest panel */
+.daily-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.daily-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: #f6f8fc;
+}
+.daily-header-icon { font-size: 14px; flex-shrink: 0; }
+.daily-header-industry {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.daily-header-title {
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.daily-header-date {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.daily-refresh-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--muted);
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color .15s, background .15s;
+  flex-shrink: 0;
+}
+.daily-refresh-btn:hover { color: var(--accent); background: rgba(99,102,241,.08); }
+
+/* Summary block */
+.daily-summary {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.daily-summary-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+  align-self: stretch;
+}
+.daily-summary-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #374151;
+}
+
+/* Topic pills */
+.daily-topics-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+.daily-topics-bar::-webkit-scrollbar { height: 0; }
+.daily-topic-pill {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+  white-space: nowrap;
+}
+.daily-topic-pill:hover { border-color: var(--accent); color: var(--accent); }
+.daily-topic-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.daily-topic-pill.watchlist { border-color: #f59e0b; color: #b45309; background: #fffbeb; }
+.daily-topic-pill.watchlist:hover { border-color: #d97706; color: #92400e; }
+.daily-topic-pill.watchlist.active { background: #f59e0b; border-color: #f59e0b; color: #fff; }
+
+/* News list */
+.daily-news-list { padding: 4px 0; max-height: 200px; overflow-y: auto; }
+.daily-news-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 14px;
+  transition: background .1s;
+}
+.daily-news-item:hover { background: #f0f4fa; }
+.daily-news-bullet { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.daily-news-title {
+  flex: 1;
+  font-size: 12px;
+  color: #1f2937;
+  text-decoration: none;
+  line-height: 1.5;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daily-news-title:hover { color: var(--accent); text-decoration: underline; }
+.daily-news-source {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  background: #f3f4f6;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.daily-news-ext {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color .12s;
+}
+.daily-news-ext:hover { color: var(--accent); }
+
+/* States */
+.daily-loading {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.daily-empty {
+  padding: 20px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+.daily-news-details {
+  border-top: 1px dashed var(--border);
+  margin-top: 4px;
+}
+.daily-news-summary {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: background .12s;
+}
+.daily-news-summary:hover { background: #f0f4fa; }
+.daily-news-summary::-webkit-details-marker { display: none; }
+.daily-news-details[open] .daily-news-summary { color: var(--muted); }
+.daily-news-summary .when-open { display: none; }
+.daily-news-details[open] .daily-news-summary .when-closed { display: none; }
+.daily-news-details[open] .daily-news-summary .when-open { display: inline; }
+.daily-error {
+  padding: 16px 14px;
+  font-size: 12px;
+  color: #dc2626;
+  text-align: center;
+}
+
+/* View tabs (熱門日報 / 本季趨勢) */
+.daily-view-tabs {
+  display: flex;
+  gap: 2px;
+  background: #e8edf5;
+  border-radius: 6px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.daily-view-tab {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.daily-view-tab:hover { color: var(--accent); }
+.daily-view-tab.active { background: var(--card); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* Trend panel */
+.trends-list { padding: 8px 0; max-height: 240px; overflow-y: auto; }
+.trend-card {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.trend-card:last-child { border-bottom: none; }
+.trend-card-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.trend-signal {
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+.trend-signal.rising  { color: #16a34a; }
+.trend-signal.falling { color: #dc2626; }
+.trend-signal.stable  { color: var(--muted); }
+.trend-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.trend-insight {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #374151;
+  margin: 0 0 6px 25px;
+}
+.trend-titles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 25px;
+}
+.trend-title-tag {
+  font-size: 10px;
+  color: var(--muted);
+  background: #f3f4f6;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  line-height: 1.4;
+}
+
 .ind-panel-row {
   display: flex;
   gap: 0;

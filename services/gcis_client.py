@@ -5,6 +5,7 @@ https://company.g0v.ronny.tw/api/search?q={company_name}
 Single request returns: tax_id, capital, representative, address,
 par_value, total_shares, and full director list.
 Falls back to GCIS App1 API (by tax_id) when ronnywang returns no match.
+GCIS App1 also provides setup_date, last_change_date, and register_org.
 Listing status (上市/上櫃/興櫃/創新板/非公發) is resolved from TWSE/TPEX open APIs.
 創櫃板: TPEX 尚未提供公開 JSON API，暫不支援自動辨識。
 """
@@ -18,10 +19,6 @@ RONNY_SEARCH = "https://company.g0v.ronny.tw/api/search"
 GCIS_APP1 = (
     "https://data.gcis.nat.gov.tw/od/data/api/"
     "5F64D864-61CB-4D0D-8AD9-492047CC1EA6"
-)
-GCIS_DIRECTOR_API = (
-    "https://data.gcis.nat.gov.tw/od/data/api/"
-    "6BBA2268-1367-4B42-9CCA-BC17499EBE8C"
 )
 TIMEOUT = 20.0
 
@@ -165,6 +162,9 @@ async def fetch_company_data(name: str) -> dict[str, Any]:
         "par_value": 0,
         "total_shares": 0,
         "directors": [],
+        "setup_date": "",
+        "last_change_date": "",
+        "register_org": "",
     }
 
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
@@ -174,12 +174,15 @@ async def fetch_company_data(name: str) -> dict[str, Any]:
         if ronny:
             result.update(ronny)
 
-        # Always fetch GCIS for authorized_capital (Capital_Stock_Amount) when we have tax_id
+        # Always fetch GCIS for authorized_capital and supplementary fields when we have tax_id
         tax_id = result.get("tax_id", "")
         if tax_id:
             gcis = await _fetch_gcis_by_tax_id(client, tax_id)
             if gcis.get("authorized_capital"):
                 result["authorized_capital"] = gcis["authorized_capital"]
+            for k in ("setup_date", "last_change_date", "register_org"):
+                if gcis.get(k):
+                    result[k] = gcis[k]
             if not ronny:
                 for k in ("representative", "capital", "address"):
                     if gcis.get(k):
@@ -260,6 +263,9 @@ async def _fetch_gcis_by_tax_id(client: httpx.AsyncClient, tax_id: str) -> dict[
             "capital": _parse_int(row.get("Paid_In_Capital_Amount", "0")),
             "authorized_capital": _parse_int(row.get("Capital_Stock_Amount", "0")),
             "address": row.get("Company_Location", ""),
+            "setup_date": row.get("Company_Setup_Date", ""),
+            "last_change_date": row.get("Change_Of_Approval_Data", ""),
+            "register_org": row.get("Register_Organization_Desc", ""),
         }
     except Exception:
         return {}
