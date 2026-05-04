@@ -30,6 +30,11 @@ def get_industries():
     return data_store.get_industries()
 
 
+@router.get("/labels")
+def get_labels():
+    return data_store.get_config()["labels"]
+
+
 @router.get("/groups")
 def get_groups():
     """Return {industry: [group, ...]} derived from company data."""

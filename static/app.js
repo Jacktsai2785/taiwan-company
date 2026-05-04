@@ -2,6 +2,7 @@
 const state = {
   companies: [],
   industries: [],
+  labels: [],
   groups: {},                    // {industry: [group, ...]}
   expandedIndustries: new Set(),
   activeIndustry: null,          // null = all
@@ -100,7 +101,7 @@ async function api(method, path, body) {
 
 /* ── Boot ── */
 async function boot() {
-  await Promise.all([loadIndustries(), loadCompanies()]);
+  await Promise.all([loadIndustries(), loadCompanies(), loadLabels()]);
   computeGroups();
   renderSidebar();
   renderGrid();
@@ -154,6 +155,10 @@ function stopTitleFlash() {
 
 async function loadIndustries() {
   state.industries = await api("GET", "/api/config/industries");
+}
+
+async function loadLabels() {
+  state.labels = await api("GET", "/api/config/labels");
 }
 
 async function loadCompanies() {
@@ -1409,16 +1414,58 @@ document.getElementById("manual-overlay").addEventListener("click", e => {
     document.getElementById("manual-overlay").classList.remove("open");
 });
 
+function _buildLabelOptions(suggestedLabel) {
+  const sel = document.getElementById("manual-label-select");
+  const custom = document.getElementById("manual-label-custom");
+  const labels = state.labels;
+  const isKnown = suggestedLabel === "" || labels.includes(suggestedLabel);
+
+  sel.innerHTML =
+    `<option value="">（不套用標籤）</option>` +
+    labels.map(l => `<option value="${escHtml(l)}">${escHtml(l)}</option>`).join("") +
+    `<option value="__new__">＋ 輸入新標籤…</option>`;
+
+  if (isKnown) {
+    sel.value = suggestedLabel;
+    custom.style.display = "none";
+    custom.value = "";
+  } else {
+    sel.value = "__new__";
+    custom.style.display = "";
+    custom.value = suggestedLabel;
+  }
+}
+
+function onManualLabelChange() {
+  const sel = document.getElementById("manual-label-select");
+  const custom = document.getElementById("manual-label-custom");
+  if (sel.value === "__new__") {
+    custom.style.display = "";
+    setTimeout(() => custom.focus(), 50);
+  } else {
+    custom.style.display = "none";
+    custom.value = "";
+  }
+}
+
+function _getManualLabel() {
+  const sel = document.getElementById("manual-label-select");
+  if (sel.value === "__new__") {
+    return document.getElementById("manual-label-custom").value.trim();
+  }
+  return sel.value;
+}
+
 function openManualDialog(suggestedLabel = "") {
   document.getElementById("manual-names").value = "";
-  document.getElementById("manual-label").value = suggestedLabel;
+  _buildLabelOptions(suggestedLabel);
   document.getElementById("manual-overlay").classList.add("open");
   setTimeout(() => document.getElementById("manual-names").focus(), 50);
 }
 
 document.getElementById("manual-ok").addEventListener("click", async () => {
   const rawText = document.getElementById("manual-names").value;
-  const label = document.getElementById("manual-label").value.trim();
+  const label = _getManualLabel();
 
   const names = rawText.split("\n").map(n => n.trim()).filter(n => n.length > 0);
   if (names.length === 0) { toast("請輸入至少一個公司名稱", true); return; }

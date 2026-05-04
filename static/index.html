@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
-  <link rel="stylesheet" href="/static/style.css?v=35" />
+  <link rel="stylesheet" href="/static/style.css?v=36" />
 </head>
 <body>
 
@@ -181,7 +181,8 @@
       <div class="manual-fields">
         <div class="manual-field">
           <label>標籤</label>
-          <input id="manual-label" type="text" placeholder="例：2026Q1" />
+          <select id="manual-label-select" onchange="onManualLabelChange()"></select>
+          <input id="manual-label-custom" type="text" placeholder="輸入新標籤名稱…" autocomplete="off" style="display:none" />
         </div>
       </div>
     </div>
@@ -317,6 +318,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=39"></script>
+<script src="/static/app.js?v=40"></script>
 </body>
 </html>
