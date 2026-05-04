@@ -1416,35 +1416,114 @@ function openManualDialog(suggestedLabel = "") {
   setTimeout(() => document.getElementById("manual-names").focus(), 50);
 }
 
-document.getElementById("manual-ok").addEventListener("click", () => {
+document.getElementById("manual-ok").addEventListener("click", async () => {
   const rawText = document.getElementById("manual-names").value;
   const label = document.getElementById("manual-label").value.trim();
-  const industry = "";
 
   const names = rawText.split("\n").map(n => n.trim()).filter(n => n.length > 0);
   if (names.length === 0) { toast("請輸入至少一個公司名稱", true); return; }
 
   document.getElementById("manual-overlay").classList.remove("open");
 
-  const valid = [], uncertain = [];
-  for (const name of names) {
-    const existing = state.companies.find(c => c.name === name);
-    const candidate = {
-      name,
-      suggested_label: label,
-      suggested_industry: industry,
-      is_new: !existing,
-      existing_id: existing ? existing.id : null,
-      existing_labels: existing ? (existing.labels || []) : [],
-    };
-    if (name.endsWith("股份有限公司")) {
-      valid.push(candidate);
-    } else {
-      uncertain.push(candidate);
+  // Lookup names via API to resolve official names and detect ambiguity
+  let lookupResults = [];
+  try {
+    toast("正在查詢公司登記資料…");
+    lookupResults = await api("POST", "/api/companies/name-lookup", { names });
+  } catch (e) {
+    lookupResults = names.map(n => ({ input: n, matches: [] }));
+  }
+
+  // Build resolution map: input → single match (or undefined if ambiguous/not found)
+  const autoResolved = {};   // input → {short_name, full_name, tax_id}
+  const ambiguousItems = []; // [{input, matches}] — needs user to pick
+
+  for (const item of lookupResults) {
+    if (item.matches.length === 1) {
+      autoResolved[item.input] = item.matches[0];
+    } else if (item.matches.length > 1) {
+      ambiguousItems.push(item);
     }
   }
 
-  openConfirmDialog(valid, uncertain, [], label);
+  // Build candidates from resolutionMap + disambiguation selections
+  const buildCandidates = (disambigSelections) => {
+    const resolved = { ...autoResolved };
+    const skipped = new Set();
+    for (const s of disambigSelections) {
+      if (s.skipped) skipped.add(s.input);
+      else resolved[s.input] = s.match;
+    }
+
+    const valid = [], uncertain = [];
+    for (const name of names) {
+      if (skipped.has(name)) continue;
+      const match = resolved[name];
+      const displayName = match ? match.short_name : name;
+      const existing = state.companies.find(c => c.name === displayName);
+      const candidate = {
+        name: displayName,
+        suggested_label: label,
+        suggested_industry: "",
+        is_new: !existing,
+        existing_id: existing ? existing.id : null,
+        existing_labels: existing ? (existing.labels || []) : [],
+      };
+      if (match || displayName.endsWith("股份有限公司") || displayName.endsWith("有限公司")) {
+        valid.push(candidate);
+      } else {
+        uncertain.push(candidate);
+      }
+    }
+    openConfirmDialog(valid, uncertain, [], label);
+  };
+
+  if (ambiguousItems.length > 0) {
+    openDisambigDialog(ambiguousItems, buildCandidates);
+  } else {
+    buildCandidates([]);
+  }
+});
+
+/* ── Name Disambiguation Dialog ── */
+let _disambigCallback = null;
+
+function openDisambigDialog(items, onConfirm) {
+  _disambigCallback = onConfirm;
+  const body = document.getElementById("disambig-body");
+  body.innerHTML = items.map((item, gi) => `
+    <div class="disambig-group">
+      <div class="disambig-input-label">「${escHtml(item.input)}」查詢到 ${item.matches.length} 個結果：</div>
+      ${item.matches.map((m, mi) => `
+        <label class="disambig-option">
+          <input type="radio" name="dg${gi}" value="${mi}" ${mi === 0 ? "checked" : ""} />
+          <span class="disambig-short">${escHtml(m.short_name)}</span>
+          <span class="disambig-full">${escHtml(m.full_name)}</span>
+        </label>`).join("")}
+      <label class="disambig-option">
+        <input type="radio" name="dg${gi}" value="skip" />
+        <span class="disambig-skip">略過此公司</span>
+      </label>
+    </div>`).join("");
+  document.getElementById("disambig-overlay").classList.add("open");
+  _disambigItems = items;
+}
+
+let _disambigItems = [];
+
+document.getElementById("disambig-cancel").addEventListener("click", () => {
+  document.getElementById("disambig-overlay").classList.remove("open");
+});
+
+document.getElementById("disambig-ok").addEventListener("click", () => {
+  const selections = _disambigItems.map((item, gi) => {
+    const selected = document.querySelector(`input[name="dg${gi}"]:checked`);
+    const val = selected ? selected.value : "0";
+    if (val === "skip") return { input: item.input, skipped: true };
+    return { input: item.input, skipped: false, match: item.matches[parseInt(val)] };
+  });
+  document.getElementById("disambig-overlay").classList.remove("open");
+  if (_disambigCallback) _disambigCallback(selections);
 });
 
 /* ── Name Review Dialog ── */

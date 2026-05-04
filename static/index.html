@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
-  <link rel="stylesheet" href="/static/style.css?v=34" />
+  <link rel="stylesheet" href="/static/style.css?v=35" />
 </head>
 <body>
 
@@ -192,6 +192,21 @@
   </div>
 </div>
 
+<!-- ── Name Disambiguation Dialog ── -->
+<div id="disambig-overlay">
+  <div id="disambig-dialog">
+    <div id="disambig-header">
+      <h3>確認公司名稱</h3>
+      <p>以下名稱查詢到多個結果，請選擇正確的公司</p>
+    </div>
+    <div id="disambig-body"><!-- rendered by JS --></div>
+    <div id="disambig-footer">
+      <button class="btn btn-ghost" id="disambig-cancel">取消</button>
+      <button class="btn btn-primary" id="disambig-ok">確認 →</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Industry Suggest Dialog ── -->
 <div id="ind-suggest-overlay">
   <div id="ind-suggest-dialog">
@@ -302,6 +317,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=38"></script>
+<script src="/static/app.js?v=39"></script>
 </body>
 </html>

@@ -147,6 +147,33 @@ async def fetch_company_name_by_tax_id(tax_id: str) -> str:
     return ""
 
 
+async def search_company_matches(name: str) -> list[dict]:
+    """Return up to 5 candidate matches from Ronny API for disambiguation."""
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        try:
+            resp = await client.get(RONNY_SEARCH, params={"q": name}, timeout=10.0)
+            resp.raise_for_status()
+            hits = resp.json().get("data", [])
+        except Exception:
+            return []
+    result = []
+    for h in hits[:5]:
+        full_name = h.get("公司名稱", "")
+        if not full_name:
+            continue
+        short_name = full_name
+        for sfx in _NAME_SUFFIXES:
+            if short_name.endswith(sfx):
+                short_name = short_name[:-len(sfx)]
+                break
+        result.append({
+            "full_name": full_name,
+            "short_name": short_name,
+            "tax_id": h.get("統一編號", ""),
+        })
+    return result
+
+
 async def fetch_company_data(name: str) -> dict[str, Any]:
     """
     Returns enrichment dict with all available fields.
@@ -228,6 +255,7 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
         ]
 
         return {
+            "matched_name": row.get("公司名稱", ""),
             "tax_id": tax_id,
             "representative": representative,
             "capital": capital,

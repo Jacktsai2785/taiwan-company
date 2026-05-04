@@ -45,6 +45,10 @@ class BatchIndustryRequest(BaseModel):
     updates: list[IndustryUpdate]
 
 
+class NameLookupRequest(BaseModel):
+    names: list[str]
+
+
 class UpdateRequest(BaseModel):
     name: str | None = None
     labels: list[str] | None = None
@@ -84,6 +88,15 @@ def batch_update_industry(req: BatchIndustryRequest):
     """Apply industry updates to multiple companies in a single read-modify-write to avoid races."""
     updated = data_store.update_companies_industry({u.id: u.industry for u in req.updates})
     return {"updated": updated}
+
+
+@router.post("/name-lookup")
+async def lookup_company_names(req: NameLookupRequest):
+    """Search Ronny API for each name and return up to 5 candidate matches."""
+    names = [n.strip() for n in req.names if n.strip()]
+    tasks = [gcis_client.search_company_matches(n) for n in names]
+    results = await asyncio.gather(*tasks)
+    return [{"input": n, "matches": m} for n, m in zip(names, results)]
 
 
 @router.post("/suggest-industries")
@@ -233,10 +246,23 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
 
         try:
             enrichment = await gcis_client.fetch_company_data(name)
+            matched_name: str = enrichment.pop("matched_name", "")
             data_store.update_company(company_id, enrichment)
             directors_count = len(enrichment.get("directors", []))
             push_data({k: v for k, v in enrichment.items()})
             push(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
+
+            # Correct stored name to API-returned short name (strip legal suffix)
+            if matched_name:
+                short = matched_name
+                for sfx in ("股份有限公司", "有限公司"):
+                    if short.endswith(sfx):
+                        short = short[:-len(sfx)]
+                        break
+                if short and short != name:
+                    data_store.update_company(company_id, {"name": short})
+                    push_data({"name": short})
+                    push(f"公司名稱更新為：{short}")
         except Exception as e:
             push(f"資料查詢失敗：{e}，跳過繼續")
 
