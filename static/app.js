@@ -2178,7 +2178,13 @@ async function renderOwnershipGraph(companyId) {
   }
 
   if (!graph.nodes || graph.nodes.length <= 1) {
-    statusEl.innerHTML = `<div class="rel-empty">尚未分析母子公司關係。點擊右上方「🔗 開始分析」按鈕。</div>`;
+    const c = state.companies.find(x => x.id === companyId);
+    const hasParent = !!c?.relationship_graph?.parent;
+    if (hasParent) {
+      statusEl.innerHTML = `<div class="rel-empty">分析結果無關聯公司可顯示。可點上方「🔗 重新分析」重試，或在公司詳情中改選其他董事為錨點。</div>`;
+    } else {
+      statusEl.innerHTML = `<div class="rel-empty">尚未分析母子公司關係。點擊上方「🔗 開始分析」按鈕。</div>`;
+    }
     return;
   }
 
@@ -2310,6 +2316,14 @@ async function buildRelationship(directorIndex) {
   if (!id) return;
   if (_relBuildingId === id) return;  // already running
   _relBuildingId = id;
+
+  // 「重新分析」: if no explicit choice, reuse the previously stored anchor
+  // so a person-anchor doesn't silently fall back to auto legal-entity pick.
+  if (directorIndex == null) {
+    const c = state.companies.find(x => x.id === id);
+    const stored = c?.relationship_graph?.director_index;
+    if (Number.isInteger(stored)) directorIndex = stored;
+  }
 
   const btn = document.getElementById("rel-graph-rebuild-btn");
   const statusEl = document.getElementById("rel-graph-status");

@@ -426,20 +426,28 @@ async def _build_relationship(company_id: str, director_index: int | None = None
 
         directors = company.get("directors") or []
 
+        # If no explicit index, fall back to the last anchor used (so 「重新分析」 keeps the same one)
+        if director_index is None:
+            director_index = (company.get("relationship_graph") or {}).get("director_index")
+
         target_director: dict | None = None
         if director_index is not None:
             if 0 <= director_index < len(directors):
                 target_director = directors[director_index]
             else:
                 push(f"董事索引 {director_index} 超出範圍，改用自動選擇")
+                director_index = None
         if target_director is None:
             push("分析董監事名單，自動選擇最大股法人代表…")
             target_director = gcis_client.pick_largest_legal_director(directors)
+            if target_director is not None:
+                director_index = directors.index(target_director)
 
         if not target_director:
             push("此公司董監事中無法人代表，且未指定董事，無關係可分析")
             data_store.update_company(company_id, {"relationship_graph": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
+                "director_index": None,
                 "parent": None,
                 "siblings": [],
                 "note": "此公司董監事中無法人代表",
@@ -448,7 +456,11 @@ async def _build_relationship(company_id: str, director_index: int | None = None
             return
 
         company_index = _build_company_index(companies_snapshot)
-        is_legal = bool((target_director.get("representative_of") or "").strip())
+        # Director represents a legal entity if either:
+        #  (a) `representative_of` is set (natural person as legal-entity proxy), or
+        #  (b) the director's own name looks like a company (法人股東直接任董事)
+        is_legal = bool((target_director.get("representative_of") or "").strip()) \
+            or _looks_like_company_name(target_director.get("name") or "")
 
         if is_legal:
             result = await _build_legal_entity_anchor(company, target_director, company_index, push)
@@ -459,6 +471,7 @@ async def _build_relationship(company_id: str, director_index: int | None = None
             parent_node, siblings, note = result
             data_store.update_company(company_id, {"relationship_graph": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
+                "director_index": director_index,
                 "parent": parent_node,
                 "siblings": siblings,
                 "note": note,
@@ -473,11 +486,23 @@ async def _build_relationship(company_id: str, director_index: int | None = None
         _rel_running.discard(company_id)
 
 
+def _looks_like_company_name(name: str) -> bool:
+    """The director's own name field looks like a legal entity (sits on board directly)."""
+    if not name:
+        return False
+    keywords = ("股份有限公司", "有限公司", "公司", "企業", "集團", "銀行", "工廠", "合夥", "基金會", "協會")
+    return any(k in name for k in keywords)
+
+
 async def _build_legal_entity_anchor(
     company: dict, target_director: dict, company_index: dict, push,
 ) -> tuple[dict, list[dict], str]:
     rep_name = (target_director.get("representative_of") or "").strip()
     rep_tax_id = (target_director.get("representative_of_tax_id") or "").strip()
+    # Fallback: director's name itself is the legal entity (no separate rep)
+    if not rep_name:
+        rep_name = (target_director.get("name") or "").strip()
+        rep_tax_id = ""
     push(f"分析錨點為法人:{rep_name}(董事 {target_director.get('name','')},持股 {(target_director.get('ratio') or 0) * 100:.2f}%)")
     push("並行查詢母法人基本資料與其投資的所有公司…")
 
