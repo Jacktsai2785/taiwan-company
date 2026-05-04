@@ -37,8 +37,11 @@ data/                執行時資料（不在 git 追蹤範圍）
 ## 常用指令
 
 ```bash
-make setup    # 建立環境（第一次或切換裝置後執行）
-make start    # 啟動開發伺服器（含 hot reload）
+make setup     # 建立環境（第一次或切換裝置後執行）
+make start     # 前景啟動（含 hot reload，關 terminal 會掉）
+make start-bg  # 背景啟動（與 terminal 解耦，關 VSCode 不會掉）
+make stop      # 停止背景 server
+make logs      # 追蹤背景 server 的日誌（/tmp/taiwan-company.log）
 ```
 
 ## 注意事項
