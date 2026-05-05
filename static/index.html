@@ -332,36 +332,36 @@
   <div id="settings-dialog">
     <div id="settings-header">
       <h3>選擇 AI 模式</h3>
-      <p>在本機執行時，建議使用「本機 Claude」，不需要 API Key。<br>如需在其他環境使用，可改選雲端 API 模式。</p>
+      <p id="settings-subtitle">在本機執行時，建議使用「本機 Claude」，不需要 API Key。<br>如需在其他環境使用，可改選雲端 API 模式。</p>
     </div>
     <div id="settings-body">
       <div class="settings-providers">
-        <label class="settings-provider-opt">
+        <label class="settings-provider-opt" data-provider="local">
           <input type="radio" name="ai-provider" value="local" checked onchange="onAiProviderChange(this)" />
           <div class="provider-card">
-            <strong>本機 Claude（建議）</strong>
-            <small>使用此裝置已安裝的 Claude Desktop / CLI，不需 API Key</small>
+            <strong>本機 Claude<span class="provider-badge badge-local-only" hidden>本機限定</span></strong>
+            <small class="provider-desc">使用此裝置已安裝的 Claude Desktop / CLI，不需 API Key</small>
           </div>
         </label>
-        <label class="settings-provider-opt">
+        <label class="settings-provider-opt" data-provider="gemini">
+          <input type="radio" name="ai-provider" value="gemini" onchange="onAiProviderChange(this)" />
+          <div class="provider-card">
+            <strong>Gemini<span class="provider-badge badge-free" hidden>免費</span></strong>
+            <small>Google · 取得 Key：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></small>
+          </div>
+        </label>
+        <label class="settings-provider-opt" data-provider="anthropic">
           <input type="radio" name="ai-provider" value="anthropic" onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>Claude API</strong>
-            <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a></small>
+            <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>（需付費）</small>
           </div>
         </label>
-        <label class="settings-provider-opt">
+        <label class="settings-provider-opt" data-provider="openai">
           <input type="radio" name="ai-provider" value="openai" onchange="onAiProviderChange(this)" />
           <div class="provider-card">
             <strong>ChatGPT</strong>
-            <small>OpenAI · 取得 Key：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a></small>
-          </div>
-        </label>
-        <label class="settings-provider-opt">
-          <input type="radio" name="ai-provider" value="gemini" onchange="onAiProviderChange(this)" />
-          <div class="provider-card">
-            <strong>Gemini</strong>
-            <small>Google · 取得 Key：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></small>
+            <small>OpenAI · 取得 Key：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>（需付費）</small>
           </div>
         </label>
       </div>
@@ -378,6 +378,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=47"></script>
+<script src="/static/app.js?v=48"></script>
 </body>
 </html>

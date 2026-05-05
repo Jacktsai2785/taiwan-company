@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -5,6 +7,17 @@ from services import data_store, company_extractor
 from services.ai_deps import ai_from_headers
 
 router = APIRouter(prefix="/api/config", tags=["config"])
+
+
+@router.get("/deploy-mode")
+def get_deploy_mode():
+    """Returns 'cloud' if DEPLOY_MODE=cloud is set, else 'local'.
+
+    Cloud mode hides the local Claude CLI option (binary unavailable on
+    serverless hosts) and defaults new users to Gemini's free tier.
+    """
+    mode = (os.getenv("DEPLOY_MODE") or "").strip().lower()
+    return {"mode": "cloud" if mode == "cloud" else "local"}
 
 
 class IndustryAdd(BaseModel):

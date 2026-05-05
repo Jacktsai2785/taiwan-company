@@ -3,21 +3,21 @@ import os
 from fastapi import Header, Query
 
 
+def _resolve(api_key: str, provider: str) -> dict:
+    api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
+    provider = (provider or ("local" if not api_key else "anthropic")).lower()
+    return {"api_key": api_key, "provider": provider}
+
+
 def ai_from_headers(
     x_api_key: str = Header(default=""),
     x_ai_provider: str = Header(default=""),
 ) -> dict:
-    return {
-        "api_key": x_api_key or os.getenv("ANTHROPIC_API_KEY", ""),
-        "provider": (x_ai_provider or "anthropic").lower(),
-    }
+    return _resolve(x_api_key, x_ai_provider)
 
 
 def ai_from_query(
     api_key: str = Query(default=""),
     provider: str = Query(default=""),
 ) -> dict:
-    return {
-        "api_key": api_key or os.getenv("ANTHROPIC_API_KEY", ""),
-        "provider": (provider or "anthropic").lower(),
-    }
+    return _resolve(api_key, provider)

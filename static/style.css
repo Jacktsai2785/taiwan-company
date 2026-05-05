@@ -2145,6 +2145,25 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .provider-card small a { color: var(--accent); text-decoration: none; }
 .provider-card small a:hover { text-decoration: underline; }
 
+.provider-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+.badge-free       { background: #d1fae5; color: #065f46; }
+.badge-local-only { background: #f3f4f6; color: #6b7280; }
+
+/* Cloud-mode tweaks: applied when <body> has .deploy-cloud */
+.deploy-cloud .settings-provider-opt[data-provider="gemini"]    { order: 1; }
+.deploy-cloud .settings-provider-opt[data-provider="anthropic"] { order: 2; }
+.deploy-cloud .settings-provider-opt[data-provider="openai"]    { order: 3; }
+.deploy-cloud .settings-provider-opt[data-provider="local"]     { order: 4; opacity: .55; }
+.deploy-cloud .settings-provider-opt[data-provider="local"] .provider-card { cursor: not-allowed; }
+
 .settings-key-row {
   display: flex; gap: 8px;
 }

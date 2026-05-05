@@ -21,9 +21,16 @@ const state = {
 let _modalCompanyId = null;
 
 /* ── AI settings (localStorage) ── */
+let _deployMode = "local";   // "local" | "cloud" — set by boot() from /api/config/deploy-mode
+
 function getAiKey()      { return localStorage.getItem("ai_api_key") || ""; }
-function getAiProvider() { return localStorage.getItem("ai_provider") || "local"; }
+function getAiProvider() {
+  const stored = localStorage.getItem("ai_provider");
+  if (stored) return stored;
+  return _deployMode === "cloud" ? "gemini" : "local";
+}
 function isLocalMode()   { return getAiProvider() === "local"; }
+function isCloudDeploy() { return _deployMode === "cloud"; }
 
 function _updateAiModeLabel() {
   const el = document.getElementById("ai-mode-label");
@@ -36,6 +43,9 @@ function _updateAiModeLabel() {
 function openSettings() {
   const prov = getAiProvider();
   const key  = getAiKey();
+  // In cloud deploy, prevent re-selecting the local mode (binary not on server)
+  const localRadio = document.querySelector('input[name="ai-provider"][value="local"]');
+  if (localRadio) localRadio.disabled = isCloudDeploy();
   const radio = document.querySelector(`input[name="ai-provider"][value="${prov}"]`);
   if (radio) radio.checked = true;
   const keyInp = document.getElementById("settings-api-key");
@@ -102,6 +112,19 @@ async function api(method, path, body) {
 
 /* ── Boot ── */
 async function boot() {
+  // Detect deploy mode FIRST so getAiProvider() default + UI reflect it.
+  try {
+    const r = await fetch("/api/config/deploy-mode");
+    if (r.ok) _deployMode = (await r.json()).mode || "local";
+  } catch (_) { /* default stays "local" on network error */ }
+  if (_deployMode === "cloud") {
+    document.body.classList.add("deploy-cloud");
+    const sub = document.getElementById("settings-subtitle");
+    if (sub) sub.innerHTML = "雲端版推薦使用 <strong>Gemini</strong>，可申請免費 Key。<br>「本機 Claude」僅在自行下載專案到本機執行時可用。";
+    document.querySelectorAll(".badge-free").forEach(el => el.hidden = false);
+    document.querySelectorAll(".badge-local-only").forEach(el => el.hidden = false);
+  }
+
   await Promise.all([loadIndustries(), loadCompanies(), loadLabels()]);
   computeGroups();
   renderSidebar();

@@ -8,7 +8,10 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Cloud builds skip openai-whisper (PyTorch ~2GB). Audio transcription is a
+# local-only feature; cloud users see a friendly error if they upload audio.
+RUN grep -v "^openai-whisper" requirements.txt > requirements-cloud.txt && \
+    pip install --no-cache-dir -r requirements-cloud.txt
 
 COPY . .
 
