@@ -303,7 +303,7 @@ function renderSidebar() {
         const isGrpActive = state.activeIndustry === ind && state.activeGroup === grp;
         const grpDiv = document.createElement("div");
         grpDiv.className = "group-item" + (isGrpActive ? " active" : "");
-        grpDiv.innerHTML = `<span>${escHtml(grp)}</span><span class="industry-badge">${grpCount}</span>`;
+        grpDiv.innerHTML = `<span title="${escHtml(grp)}">${escHtml(truncLabel(grp))}</span><span class="industry-badge">${grpCount}</span>`;
         grpDiv.addEventListener("click", () => {
           state.activeIndustry = ind;
           state.activeGroup = grp;
@@ -792,7 +792,20 @@ function _renderTrendsContent(panel, data, industry) {
     : trends.map(t => {
         const sig = SIG[t.signal] || SIG.stable;
         const tagsHtml = (t.representative_titles || [])
-          .map(ti => `<span class="trend-title-tag">${escHtml(ti)}</span>`).join("");
+          .map(ti => {
+            // ti can be a string (legacy cache) or {title, url, source} (new)
+            if (typeof ti === "string") {
+              return `<span class="trend-title-tag">${escHtml(ti)}</span>`;
+            }
+            const title = ti.title || "";
+            const url = ti.url || "";
+            const src = ti.source ? ` · ${ti.source}` : "";
+            const tip = `${title}${src}`;
+            if (url) {
+              return `<a class="trend-title-tag trend-title-link" href="${escHtml(url)}" target="_blank" rel="noopener" title="${escHtml(tip)}">${escHtml(title)} ↗</a>`;
+            }
+            return `<span class="trend-title-tag" title="${escHtml(tip)}">${escHtml(title)}</span>`;
+          }).join("");
         return `<div class="trend-card">
           <div class="trend-card-header">
             <span class="trend-signal ${sig.cls}">${sig.icon}</span>
@@ -917,7 +930,7 @@ function companyCardHtml(c) {
 
   const groupBadge = c.group ? `<span class="group-badge">${escHtml(c.group)}</span>` : "";
   const labelChips = (c.labels || []).map(l =>
-    `<span class="label-chip">${escHtml(l)}<button class="label-remove-btn" onclick="event.stopPropagation();removeLabel('${c.id}','${escAttr(l)}')" title="移除標籤">×</button></span>`
+    `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}<button class="label-remove-btn" onclick="event.stopPropagation();removeLabel('${c.id}','${escAttr(l)}')" title="移除標籤">×</button></span>`
   ).join("");
   const addLabelBtn = `<button class="label-add-btn" onclick="event.stopPropagation();startAddLabel('${c.id}')" title="新增標籤">+</button>`;
   const badge = listingBadge(c.listing_status);
@@ -1300,7 +1313,7 @@ function openModal(id) {
     escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml;
 
   document.getElementById("modal-labels").innerHTML =
-    (c.labels || []).map(l => `<span class="label-chip">${escHtml(l)}</span>`).join("") || "（無標籤）";
+    (c.labels || []).map(l => `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}</span>`).join("") || "（無標籤）";
 
   const fmt = n => n ? `NT$ ${Number(n).toLocaleString()} 元` : "—";
   document.getElementById("modal-info").innerHTML = `
@@ -1349,13 +1362,22 @@ function openModal(id) {
     const rel = c.relationship_graph;
     let activeIdx = autoIdx;
     if (rel?.parent) {
-      directors.forEach((d, i) => {
-        if (rel.parent.kind === "person" && d.name === rel.parent.name && !d.representative_of) {
-          activeIdx = i;
-        } else if (rel.parent.kind === "legal_entity" && d.representative_of === rel.parent.name) {
-          activeIdx = i;
-        }
-      });
+      // Prefer the stored director_index when available — avoids re-derivation bugs
+      // where a legal entity appears as d.name (not d.representative_of).
+      if (Number.isInteger(rel.director_index) && rel.director_index >= 0 && rel.director_index < directors.length) {
+        activeIdx = rel.director_index;
+      } else {
+        directors.forEach((d, i) => {
+          if (rel.parent.kind === "person" && d.name === rel.parent.name && !d.representative_of) {
+            activeIdx = i;
+          } else if (rel.parent.kind === "legal_entity" && (
+            d.representative_of === rel.parent.name ||
+            (d.name === rel.parent.name && !d.representative_of)
+          )) {
+            activeIdx = i;
+          }
+        });
+      }
     }
 
     tbody.innerHTML = directors.map((d, i) => {
@@ -1419,8 +1441,53 @@ async function saveModalIndustry() {
 function regenSummary() {
   const id = _modalCompanyId;
   if (!id) return;
-  document.getElementById("modal-overlay").classList.remove("open");
+  const summaryEl = document.getElementById("modal-summary");
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 30-60 秒）…</p>";
   subscribeEnrichment(id);
+}
+
+function deepEnrich() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const summaryEl = document.getElementById("modal-summary");
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 60-120 秒）…</p>";
+  const btn = document.getElementById("modal-deep-btn");
+  if (btn) btn.disabled = true;
+  _subscribeDeepEnrich(id).finally(() => {
+    if (btn) btn.disabled = false;
+  });
+}
+
+function _subscribeDeepEnrich(companyId) {
+  const key = getAiKey();
+  const sseUrl = key
+    ? `/api/companies/deep-enrich/${companyId}?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}`
+    : `/api/companies/${companyId}/deep-enrich`;
+
+  return new Promise(resolve => {
+    const es = new EventSource(sseUrl);
+    let settled = false;
+    const settle = () => { if (!settled) { settled = true; resolve(); } };
+
+    es.onmessage = async e => {
+      const event = JSON.parse(e.data);
+      if (event.type === "data") {
+        const company = state.companies.find(c => c.id === companyId);
+        if (company) {
+          Object.assign(company, event.fields);
+          renderGrid();
+          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open"))
+            openModal(companyId);
+        }
+      } else if (event.type === "progress") {
+        toast(event.message);
+      } else if (event.type === "done") {
+        es.close();
+        settle();
+      }
+    };
+    es.onerror = () => { es.close(); settle(); };
+  });
 }
 
 function _closeDetailModal() {
@@ -1593,7 +1660,8 @@ function _getManualLabel() {
   return sel.value;
 }
 
-function openManualDialog(suggestedLabel = "") {
+async function openManualDialog(suggestedLabel = "") {
+  await loadLabels();
   document.getElementById("manual-names").value = "";
   _buildLabelOptions(suggestedLabel);
   document.getElementById("manual-overlay").classList.add("open");
@@ -1647,6 +1715,7 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
       const existing = state.companies.find(c => c.name === displayName);
       const candidate = {
         name: displayName,
+        tax_id: match ? (match.tax_id || null) : null,
         suggested_label: label,
         suggested_industry: "",
         is_new: !existing,
@@ -1908,6 +1977,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     enrichFlags_v.push(document.getElementById(`enrich-v${i}`)?.checked !== false);
     return {
       name: c.name,
+      tax_id: c.tax_id ?? null,
       label: document.getElementById(`label-v${i}`)?.value.trim() ?? state.pendingLabel,
       is_new: c.is_new,
       existing_id: c.existing_id ?? null,
@@ -1920,6 +1990,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     if (row?.dataset.accepted === "1") {
       companies.push({
         name: c.name,
+        tax_id: c.tax_id ?? null,
         label: document.getElementById(`label-u${i}`)?.value.trim() ?? state.pendingLabel,
         is_new: true,
         existing_id: null,
@@ -1933,6 +2004,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     if (row?.dataset.accepted === "1") {
       companies.push({
         name: c.name,
+        tax_id: c.tax_id ?? null,
         label: document.getElementById(`label-e${i}`)?.value.trim() ?? state.pendingLabel,
         is_new: true,
         existing_id: null,
@@ -2079,7 +2151,7 @@ function _startEnrichPoll() {
     }
     await loadCompanies();
     renderGrid();
-    if (_modalCompanyId && state.enrichingIds.has(_modalCompanyId)) openModal(_modalCompanyId);
+    if (_modalCompanyId && state.enrichingIds.has(_modalCompanyId) && document.getElementById("modal-overlay").classList.contains("open")) openModal(_modalCompanyId);
   }, 30000);
 }
 
@@ -2116,7 +2188,7 @@ function subscribeEnrichment(companyId) {
         if (company) {
           Object.assign(company, event.fields);
           renderGrid();
-          if (_modalCompanyId === companyId) openModal(companyId);
+          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) openModal(companyId);
         }
 
       } else if (event.type === "progress") {
@@ -2422,7 +2494,8 @@ async function buildRelationship(directorIndex) {
 /* ── Add From Graph Dialog ── */
 let _fromGraphPayload = null;
 
-function _openFromGraphDialog(node) {
+async function _openFromGraphDialog(node) {
+  await loadLabels();
   _fromGraphPayload = node;
   document.getElementById("from-graph-name").textContent = node.name;
   document.getElementById("from-graph-tax-id").textContent = node.tax_id || "（未知）";
@@ -2682,6 +2755,13 @@ function escHtml(str) {
 
 function escAttr(str) {
   return String(str || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+}
+
+// Middle-truncate labels longer than 4 chars: keep first 2 + "…" + last 2.
+// Always call escHtml on the result; pass full label as title for tooltip.
+function truncLabel(label) {
+  if (!label || label.length <= 4) return label;
+  return label.slice(0, 2) + "…" + label.slice(-2);
 }
 
 /* ── Init ── */

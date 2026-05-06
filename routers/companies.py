@@ -16,6 +16,8 @@ _progress: dict[str, list[dict]] = {}
 _running: set[str] = set()
 _rel_progress: dict[str, list[dict]] = {}
 _rel_running: set[str] = set()
+_deep_progress: dict[str, list[dict]] = {}
+_deep_running: set[str] = set()
 
 
 class ConfirmItem(BaseModel):
@@ -24,6 +26,7 @@ class ConfirmItem(BaseModel):
     industry: str | None = None
     is_new: bool
     existing_id: str | None = None
+    tax_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -158,7 +161,7 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
         data_store.add_label(item.label)
 
         if item.is_new:
-            company = data_store.create_company(item.name, item.label, item.industry)
+            company = data_store.create_company(item.name, item.label, item.industry, item.tax_id or "")
             saved_ids.append(company["id"])
             if req.enrich:
                 enriching.append(company["id"])
@@ -233,6 +236,31 @@ def delete_company(company_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Company not found")
     return {"deleted": company_id}
+
+
+@router.get("/{company_id}/deep-enrich")
+async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    async def event_generator():
+        if company_id not in _deep_running:
+            _deep_running.add(company_id)
+            asyncio.create_task(_deep_enrich_company(company_id, **ai))
+        sent = 0
+        for _ in range(3600):
+            events = _deep_progress.get(company_id, [])
+            while sent < len(events):
+                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
+                sent += 1
+            if events and events[-1].get("type") == "done":
+                break
+            await asyncio.sleep(0.5)
+        yield 'data: {"type": "done"}\n\n'
+        _deep_progress.pop(company_id, None)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/{company_id}/build-relationship")
@@ -624,10 +652,18 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
             return
 
         name = company["name"]
+        stored_tax_id = company.get("tax_id", "")
         push(f"正在查詢公司資料：{name}")
 
         try:
-            enrichment = await gcis_client.fetch_company_data(name)
+            # If we already know the tax_id (from user disambiguation), look up the
+            # official full name first so Ronny search is unambiguous.
+            lookup_name = name
+            if stored_tax_id:
+                official = await gcis_client.fetch_company_name_by_tax_id(stored_tax_id)
+                if official:
+                    lookup_name = official
+            enrichment = await gcis_client.fetch_company_data(lookup_name)
             matched_name: str = enrichment.pop("matched_name", "")
             data_store.update_company(company_id, enrichment)
             directors_count = len(enrichment.get("directors", []))
@@ -663,3 +699,35 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         events.append({"type": "done"})
     finally:
         _running.discard(company_id)
+
+
+async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
+    events: list[dict] = []
+    _deep_progress[company_id] = events
+
+    def push(msg: str):
+        events.append({"type": "progress", "message": msg})
+
+    def push_data(fields: dict):
+        events.append({"type": "data", "fields": fields})
+
+    try:
+        company = data_store.get_company(company_id)
+        if not company:
+            events.append({"type": "done"})
+            return
+
+        push(f"正在深度搜尋媒體報導與新聞（約 60-120 秒）…")
+        try:
+            result = await report_generator.deep_enrich_summary(company, api_key=api_key, provider=provider)
+            summary = result["summary"]
+            blurb   = result["blurb"]
+            data_store.update_company(company_id, {"summary": summary, "blurb": blurb})
+            push_data({"summary": summary, "blurb": blurb})
+            push("深度生成完成")
+        except Exception as e:
+            push(f"深度生成失敗：{e}")
+
+        events.append({"type": "done"})
+    finally:
+        _deep_running.discard(company_id)

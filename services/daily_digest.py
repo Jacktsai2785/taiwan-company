@@ -138,9 +138,24 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
             _save_trends(store)
             return result
 
-        # Build per-day summary lines and collect article title frequencies
+        # Build per-day summary lines and collect article title frequencies + URLs
         summary_lines: list[str] = []
-        title_counts: dict[str, int] = {}
+        title_info: dict[str, dict] = {}  # title -> {count, url, source}
+
+        def _record_title(title: str, url: str, source: str) -> None:
+            title = (title or "").strip()
+            if not title:
+                return
+            info = title_info.get(title)
+            if info is None:
+                title_info[title] = {"count": 1, "url": url or "", "source": source or ""}
+            else:
+                info["count"] += 1
+                # Fill in url/source if a later article has them and earlier didn't
+                if not info["url"] and url:
+                    info["url"] = url
+                if not info["source"] and source:
+                    info["source"] = source
 
         for d in dates:
             entry = entries[d]
@@ -156,9 +171,7 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
                 if t["name"] == WATCHLIST_TOPIC:
                     continue
                 for a in t.get("articles", []):
-                    title = (a.get("title") or "").strip()
-                    if title:
-                        title_counts[title] = title_counts.get(title, 0) + 1
+                    _record_title(a.get("title", ""), a.get("url", ""), a.get("source", ""))
 
         # Bootstrap: when cached days < 7, supplement title pool with a fresh 7-day fetch
         # so the first-run trend has meaningful data even before the daily digest accumulates.
@@ -168,16 +181,14 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
             try:
                 bootstrap_arts = await fetch_industry_news(industry, max_articles=80, days=7)
                 for a in bootstrap_arts:
-                    title = (a.get("title") or "").strip()
-                    if title and title not in title_counts:
-                        title_counts[title] = 1
+                    _record_title(a.get("title", ""), a.get("url", ""), a.get("source", ""))
             except Exception as exc:
                 log.warning("Bootstrap fetch failed for %s: %s", industry, exc)
 
-        top_titles = sorted(title_counts.items(), key=lambda x: -x[1])[:50]
+        top_titles = sorted(title_info.items(), key=lambda x: -x[1]["count"])[:50]
         summaries_block = "\n".join(summary_lines)
         titles_block = "\n".join(
-            f"{i+1}. {title}（{cnt}天）" for i, (title, cnt) in enumerate(top_titles)
+            f"{i+1}. {title}（{info['count']}天）" for i, (title, info) in enumerate(top_titles)
         )
         date_from, date_to, n = dates[0], dates[-1], len(dates)
 
@@ -217,13 +228,40 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
             raise ValueError(f"Claude 趨勢回傳格式無法解析：{raw[:300]}")
         parsed = json.loads(m.group())
 
+        # Enrich representative_titles (string list from Claude) with url + source,
+        # so the frontend can render them as clickable links to the original news.
+        enriched_trends: list[dict] = []
+        for t in parsed.get("trends", []):
+            titles = t.get("representative_titles", []) or []
+            enriched: list[dict] = []
+            for title in titles:
+                if not isinstance(title, str):
+                    continue
+                title = title.strip()
+                if not title:
+                    continue
+                info = title_info.get(title)
+                if info is None:
+                    # Try a loose match: Claude may have lightly rephrased a title
+                    for cached_title, cached_info in title_info.items():
+                        if title in cached_title or cached_title in title:
+                            info = cached_info
+                            title = cached_title
+                            break
+                enriched.append({
+                    "title": title,
+                    "url": (info or {}).get("url", ""),
+                    "source": (info or {}).get("source", ""),
+                })
+            enriched_trends.append({**t, "representative_titles": enriched})
+
         result = {
             "industry": industry,
             "generated_at": datetime.now(TAIWAN_TZ).isoformat(),
             "date_range": {"from": date_from, "to": date_to},
             "days_analyzed": n,
             "overview": parsed.get("overview", ""),
-            "trends": parsed.get("trends", []),
+            "trends": enriched_trends,
         }
         store = _load_trends()
         store[industry] = result

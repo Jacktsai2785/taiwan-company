@@ -739,6 +739,22 @@ body {
 }
 #modal-regen-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
 
+#modal-deep-btn {
+  float: right;
+  margin-right: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #7c3aed44;
+  border-radius: 99px;
+  background: none;
+  cursor: pointer;
+  color: #7c3aed;
+  transition: all .12s;
+}
+#modal-deep-btn:hover { border-color: #7c3aed; background: #7c3aed11; }
+#modal-deep-btn:disabled { opacity: .4; cursor: not-allowed; }
+
 #modal-summary { font-size: 13px; line-height: 1.85; color: var(--text); }
 
 /* ── Detail modal: relationship-graph entry button ── */
@@ -2010,6 +2026,17 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   border-radius: 4px;
   padding: 2px 6px;
   line-height: 1.4;
+}
+.trend-title-link {
+  color: #4f46e5;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.trend-title-link:hover {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
 }
 
 .ind-panel-row {

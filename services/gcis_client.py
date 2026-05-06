@@ -422,8 +422,18 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
         if not hits:
             return None
 
-        # Prefer exact name match, fall back to first hit
-        row = next((h for h in hits if h.get("公司名稱") == name), hits[0])
+        # Prefer exact name match (full or short name without suffix), fall back to first hit
+        def _short(n: str) -> str:
+            for sfx in ("股份有限公司", "有限公司"):
+                if n.endswith(sfx):
+                    return n[:-len(sfx)]
+            return n
+
+        row = next(
+            (h for h in hits
+             if h.get("公司名稱") == name or _short(h.get("公司名稱", "")) == name),
+            hits[0],
+        )
 
         tax_id = row.get("統一編號", "")
         representative = row.get("代表人姓名", "")

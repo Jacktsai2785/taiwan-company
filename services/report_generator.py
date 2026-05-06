@@ -12,7 +12,7 @@ from . import claude_client
 
 log = logging.getLogger("report_generator")
 
-_CLAUDE_LOCK = asyncio.Semaphore(3)
+_CLAUDE_LOCK = asyncio.Semaphore(5)
 
 _WEB_TOOLS = ["WebSearch", "WebFetch"]
 
@@ -27,6 +27,8 @@ def _build_prompt(company: dict) -> str:
     listing    = company.get("listing_status", "非公發")
     tax_id     = company.get("tax_id", "")
     directors  = company.get("directors", [])
+    setup_date = company.get("setup_date", "")
+    last_change = company.get("last_change_date", "")
 
     capital_str      = f"NT$ {capital:,}" if capital else "不詳"
     auth_capital_str = f"NT$ {auth_cap:,}" if auth_cap else "不詳"
@@ -34,11 +36,38 @@ def _build_prompt(company: dict) -> str:
         f"{d['name']}（{d['title']}）" for d in directors[:5] if d.get("name")
     ) or "不詳"
 
+    # Derive short name (strip corporate type suffix) and full name
+    short_name = name
+    for sfx in ("股份有限公司", "有限公司"):
+        if short_name.endswith(sfx):
+            short_name = short_name[:-len(sfx)]
+            break
+    full_name = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
+
+    # Convert 民國 date string (YYYMMDD) to 西元 for readability
+    def roc_to_ce(roc: str) -> str:
+        try:
+            y, m, d = int(roc[:3]) + 1911, int(roc[3:5]), int(roc[5:7])
+            return f"{y}-{m:02d}-{d:02d}"
+        except Exception:
+            return roc
+    setup_ce  = roc_to_ce(setup_date)  if len(setup_date) == 7 else setup_date
+    change_ce = roc_to_ce(last_change) if len(last_change) == 7 else last_change
+
+    # Hint: if last_change is set and differs from setup, company may have had a name or structure change
+    name_change_hint = ""
+    if last_change and last_change != setup_date and last_change != "1911000":
+        name_change_hint = (
+            f"\n注意：此公司最後核准變更日期為 {change_ce}，可能曾有公司名稱或組織形式變更。"
+            f"搜尋時亦請嘗試「{short_name}有限公司」以找到使用舊名的網頁或媒體報導。"
+        )
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人，正對以下公司進行初步盡職調查（Due Diligence）。
 
 【基本資料】
-公司名稱：{name}
+公司名稱：{full_name}（簡稱：{short_name}）
 統一編號：{tax_id or "不詳"}
+核准設立日期：{setup_ce}
 所屬產業：{industry}
 代表人：{rep}
 實收資本額：{capital_str}
@@ -48,22 +77,31 @@ def _build_prompt(company: dict) -> str:
 主要董監事：{dir_summary}
 
 【任務】
-請依序執行：
-1. 用 WebSearch 搜尋「{name}」的官方網站、產品/服務介紹、近期新聞（2022年後）。
-2. 用 WebFetch 讀取官網首頁或產品頁，取得具體業務資訊。
-3. 用 WebSearch 搜尋「台灣 {industry} 競爭廠商 股份有限公司」，找出至少 3 家台灣同業競爭者。
+請依序執行以下所有搜尋步驟，每步都要執行，找不到結果時繼續往下，不要中途停止：
+
+步驟 1：用 WebSearch 搜尋「{full_name}」的官方網站與公司介紹。
+        若無明確結果，改搜「{short_name} 公司 官網」或「{short_name} Taiwan」。{name_change_hint}
+
+步驟 2：若步驟 1 找到官網 URL，用 WebFetch 讀取該網站首頁（或 /about、/products、/service 等子頁），
+        取得具體服務項目、目標客戶、技術說明。
+
+步驟 3：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
+        找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
+
+步驟 4：根據前面搜尋所掌握的業務性質，用 WebSearch 搜尋「台灣 {industry if industry != "不詳" else "[依業務性質自行推斷產業關鍵字]"} 競爭廠商 股份有限公司」，找出至少 3 家台灣同業競爭者。
 
 完成搜尋後，用繁體中文撰寫以下格式的投資備忘錄（純 Markdown，不加開頭標題行）：
 
 ## 業務概況
-（根據官網或可信外部資料，具體說明：主要產品或服務項目、核心技術、主要客戶群或市場。
-若官網資訊不足，請明確標注「官網未公開」，禁止使用「可能」、「推測」等模糊語氣填充內容。）
+（根據官網、104公司頁、媒體報導或其他可信來源，具體說明：主要產品或服務項目、核心技術、主要客戶群或市場。
+若所有搜尋管道均無資料，各項目直接標注「——」並在段末一行說明資訊侷限；
+禁止以段落解釋自己的搜尋過程，禁止使用「可能」、「推測」等模糊語氣填充內容。）
 
 ## 競業分析
 
 | 公司名稱 | 核心業務 | 主要差異化特點 | 上市狀態 |
 |------|------|------|------|
-| {name}（本案）| （填入） | （填入） | {listing} |
+| {full_name}（本案）| （填入） | （填入） | {listing} |
 （補充至少 3 家台灣競業列）
 
 （表格後以條列說明：本案在市場中的相對優勢 2-3 點、相對劣勢或挑戰 2-3 點。若有已知專利或技術壁壘請一併提及。）
@@ -77,6 +115,53 @@ def _build_prompt(company: dict) -> str:
 
 最後單獨一行，格式固定如下（不超過10個繁體中文字，描述核心產品或服務，禁止出現公司名稱）：
 [blurb: 核心產品或服務描述]"""
+
+
+def _build_deep_prompt(company: dict) -> str:
+    name = company.get("name", "")
+    existing = (company.get("summary") or "").strip()
+
+    short_name = name
+    for sfx in ("股份有限公司", "有限公司"):
+        if short_name.endswith(sfx):
+            short_name = short_name[:-len(sfx)]
+            break
+    full_name = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
+
+    base = f"以下是「{full_name}」的初步投資備忘錄（基於官網資料生成）：\n\n{existing}\n\n---\n\n" if existing else ""
+
+    return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
+
+{base}請執行深度補充搜尋，並據此修訂備忘錄：
+
+步驟 1：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
+        找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
+
+步驟 2：若找到相關資訊，用 WebFetch 讀取最有參考價值的 1-2 篇文章全文。
+
+完成搜尋後，輸出修訂版完整備忘錄（格式：## 業務概況、## 競業分析、## 主要風險）。
+若新資料提供了原版沒有的具體資訊，更新對應段落；若無新資訊，維持原內容。
+**嚴格禁止在末尾輸出任何 Sources、References、來源清單或 URL 列表。**
+
+最後單獨一行，格式固定如下（不超過10個繁體中文字，描述核心產品或服務，禁止出現公司名稱）：
+[blurb: 核心產品或服務描述]"""
+
+
+async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic") -> dict:
+    """Search news/media and refine the existing summary. Returns {summary, blurb}."""
+    name = company.get("name", "")
+    prompt = _build_deep_prompt(company)
+    async with _CLAUDE_LOCK:
+        try:
+            raw = await asyncio.to_thread(
+                claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider
+            )
+            summary, blurb = _split_blurb(raw)
+            if not blurb and len(summary.strip()) > 100:
+                blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
+            return {"summary": summary, "blurb": blurb}
+        except Exception as e:
+            raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
 async def generate_summary(company: dict, api_key: str = "", provider: str = "anthropic") -> dict:
@@ -93,7 +178,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
             try:
                 log.info("Generating DD memo for %s (attempt %d)", name, attempt + 1)
                 raw = await asyncio.to_thread(
-                    claude_client.ask, prompt, 300, _WEB_TOOLS, api_key, provider
+                    claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider
                 )
                 summary, blurb = _split_blurb(raw)
 

@@ -78,11 +78,11 @@ def upsert_company(company: dict) -> dict:
     return company
 
 
-def create_company(name: str, label: str, industry: str) -> dict:
+def create_company(name: str, label: str, industry: str, tax_id: str = "") -> dict:
     company = {
         "id": str(uuid.uuid4()),
         "name": name,
-        "tax_id": "",
+        "tax_id": tax_id,
         "labels": [label] if label else [],
         "industry": industry,
         "group": "",
