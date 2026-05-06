@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 MODEL_ANTHROPIC = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 MODEL_OPENAI    = os.getenv("OPENAI_MODEL",  "gpt-4o")
-MODEL_GEMINI    = os.getenv("GEMINI_MODEL",  "gemini-2.0-flash")
+MODEL_GEMINI    = os.getenv("GEMINI_MODEL",  "gemini-2.5-flash")
 
 
 def _friendly_http_error(provider_name: str, exc) -> RuntimeError:
