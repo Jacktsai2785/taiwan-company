@@ -16,6 +16,27 @@ MODEL_ANTHROPIC = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 MODEL_OPENAI    = os.getenv("OPENAI_MODEL",  "gpt-4o")
 MODEL_GEMINI    = os.getenv("GEMINI_MODEL",  "gemini-2.0-flash")
 
+
+def _friendly_http_error(provider_name: str, exc) -> RuntimeError:
+    """Convert provider HTTP errors into messages users can act on."""
+    import httpx
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        try:
+            detail = exc.response.json()
+        except Exception:
+            detail = exc.response.text[:200]
+        if status in (401, 403):
+            return RuntimeError(f"{provider_name} API Key 無效或無權限。請點 ⚙ 重新輸入正確的 Key。")
+        if status == 429:
+            return RuntimeError(f"{provider_name} 已達流量上限。請稍後再試，或前往該服務確認額度。")
+        if status == 400:
+            return RuntimeError(f"{provider_name} 拒絕請求（{detail}）。請確認 Key 與模型可用性。")
+        return RuntimeError(f"{provider_name} 回傳錯誤 {status}：{detail}")
+    if isinstance(exc, httpx.TimeoutException):
+        return RuntimeError(f"{provider_name} 回應逾時，請稍後再試。")
+    return RuntimeError(f"{provider_name} 呼叫失敗：{exc}")
+
 # ── Anthropic API ──────────────────────────────────────────────────────────────
 
 def _ask_anthropic(
@@ -23,6 +44,25 @@ def _ask_anthropic(
     timeout: int = 120,
     allowed_tools: list[str] | None = None,
     api_key: str = "",
+) -> str:
+    import anthropic
+    try:
+        return _ask_anthropic_inner(prompt, timeout, allowed_tools, api_key)
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Claude API Key 無效。請點 ⚙ 重新輸入正確的 Key。")
+    except anthropic.PermissionDeniedError:
+        raise RuntimeError("Claude API Key 無權限存取此模型。")
+    except anthropic.RateLimitError:
+        raise RuntimeError("Claude API 已達流量上限。請稍後再試。")
+    except anthropic.APIError as e:
+        raise RuntimeError(f"Claude API 錯誤：{e}")
+
+
+def _ask_anthropic_inner(
+    prompt: str,
+    timeout: int,
+    allowed_tools: list[str] | None,
+    api_key: str,
 ) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
@@ -100,10 +140,13 @@ def _ask_openai(
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 8096,
     }
-    with httpx.Client(timeout=300) as c:
-        resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+    try:
+        with httpx.Client(timeout=300) as c:
+            resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        raise _friendly_http_error("OpenAI", e)
 
 
 def _ask_openai_image(
@@ -122,10 +165,13 @@ def _ask_openai_image(
         ]}],
         "max_tokens": 2048,
     }
-    with httpx.Client(timeout=120) as c:
-        resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+    try:
+        with httpx.Client(timeout=120) as c:
+            resp = c.post("https://api.openai.com/v1/chat/completions", json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        raise _friendly_http_error("OpenAI", e)
 
 
 # ── Gemini API ─────────────────────────────────────────────────────────────────
@@ -142,10 +188,13 @@ def _ask_gemini(
     }
     if use_web:
         body["tools"] = [{"google_search": {}}]
-    with httpx.Client(timeout=300) as c:
-        resp = c.post(url, json=body)
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    try:
+        with httpx.Client(timeout=300) as c:
+            resp = c.post(url, json=body)
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        raise _friendly_http_error("Gemini", e)
 
 
 def _ask_gemini_image(
@@ -164,10 +213,13 @@ def _ask_gemini_image(
         ]}],
         "generationConfig": {"maxOutputTokens": 2048},
     }
-    with httpx.Client(timeout=120) as c:
-        resp = c.post(url, json=body)
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    try:
+        with httpx.Client(timeout=120) as c:
+            resp = c.post(url, json=body)
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        raise _friendly_http_error("Gemini", e)
 
 
 # ── Local CLI fallback ─────────────────────────────────────────────────────────

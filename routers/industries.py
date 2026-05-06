@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from services.ai_deps import ai_from_headers
 from services.daily_digest import get_digest, get_trends
@@ -16,12 +16,15 @@ async def get_industry_daily(
 
     Cached per-industry per-day; pass ?refresh=true to force regeneration.
     """
-    return await get_digest(
-        industry,
-        api_key=ai["api_key"],
-        provider=ai["provider"],
-        force_refresh=refresh,
-    )
+    try:
+        return await get_digest(
+            industry,
+            api_key=ai["api_key"],
+            provider=ai["provider"],
+            force_refresh=refresh,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/{industry}/trends")
@@ -34,9 +37,12 @@ async def get_industry_trends(
 
     Cached until the next weekly Monday refresh; pass ?refresh=true to force regeneration.
     """
-    return await get_trends(
-        industry,
-        api_key=ai["api_key"],
-        provider=ai["provider"],
-        force_refresh=refresh,
-    )
+    try:
+        return await get_trends(
+            industry,
+            api_key=ai["api_key"],
+            provider=ai["provider"],
+            force_refresh=refresh,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
