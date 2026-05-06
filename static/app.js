@@ -592,6 +592,19 @@ function _viewTabsHtml(industry, activeView) {
 }
 
 async function _fetchDigest(industry, forceRefresh) {
+  // News digests need AI to summarise. On cloud without a key, surface a
+  // friendly message instead of leaving the loading spinner forever.
+  if (isCloudDeploy() && !getAiKey()) {
+    _digestCache[industry] = {
+      error: "尚未設定 AI。請點右上角 ⚙ 選擇 AI 提供者並輸入 API Key。",
+      fetchedAt: Date.now(),
+    };
+    if (state.activeIndustry === industry && state.activeTab === "all") {
+      const panel = document.getElementById("industry-panel");
+      if (panel) _doRenderIndustryPanel(panel, industry);
+    }
+    return;
+  }
   _digestLoading.add(industry);
   try {
     const qs = forceRefresh ? "?refresh=true" : "";
@@ -2071,6 +2084,16 @@ function _startEnrichPoll() {
 }
 
 function subscribeEnrichment(companyId) {
+  // On cloud deploy, AI features require a key. Prompt the user before firing
+  // the SSE call so they don't see "簡介生成失敗" with a cryptic message.
+  if (isCloudDeploy() && !getAiKey()) {
+    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
+    openSettings();
+    state.enrichingIds.delete(companyId);
+    renderGrid();
+    return Promise.resolve();
+  }
+
   state.enrichingIds.add(companyId);
   _startEnrichPoll();
   renderGrid();

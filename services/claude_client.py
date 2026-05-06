@@ -246,6 +246,22 @@ def _ask_cli_image(prompt: str, image_content: bytes, suffix: str, timeout: int 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+_NO_AI_HINT = (
+    "尚未設定 AI。請點右上角 ⚙ 設定 → 選擇 AI 提供者並輸入 API Key"
+    "（建議 Gemini，可至 aistudio.google.com 免費申請）。"
+)
+
+
+def _try_local_cli(call):
+    """Wrap _ask_cli/_ask_cli_image to convert missing-binary errors into a
+    user-friendly message (so cloud users see clear guidance instead of raw
+    FileNotFoundError)."""
+    try:
+        return call()
+    except FileNotFoundError:
+        raise RuntimeError(_NO_AI_HINT)
+
+
 def ask(
     prompt: str,
     timeout: int = 120,
@@ -257,7 +273,7 @@ def ask(
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         provider = "anthropic"
     if not api_key:
-        return _ask_cli(prompt, timeout, allowed_tools)
+        return _try_local_cli(lambda: _ask_cli(prompt, timeout, allowed_tools))
     if provider == "openai":
         return _ask_openai(prompt, allowed_tools, api_key)
     if provider == "gemini":
@@ -277,7 +293,7 @@ def ask_with_image(
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         provider = "anthropic"
     if not api_key:
-        return _ask_cli_image(prompt, image_content, suffix, timeout)
+        return _try_local_cli(lambda: _ask_cli_image(prompt, image_content, suffix, timeout))
     if provider == "openai":
         return _ask_openai_image(prompt, image_content, suffix, api_key)
     if provider == "gemini":
