@@ -192,9 +192,29 @@ def _ask_gemini(
         with httpx.Client(timeout=300) as c:
             resp = c.post(url, json=body)
             resp.raise_for_status()
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            data = resp.json()
+            return _extract_gemini_text(data)
     except (httpx.HTTPError, httpx.TimeoutException) as e:
         raise _friendly_http_error("Gemini", e)
+
+
+def _extract_gemini_text(data: dict) -> str:
+    """Walk Gemini response and return concatenated text. Surfaces a clear
+    error when the model produced no text (blocked, finish_reason=SAFETY, etc.)."""
+    candidates = data.get("candidates") or []
+    if not candidates:
+        feedback = data.get("promptFeedback", {})
+        block_reason = feedback.get("blockReason", "")
+        if block_reason:
+            raise RuntimeError(f"Gemini 拒絕生成內容（{block_reason}）。請更換提問或檢查 Key 權限。")
+        raise RuntimeError("Gemini 沒有回傳任何內容。")
+    cand = candidates[0]
+    parts = (cand.get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    if not text:
+        finish = cand.get("finishReason", "")
+        raise RuntimeError(f"Gemini 回傳空內容（finish_reason={finish or 'unknown'}）。")
+    return text
 
 
 def _ask_gemini_image(
@@ -217,7 +237,7 @@ def _ask_gemini_image(
         with httpx.Client(timeout=120) as c:
             resp = c.post(url, json=body)
             resp.raise_for_status()
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return _extract_gemini_text(resp.json())
     except (httpx.HTTPError, httpx.TimeoutException) as e:
         raise _friendly_http_error("Gemini", e)
 

@@ -87,6 +87,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
     name = company.get("name", "")
     prompt = _build_prompt(company)
 
+    last_error: Exception | None = None
     async with _CLAUDE_LOCK:
         for attempt in range(2):
             try:
@@ -104,11 +105,14 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
                 log.info("DD memo done for %s (%d chars, blurb=%r)", name, len(summary), blurb)
                 return {"summary": summary, "blurb": blurb}
             except Exception as e:
+                last_error = e
                 log.warning("DD memo attempt %d failed for %s: %s", attempt + 1, name, e)
                 if attempt == 0:
                     await asyncio.sleep(5)
 
-    return {"summary": "（公司簡介尚待補充，請稍後手動重試）", "blurb": ""}
+    # Both attempts failed — surface the underlying error so the SSE caller can
+    # show it to the user instead of pretending generation succeeded.
+    raise RuntimeError(f"公司簡介生成失敗：{last_error}") from last_error
 
 
 async def _generate_blurb_fallback(summary: str, name: str, api_key: str = "", provider: str = "anthropic") -> str:
