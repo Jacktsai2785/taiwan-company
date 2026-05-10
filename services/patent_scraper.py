@@ -61,7 +61,10 @@ def _get_form(html: str) -> tuple[str, dict]:
 async def _fresh_form(client: httpx.AsyncClient) -> tuple[str, dict]:
     """Get a clean search form by re-following the JS redirect."""
     r = await client.get(f"{_BASE}{_PATH}?@@{random.random()}")
-    return _get_form(r.text)
+    action, base = _get_form(r.text)
+    if not action:
+        raise RuntimeError("TIPO 系統無法連線或拒絕存取（可能封鎖雲端 IP），請稍後再試")
+    return action, base
 
 
 def _parse_results(html: str) -> list[dict]:
@@ -174,7 +177,9 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
             await on_event({"type": "progress", "message": f"搜尋申請人：{cand}"})
             r = await client.post(action, data={**base, "_5_5_T": f"AF=({cand})", "BUTTON": "檢索"})
             company_patents = _parse_results(r.text)
-            action, base = _get_form(r.text)
+            new_action, new_base = _get_form(r.text)
+            if new_action:
+                action, base = new_action, new_base
             if company_patents:
                 matched_name = cand
                 break
@@ -201,7 +206,9 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
                     pat["inventors"] = det["inventors"]
                     pat["brief"]     = det["brief"]
                     inventors_found.update(det["inventors"])
-                action, base = _get_form(r2.text)
+                new_action, new_base = _get_form(r2.text)
+                if new_action:
+                    action, base = new_action, new_base
             except Exception:
                 pass
             await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pat['patent_no']}"})
@@ -219,7 +226,9 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
                     if p["patent_no"] not in all_patents:
                         p["inventors"] = [inventor]
                         all_patents[p["patent_no"]] = p
-                action, base = _get_form(r4.text)
+                new_action, new_base = _get_form(r4.text)
+                if new_action:
+                    action, base = new_action, new_base
             except Exception:
                 pass
 
