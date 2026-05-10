@@ -197,11 +197,16 @@ async def patent_stream(company_id: str):
                 sent += 1
             if events and events[-1].get("type") in ("done", "error"):
                 break
+            yield ": keepalive\n\n"
             await asyncio.sleep(0.5)
         yield 'data: {"type": "done"}\n\n'
         _patent_progress.pop(company_id, None)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{company_id}/export")

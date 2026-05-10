@@ -158,7 +158,7 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
     """
     company_name = company.get("name", "")
 
-    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
+    async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=15) as client:
 
         # ① Init
         await on_event({"type": "progress", "message": "連接 TIPO 系統…"})
