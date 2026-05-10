@@ -1,13 +1,15 @@
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from services import company_extractor, data_store, gcis_client, report_generator
+from services import company_extractor, company_exporter, data_store, gcis_client, report_generator, patent_scraper
 from services.ai_deps import ai_from_headers, ai_from_query
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
@@ -18,6 +20,8 @@ _rel_progress: dict[str, list[dict]] = {}
 _rel_running: set[str] = set()
 _deep_progress: dict[str, list[dict]] = {}
 _deep_running: set[str] = set()
+_patent_progress: dict[str, list[dict]] = {}
+_patent_running: set[str] = set()
 
 
 class ConfirmItem(BaseModel):
@@ -104,6 +108,23 @@ def batch_update_industry(req: BatchIndustryRequest):
     return {"updated": updated}
 
 
+@router.get("/investee-lookup")
+async def investee_lookup(name: str, tax_id: str | None = None, fuzzy: bool = False):
+    """反查某法人名稱的公發母公司（直接用名稱查，不限 DB 內公司）。"""
+    from services import mops_investee_client
+    try:
+        results = await mops_investee_client.reverse_lookup(name=name, tax_id=tax_id, fuzzy=fuzzy)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
+    # Deduplicate by holder_id (same listed company may appear multiple times)
+    seen, deduped = set(), []
+    for r in results:
+        if r.get("holder_id") not in seen:
+            seen.add(r.get("holder_id"))
+            deduped.append(r)
+    return {"query": name, "count": len(deduped), "results": deduped}
+
+
 @router.post("/name-lookup")
 async def lookup_company_names(req: NameLookupRequest):
     """Search Ronny API for each name and return up to 5 candidate matches."""
@@ -144,12 +165,94 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
     }
 
 
+@router.get("/{company_id}/patents")
+async def patent_stream(company_id: str):
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    async def _run():
+        events = _patent_progress.setdefault(company_id, [])
+        try:
+            async def push(evt):
+                events.append(evt)
+
+            patents = await patent_scraper.scrape_company_patents(company, push)
+            data_store.update_company(company_id, {"patents": patents})
+            events.append({"type": "done", "patents": patents})
+        except Exception as e:
+            events.append({"type": "error", "message": str(e)})
+        finally:
+            _patent_running.discard(company_id)
+
+    async def event_generator():
+        if company_id not in _patent_running:
+            _patent_running.add(company_id)
+            asyncio.create_task(_run())
+        sent = 0
+        for _ in range(7200):
+            events = _patent_progress.get(company_id, [])
+            while sent < len(events):
+                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
+                sent += 1
+            if events and events[-1].get("type") in ("done", "error"):
+                break
+            await asyncio.sleep(0.5)
+        yield 'data: {"type": "done"}\n\n'
+        _patent_progress.pop(company_id, None)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{company_id}/export")
+def export_company(company_id: str, format: str = Query("docx", regex="^(docx|pdf)$")):
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    raw_name = company.get("name", company_id)[:50]
+    encoded  = quote(raw_name, safe="")
+
+    if format == "pdf":
+        data = company_exporter.build_pdf(company)
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}.pdf"},
+        )
+    else:
+        data = company_exporter.build_docx(company)
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}.docx"},
+        )
+
+
 @router.get("/{company_id}")
 def get_company(company_id: str):
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     return company
+
+
+@router.get("/{company_id}/investee-holders")
+async def get_investee_holders(company_id: str, fuzzy: bool = False):
+    """反查哪些公發公司在財報中揭露持有此公司的股份（串接 mops_investee）。"""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    from services import mops_investee_client
+    try:
+        results = await mops_investee_client.reverse_lookup(
+            name=company["name"],
+            tax_id=company.get("tax_id") or None,
+            fuzzy=fuzzy,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
+    return {"query": company["name"], "count": len(results), "results": results}
 
 
 @router.post("/confirm")
@@ -717,7 +820,7 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
             events.append({"type": "done"})
             return
 
-        push(f"正在深度搜尋媒體報導與新聞（約 60-120 秒）…")
+        push("正在深度搜尋媒體報導與新聞（約 60-120 秒）…")
         try:
             result = await report_generator.deep_enrich_summary(company, api_key=api_key, provider=provider)
             summary = result["summary"]
@@ -730,4 +833,6 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
 
         events.append({"type": "done"})
     finally:
+        if not events or events[-1].get("type") != "done":
+            events.append({"type": "done"})
         _deep_running.discard(company_id)

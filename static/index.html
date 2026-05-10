@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234f46e5'/%3E%3Ctext x='32' y='44' font-size='40' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3E台%3C/text%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/style.css?v=51" />
+  <link rel="stylesheet" href="/static/style.css?v=64" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
@@ -65,11 +65,23 @@
 <div id="modal-overlay">
   <div id="modal" role="dialog" aria-modal="true">
     <div id="modal-header">
-      <button id="modal-close" aria-label="關閉">✕</button>
+      <div id="modal-header-controls">
+        <button id="modal-watch-btn" onclick="toggleModalWatch()" title="追蹤">⭐</button>
+        <button id="modal-close" aria-label="關閉">✕</button>
+      </div>
       <div id="modal-name"></div>
       <div id="modal-labels"></div>
       <div id="modal-actions">
         <button id="modal-open-rel-btn" onclick="openRelationshipGraph()">🔗 母子公司關係圖</button>
+        <div class="export-dropdown-wrap" id="export-dropdown-wrap">
+          <button class="export-dropdown-toggle" id="modal-export-btn" onclick="toggleExportDropdown()">
+            ↓ 匯出 <span class="gen-caret">▾</span>
+          </button>
+          <div class="export-dropdown-menu" id="export-dropdown-menu">
+            <button onclick="exportCompany('docx'); closeExportDropdown()">📄 Word (.docx)</button>
+            <button onclick="exportCompany('pdf'); closeExportDropdown()">📋 PDF</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="modal-body">
@@ -80,7 +92,7 @@
       </div>
 
       <div class="modal-section" id="modal-directors-section">
-        <h4>董監事名單 <span class="director-hint">點 ⊕ 將該位董事設為關係圖分析錨點</span></h4>
+        <h4>董監事名單 <span class="director-hint">點 ⊕ 將該位董事設為關係圖分析錨點</span><button class="collapse-parent-rows-btn" id="collapse-parent-rows-btn" onclick="toggleParentRows(this)" style="display:none">收合追蹤</button></h4>
         <table class="director-table">
           <thead>
             <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th><th>分析</th></tr>
@@ -89,12 +101,38 @@
         </table>
       </div>
 
+      <div class="modal-section" id="modal-shareholders-section" style="display:none">
+        <h4 class="collapsible-h4" onclick="toggleShareholderSection()"><span class="section-chevron">›</span> 大股東</h4>
+        <div id="modal-shareholder-content" style="display:none"></div>
+      </div>
+
       <div class="modal-section">
-        <h4>公司簡介
-          <button id="modal-regen-btn" onclick="regenSummary()">🔄 重新生成</button>
-          <button id="modal-deep-btn" onclick="deepEnrich()">🔍 深度生成</button>
-        </h4>
-        <div id="modal-summary"></div>
+        <div class="section-header-row">
+          <h4 class="collapsible-h4" onclick="toggleSummarySection()"><span class="section-chevron">›</span> 公司簡介</h4>
+          <div class="gen-dropdown-wrap" id="gen-dropdown-wrap">
+            <button class="gen-dropdown-toggle" id="modal-gen-btn" onclick="toggleGenDropdown()">
+              ✦ 生成 <span class="gen-caret">▾</span>
+            </button>
+            <div class="gen-dropdown-menu" id="gen-dropdown-menu">
+              <button onclick="regenSummary(); closeGenDropdown()">🔄 重新生成<span class="gen-hint">約 30–60 秒</span></button>
+              <button onclick="deepEnrich(); closeGenDropdown()">🔍 深度生成<span class="gen-hint">約 60–120 秒</span></button>
+              <div class="gen-divider"></div>
+              <button onclick="patentGen(); closeGenDropdown()">📋 專利生成<span class="gen-hint">約 15–45 秒</span></button>
+            </div>
+          </div>
+        </div>
+        <div id="modal-summary" style="display:none"></div>
+      </div>
+
+      <div class="modal-section" id="modal-patents-section" style="display:none">
+        <h4 class="patent-section-h4" onclick="togglePatentSection()"><span class="patent-chevron">›</span> 專利資料 <span class="director-hint" id="modal-patents-hint"></span></h4>
+        <div id="modal-patents-status"></div>
+        <table class="patent-table" id="modal-patents-table" style="display:none">
+          <thead>
+            <tr><th>案號</th><th>名稱</th><th>申請日</th><th>狀態</th><th>申請人/發明人</th><th>簡要說明</th></tr>
+          </thead>
+          <tbody id="modal-patents-body"></tbody>
+        </table>
       </div>
 
     </div>
@@ -382,6 +420,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=51"></script>
+<script src="/static/app.js?v=56"></script>
 </body>
 </html>

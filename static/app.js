@@ -7,6 +7,9 @@ const state = {
   expandedIndustries: new Set(),
   activeIndustry: null,          // null = all
   activeGroup: null,             // null = all groups, "__ungrouped__" = no group
+  activeLabel: null,             // cross-industry label filter
+  activeLabelIndustry: null,     // industry drill-down within a label
+  expandedLabels: new Set(),
   activeTab: "all",              // "all" | "watched"
   sortBy: "capital",
   sortDir: "desc",
@@ -224,6 +227,8 @@ function renderSidebar() {
   allDiv.addEventListener("click", () => {
     state.activeIndustry = null;
     state.activeGroup = null;
+    state.activeLabel = null;
+    state.activeLabelIndustry = null;
     renderSidebar();
     renderGrid();
   });
@@ -272,6 +277,8 @@ function renderSidebar() {
       }
       state.activeIndustry = ind;
       state.activeGroup = null;
+      state.activeLabel = null;
+      state.activeLabelIndustry = null;
       renderSidebar();
       renderGrid();
     });
@@ -307,6 +314,8 @@ function renderSidebar() {
         grpDiv.addEventListener("click", () => {
           state.activeIndustry = ind;
           state.activeGroup = grp;
+          state.activeLabel = null;
+          state.activeLabelIndustry = null;
           renderSidebar();
           renderGrid();
         });
@@ -322,10 +331,93 @@ function renderSidebar() {
         ungroupedDiv.addEventListener("click", () => {
           state.activeIndustry = ind;
           state.activeGroup = "__ungrouped__";
+          state.activeLabel = null;
+          state.activeLabelIndustry = null;
           renderSidebar();
           renderGrid();
         });
         list.appendChild(ungroupedDiv);
+      }
+    }
+  }
+
+  // ── 標籤區塊（cross-industry，可展開看產業分布）──
+  const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))].sort((a, b) => a.localeCompare(b, "zh-TW"));
+  if (allLabels.length > 0) {
+    const divider = document.createElement("div");
+    divider.className = "sidebar-section-divider";
+    divider.textContent = "標籤";
+    list.appendChild(divider);
+
+    for (const lbl of allLabels) {
+      const companiesWithLbl = state.companies.filter(c => (c.labels || []).includes(lbl));
+      const count = companiesWithLbl.length;
+      const isLblActive = state.activeLabel === lbl;
+      const isExpanded = state.expandedLabels.has(lbl);
+
+      const lblDiv = document.createElement("div");
+      lblDiv.className = "label-nav-item" + (isLblActive && !state.activeLabelIndustry ? " active" : "") + (isExpanded ? " open" : "");
+      lblDiv.innerHTML = `
+        <span class="label-chevron">›</span>
+        <span title="${escHtml(lbl)}">${escHtml(truncLabel(lbl))}</span>
+        <span class="industry-badge">${count}</span>`;
+      lblDiv.addEventListener("click", () => {
+        if (state.expandedLabels.has(lbl)) {
+          state.expandedLabels.delete(lbl);
+        } else {
+          state.expandedLabels.add(lbl);
+        }
+        state.activeLabel = lbl;
+        state.activeLabelIndustry = null;
+        state.activeIndustry = null;
+        state.activeGroup = null;
+        state.activeTab = "all";
+        document.querySelectorAll(".tab-btn").forEach(b =>
+          b.classList.toggle("active", b.dataset.tab === "all")
+        );
+        renderSidebar();
+        renderGrid();
+      });
+      list.appendChild(lblDiv);
+
+      if (isExpanded) {
+        const industriesInLbl = [...new Set(companiesWithLbl.map(c => c.industry).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-TW"));
+
+        for (const ind of industriesInLbl) {
+          const indCount = companiesWithLbl.filter(c => c.industry === ind).length;
+          const isIndActive = isLblActive && state.activeLabelIndustry === ind;
+          const subDiv = document.createElement("div");
+          subDiv.className = "label-ind-item" + (isIndActive ? " active" : "");
+          subDiv.innerHTML = `<span title="${escHtml(ind)}">${escHtml(truncLabel(ind))}</span><span class="industry-badge">${indCount}</span>`;
+          subDiv.addEventListener("click", e => {
+            e.stopPropagation();
+            state.activeLabel = lbl;
+            state.activeLabelIndustry = isIndActive ? null : ind;
+            state.activeIndustry = null;
+            state.activeGroup = null;
+            renderSidebar();
+            renderGrid();
+          });
+          list.appendChild(subDiv);
+        }
+
+        const unclassifiedInLbl = companiesWithLbl.filter(c => !c.industry).length;
+        if (unclassifiedInLbl > 0) {
+          const isUncActive = isLblActive && state.activeLabelIndustry === "__none__";
+          const uncDiv = document.createElement("div");
+          uncDiv.className = "label-ind-item" + (isUncActive ? " active" : "");
+          uncDiv.innerHTML = `<span>未分類</span><span class="industry-badge">${unclassifiedInLbl}</span>`;
+          uncDiv.addEventListener("click", e => {
+            e.stopPropagation();
+            state.activeLabel = lbl;
+            state.activeLabelIndustry = isUncActive ? null : "__none__";
+            state.activeIndustry = null;
+            state.activeGroup = null;
+            renderSidebar();
+            renderGrid();
+          });
+          list.appendChild(uncDiv);
+        }
       }
     }
   }
@@ -868,6 +960,17 @@ function renderGrid() {
   if (state.activeTab === "watched") {
     companies = companies.filter(c => c.watched === true);
     title.textContent = "";
+  } else if (state.activeLabel) {
+    companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
+    if (state.activeLabelIndustry === "__none__") {
+      companies = companies.filter(c => !c.industry);
+      title.textContent = `${state.activeLabel} — 未分類`;
+    } else if (state.activeLabelIndustry) {
+      companies = companies.filter(c => c.industry === state.activeLabelIndustry);
+      title.textContent = `${state.activeLabel} — ${state.activeLabelIndustry}`;
+    } else {
+      title.textContent = `標籤：${state.activeLabel}`;
+    }
   } else {
     if (state.activeIndustry) {
       companies = companies.filter(c => c.industry === state.activeIndustry);
@@ -1089,6 +1192,39 @@ async function toggleWatch(id) {
   }
 }
 
+function _updateModalWatchBtn(c) {
+  const btn = document.getElementById("modal-watch-btn");
+  if (!btn) return;
+  btn.title = c.watched ? "取消追蹤" : "追蹤";
+  if (c.watched) {
+    btn.classList.add("is-watched");
+  } else {
+    btn.classList.remove("is-watched");
+  }
+}
+
+async function toggleModalWatch() {
+  const c = state.companies.find(x => x.id === _modalCompanyId);
+  if (!c) return;
+  const newVal = !(c.watched === true);
+  try {
+    await api("PUT", `/api/companies/${c.id}`, { watched: newVal });
+    c.watched = newVal;
+    _updateModalWatchBtn(c);
+    updateWatchCount();
+    renderGrid();
+    // refresh memo button visibility
+    const memoBtnHtml = c.watched
+      ? `<button id="memo-open-btn" onclick="openMemoPanel()">📋 訪談備忘錄</button>`
+      : "";
+    document.getElementById("modal-name").innerHTML =
+      escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml;
+    _updateModalWatchBtn(c);
+  } catch (err) {
+    toast(`操作失敗：${err.message}`, true);
+  }
+}
+
 /* ── Call Memo ── */
 const MEMO_FIELDS = [
   ["deal_source",        "案件來源",                    false],
@@ -1271,9 +1407,12 @@ document.getElementById("tab-group").addEventListener("click", e => {
   const btn = e.target.closest(".tab-btn");
   if (!btn) return;
   state.activeTab = btn.dataset.tab;
+  state.activeLabel = null;
+  state.activeLabelIndustry = null;
   document.querySelectorAll(".tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.tab === state.activeTab)
   );
+  renderSidebar();
   renderGrid();
 });
 
@@ -1312,6 +1451,8 @@ function openModal(id) {
   document.getElementById("modal-name").innerHTML =
     escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml;
 
+  _updateModalWatchBtn(c);
+
   document.getElementById("modal-labels").innerHTML =
     (c.labels || []).map(l => `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}</span>`).join("") || "（無標籤）";
 
@@ -1335,12 +1476,13 @@ function openModal(id) {
 
   const directors = c.directors || [];
   const tbody = document.getElementById("modal-directors");
+  let totalRatio = 0, hasRatio = false;
   if (directors.length) {
     // Deduplicate by representative_of: same 法人 counts once
     const seenEntity = new Set();
-    let totalShares = 0, totalRatio = 0;
+    let totalShares = 0;
     const hasShares = directors.some(d => d.shares);
-    const hasRatio = directors.some(d => d.ratio != null);
+    hasRatio = directors.some(d => d.ratio != null);
     for (const d of directors) {
       const entity = (d.representative_of || "").trim();
       const key = entity || `__individual__${d.name}`;
@@ -1389,15 +1531,19 @@ function openModal(id) {
         ? `將「${escAttr(d.representative_of)}」設為母法人錨點`
         : `將「${escAttr(d.name)}」（自然人）設為錨點，查找其任職的所有公司`;
       const badge = isAuto && !isActive ? `<span class="anchor-auto-tag" title="預設選擇">●</span>` : "";
+      const entityName = (d.representative_of || "").trim() || (_isLegalEntityName(d.name) ? d.name : "");
+      const loadingRow = entityName
+        ? `<tr class="director-parent-row" id="parent-row-${i}" style="display:none"><td colspan="6" class="director-parent-cell no-parent">查詢母公司中…</td></tr>`
+        : "";
       return `
-      <tr${isActive ? ' class="director-row-active"' : ""}>
+      <tr${isActive ? ' class="director-row-active"' : ""} data-dir-idx="${i}">
         <td>${escHtml(d.title || "—")}</td>
         <td>${escHtml(d.name || "—")}${badge}</td>
         <td>${escHtml(d.representative_of || "—")}</td>
         <td>${d.shares ? Number(d.shares).toLocaleString() : "—"}</td>
         <td>${d.ratio != null ? (d.ratio * 100).toFixed(2) + "%" : "—"}</td>
         <td><button class="${cls}" title="${tip}" onclick="setAnchorDirector(${i})">${isActive ? "✓" : "⊕"}</button></td>
-      </tr>`;
+      </tr>${loadingRow}`;
     }).join("") + `
       <tr class="director-total-row">
         <td colspan="3">合計</td>
@@ -1410,13 +1556,199 @@ function openModal(id) {
     document.getElementById("modal-directors-section").style.display = "none";
   }
 
+  const collapseBtn = document.getElementById("collapse-parent-rows-btn");
+  if (collapseBtn) {
+    const hasLegalEntities = directors.some(d =>
+      (d.representative_of || "").trim() || _isLegalEntityName(d.name));
+    collapseBtn.style.display = hasLegalEntities ? "" : "none";
+    collapseBtn.dataset.collapsed = "1";
+    collapseBtn.textContent = "▶ 法人溯源";
+  }
+  directors.forEach((d, i) => {
+    const entity = (d.representative_of || "").trim() || (_isLegalEntityName(d.name) ? d.name : "");
+    if (entity) _autoFillParentRow(i, entity, _modalCompanyId);
+  });
+  _renderShareholderSection(totalRatio, hasRatio);
+
   const summaryEl = document.getElementById("modal-summary");
   summaryEl.innerHTML =
     c.summary ? renderSummary(c.summary) : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
+  summaryEl.style.display = "none";
+  const summaryH4 = summaryEl.closest(".modal-section")?.querySelector(".collapsible-h4");
+  if (summaryH4) summaryH4.classList.remove("is-open");
   applyCollapsible(summaryEl);
+
+  // Patents: show section if data exists, hide if not
+  const patentSection = document.getElementById("modal-patents-section");
+  const patentStatus  = document.getElementById("modal-patents-status");
+  if (c.patents && c.patents.length) {
+    if (patentSection) patentSection.style.display = "";
+    if (patentStatus)  patentStatus.innerHTML = "";
+    // Reset to collapsed state each time modal opens
+    const patH4 = document.querySelector(".patent-section-h4");
+    if (patH4) patH4.classList.remove("is-open");
+    const patTable = document.getElementById("modal-patents-table");
+    if (patTable) patTable.style.display = "none";
+    _renderPatents(id);
+  } else {
+    if (patentSection) patentSection.style.display = "none";
+  }
 
   document.getElementById("modal-overlay").classList.add("open");
   document.body.classList.add("detail-open");
+}
+
+
+/* ── 董監法人母公司溯源 ── */
+function _isLegalEntityName(name) {
+  return /公司|合夥|基金|集團|Corp\.|Ltd\.|Inc\.|L\.P\.|LLC/i.test(name || "");
+}
+
+async function _autoFillParentRow(idx, entityName, companyId) {
+  const row = document.getElementById(`parent-row-${idx}`);
+  if (!row) return;
+  try {
+    const data = await api("GET", `/api/companies/investee-lookup?name=${encodeURIComponent(entityName)}`);
+    if (_modalCompanyId !== companyId) return;
+    if (data.count === 0) {
+      row.innerHTML = `<td colspan="6" class="director-parent-cell no-parent">查無公發母公司記錄</td>`;
+    } else {
+      const badges = data.results.map(r =>
+        `<span class="parent-company-badge">${escHtml(r.holder_name)}<small>${escHtml(r.holder_id)}</small></span>`
+      ).join("");
+      row.innerHTML = `<td colspan="6" class="director-parent-cell">公發母公司：${badges}</td>`;
+    }
+  } catch {
+    if (_modalCompanyId !== companyId) return;
+    row.innerHTML = `<td colspan="6" class="director-parent-cell no-parent">查詢失敗</td>`;
+  }
+}
+
+function toggleParentRows(btn) {
+  const rows = document.querySelectorAll("#modal-directors .director-parent-row");
+  const isCollapsed = btn.dataset.collapsed === "1";
+  rows.forEach(r => r.style.display = isCollapsed ? "" : "none");
+  btn.dataset.collapsed = isCollapsed ? "0" : "1";
+  btn.textContent = isCollapsed ? "▼ 法人溯源" : "▶ 法人溯源";
+}
+
+function _collapseParentRows() {
+  document.querySelectorAll("#modal-directors .director-parent-row")
+    .forEach(r => r.style.display = "none");
+  const btn = document.getElementById("collapse-parent-rows-btn");
+  if (btn && btn.style.display !== "none") {
+    btn.dataset.collapsed = "1";
+    btn.textContent = "▶ 法人溯源";
+  }
+}
+
+function _expandParentRows() {
+  document.querySelectorAll("#modal-directors .director-parent-row")
+    .forEach(r => r.style.display = "");
+  const btn = document.getElementById("collapse-parent-rows-btn");
+  if (btn && btn.style.display !== "none") {
+    btn.dataset.collapsed = "0";
+    btn.textContent = "▼ 法人溯源";
+  }
+}
+
+async function lookupDirectorParent(entityName, btn) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  const row = btn.closest("tr");
+  // 移除舊子列（若存在）
+  const old = row.nextElementSibling;
+  if (old && old.classList.contains("director-parent-row")) old.remove();
+
+  try {
+    const data = await api("GET", `/api/companies/investee-lookup?name=${encodeURIComponent(entityName)}`);
+    const subRow = document.createElement("tr");
+    subRow.className = "director-parent-row";
+    if (data.count === 0) {
+      subRow.innerHTML = `<td colspan="6" class="director-parent-cell no-parent">查無公發母公司記錄（${escHtml(entityName)}）</td>`;
+    } else {
+      const badges = data.results.map(r =>
+        `<span class="parent-company-badge" title="${escHtml(r.category || "")}">` +
+        `${escHtml(r.holder_name)}<small>${escHtml(r.holder_id)}</small></span>`
+      ).join("");
+      subRow.innerHTML = `<td colspan="6" class="director-parent-cell">公發母公司：${badges}</td>`;
+    }
+    row.after(subRow);
+    btn.textContent = "🔗";
+    btn.disabled = false;
+  } catch (err) {
+    btn.textContent = "🔗";
+    btn.disabled = false;
+    const subRow = document.createElement("tr");
+    subRow.className = "director-parent-row";
+    subRow.innerHTML = `<td colspan="6" class="director-parent-cell no-parent">查詢失敗：${escHtml(err.message)}</td>`;
+    row.after(subRow);
+  }
+}
+
+/* ── 大股東板塊 ── */
+function _renderShareholderSection(totalRatio, hasRatio) {
+  const section = document.getElementById("modal-shareholders-section");
+  const content = document.getElementById("modal-shareholder-content");
+  if (!hasRatio) { section.style.display = "none"; return; }
+  section.style.display = "";
+  const h4 = section.querySelector(".collapsible-h4");
+  if (h4) h4.classList.remove("is-open");
+  content.style.display = "none";
+  const pct = (totalRatio * 100).toFixed(2);
+  const isIncomplete = totalRatio < 0.999;
+  if (isIncomplete) {
+    const missing = (100 - totalRatio * 100).toFixed(2);
+    content.innerHTML = `
+      <div class="hidden-holder-alert">
+        <span class="alert-icon">⚠</span>
+        <p>董監事持股合計 <b>${pct}%</b>，尚有 <b>${missing}%</b> 股份未在董監事名單中揭露，可能由其他股東持有</p>
+      </div>
+      <button class="find-holders-btn" id="btn-find-holders" onclick="findPublicHolders()">
+        🔍 查找公發公司持股
+      </button>
+      <div id="modal-investee-holders"></div>`;
+  } else {
+    content.innerHTML = `<p class="no-holders-hint">董監事持股合計 ${pct}%，持股已完整揭露</p>`;
+  }
+}
+
+async function findPublicHolders() {
+  const id = _modalCompanyId;
+  const btn = document.getElementById("btn-find-holders");
+  const resultEl = document.getElementById("modal-investee-holders");
+  if (!btn || !resultEl) return;
+  btn.disabled = true;
+  btn.textContent = "查詢中…";
+  resultEl.innerHTML = "<p class='no-holders-hint'>正在查詢公發公司持股資料…</p>";
+  try {
+    const data = await api("GET", `/api/companies/${id}/investee-holders`);
+    if (data.count === 0) {
+      resultEl.innerHTML = "<p class='no-holders-hint'>查無公發公司揭露持有此公司股份</p>";
+      btn.textContent = "✓ 查詢完畢";
+    } else {
+      const categoryLabel = { subsidiary: "子公司", associate: "關聯企業", other_lt_equity: "其他長期股權" };
+      const catClass = { subsidiary: "holder-category-subsidiary", associate: "holder-category-associate" };
+      resultEl.innerHTML = `
+        <p class="holders-found-hint">找到 <b>${data.count}</b> 家公發公司揭露持有此公司股份：</p>
+        <table class="investee-holders-table">
+          <thead><tr><th>持有公司</th><th>代號</th><th>持股比例</th><th>資料日期</th><th>類型</th></tr></thead>
+          <tbody>${data.results.map(r => `
+            <tr>
+              <td>${escHtml(r.holder_name || "—")}</td>
+              <td>${escHtml(r.holder_id || "—")}</td>
+              <td>${r.pct != null ? (r.pct * 100).toFixed(4) + "%" : "—"}</td>
+              <td>${escHtml(r.as_of_date || "—")}</td>
+              <td class="${catClass[r.category] || ""}">${categoryLabel[r.category] || escHtml(r.category || "—")}</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+      btn.textContent = "✓ 查詢完畢";
+    }
+  } catch (err) {
+    resultEl.innerHTML = `<p class='no-holders-hint' style="color:#dc2626">查詢失敗：${escHtml(err.message)}</p>`;
+    btn.disabled = false;
+    btn.textContent = "🔍 查找公發公司持股";
+  }
 }
 
 
@@ -1438,11 +1770,91 @@ async function saveModalIndustry() {
   }
 }
 
+function toggleExportDropdown() {
+  const toggle = document.getElementById("modal-export-btn");
+  const menu   = document.getElementById("export-dropdown-menu");
+  const isOpen = menu.classList.contains("open");
+  if (isOpen) {
+    toggle.classList.remove("open");
+    menu.classList.remove("open");
+  } else {
+    toggle.classList.add("open");
+    menu.classList.add("open");
+  }
+}
+
+function closeExportDropdown() {
+  document.getElementById("modal-export-btn")?.classList.remove("open");
+  document.getElementById("export-dropdown-menu")?.classList.remove("open");
+}
+
+document.addEventListener("click", e => {
+  const wrap = document.getElementById("export-dropdown-wrap");
+  if (wrap && !wrap.contains(e.target)) closeExportDropdown();
+});
+
+function exportCompany(format) {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const a = document.createElement("a");
+  a.href = `/api/companies/${id}/export?format=${format}`;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function toggleGenDropdown() {
+  const toggle = document.getElementById("modal-gen-btn");
+  const menu   = document.getElementById("gen-dropdown-menu");
+  const isOpen = menu.classList.contains("open");
+  if (isOpen) {
+    _closeGenDropdownMenu(toggle, menu);
+  } else {
+    toggle.classList.add("open");
+    const rect = toggle.getBoundingClientRect();
+    menu.style.position = "fixed";
+    menu.style.right = (window.innerWidth - rect.right) + "px";
+    menu.style.left  = "";
+    // Open upward if insufficient space below (menu ~150px tall)
+    if (rect.bottom + 160 > window.innerHeight) {
+      menu.style.top    = "auto";
+      menu.style.bottom = (window.innerHeight - rect.top + 6) + "px";
+    } else {
+      menu.style.top    = (rect.bottom + 6) + "px";
+      menu.style.bottom = "auto";
+    }
+    menu.classList.add("open");
+  }
+}
+
+function _closeGenDropdownMenu(toggle, menu) {
+  (toggle || document.getElementById("modal-gen-btn"))?.classList.remove("open");
+  if (!menu) menu = document.getElementById("gen-dropdown-menu");
+  if (menu) {
+    menu.classList.remove("open");
+    menu.style.position = "";
+    menu.style.top = "";
+    menu.style.bottom = "";
+    menu.style.right = "";
+  }
+}
+
+function closeGenDropdown() {
+  _closeGenDropdownMenu();
+}
+
+document.addEventListener("click", e => {
+  const wrap = document.getElementById("gen-dropdown-wrap");
+  if (wrap && !wrap.contains(e.target)) closeGenDropdown();
+});
+
 function regenSummary() {
   const id = _modalCompanyId;
   if (!id) return;
   const summaryEl = document.getElementById("modal-summary");
   if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 30-60 秒）…</p>";
+  _expandSummarySection();
   subscribeEnrichment(id);
 }
 
@@ -1451,18 +1863,168 @@ function deepEnrich() {
   if (!id) return;
   const summaryEl = document.getElementById("modal-summary");
   if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 60-120 秒）…</p>";
-  const btn = document.getElementById("modal-deep-btn");
+  _expandSummarySection();
+  const btn = document.getElementById("modal-gen-btn");
   if (btn) btn.disabled = true;
   _subscribeDeepEnrich(id).finally(() => {
     if (btn) btn.disabled = false;
   });
 }
 
+function patentGen() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const section = document.getElementById("modal-patents-section");
+  const status  = document.getElementById("modal-patents-status");
+  const table   = document.getElementById("modal-patents-table");
+  if (section) section.style.display = "";
+  if (table)   table.style.display = "none";
+  if (status)  status.innerHTML = '<p class="summary-placeholder">📋 連接 TIPO 系統中，請稍候…</p>';
+  _subscribePatent(id);
+}
+
+const _PATENT_FOLD = 3;
+
+function toggleBrief(idx) {
+  const pre  = document.getElementById(`brief-pre-${idx}`);
+  const full = document.getElementById(`brief-full-${idx}`);
+  const btn  = full && full.nextElementSibling;
+  if (!full) return;
+  const expanded = full.style.display !== "none";
+  if (pre)  pre.style.display  = expanded ? "" : "none";
+  full.style.display = expanded ? "none" : "";
+  if (btn)  btn.textContent    = expanded ? "展開" : "收合";
+}
+
+function togglePatentRows() {
+  const rows = document.querySelectorAll(".patent-row-extra");
+  const foldRow = document.getElementById("patent-fold-row");
+  const btn = foldRow && foldRow.querySelector("button");
+  const isHidden = rows.length && rows[0].style.display === "none";
+  rows.forEach(r => r.style.display = isHidden ? "" : "none");
+  if (btn) btn.textContent = isHidden ? "▲ 收合" : `▼ 展開全部（剩餘 ${rows.length} 筆）`;
+}
+
+function togglePatentSection() {
+  const h4 = document.querySelector(".patent-section-h4");
+  const table = document.getElementById("modal-patents-table");
+  const isOpen = h4 && h4.classList.contains("is-open");
+  if (h4) h4.classList.toggle("is-open", !isOpen);
+  if (table) table.style.display = isOpen ? "none" : "";
+}
+
+function toggleShareholderSection() {
+  const section = document.getElementById("modal-shareholders-section");
+  const h4 = section && section.querySelector(".collapsible-h4");
+  const content = document.getElementById("modal-shareholder-content");
+  const isOpen = h4 && h4.classList.contains("is-open");
+  if (h4) h4.classList.toggle("is-open", !isOpen);
+  if (content) content.style.display = isOpen ? "none" : "";
+}
+
+function toggleSummarySection() {
+  const summaryEl = document.getElementById("modal-summary");
+  const h4 = summaryEl && summaryEl.closest(".modal-section")?.querySelector(".collapsible-h4");
+  const isOpen = h4 && h4.classList.contains("is-open");
+  if (h4) h4.classList.toggle("is-open", !isOpen);
+  if (summaryEl) summaryEl.style.display = isOpen ? "none" : "";
+}
+
+function _expandSummarySection() {
+  const summaryEl = document.getElementById("modal-summary");
+  const h4 = summaryEl && summaryEl.closest(".modal-section")?.querySelector(".collapsible-h4");
+  if (h4) h4.classList.add("is-open");
+  if (summaryEl) summaryEl.style.display = "";
+}
+
+function _subscribePatent(companyId) {
+  const es = new EventSource(`/api/companies/${companyId}/patents`);
+  const status = document.getElementById("modal-patents-status");
+  const hint   = document.getElementById("modal-patents-hint");
+
+  es.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === "progress") {
+      if (status) status.innerHTML = `<p class="summary-placeholder">${escHtml(d.message)}</p>`;
+    } else if (d.type === "done") {
+      es.close();
+      if (status) status.innerHTML = "";
+      const c = state.companies.find(x => x.id === companyId);
+      if (c && d.patents) c.patents = d.patents;
+      _renderPatents(companyId, true);
+    } else if (d.type === "error") {
+      es.close();
+      if (status) status.innerHTML = `<p class="summary-placeholder" style="color:var(--danger)">⚠ ${escHtml(d.message)}</p>`;
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    if (status) status.innerHTML = '<p class="summary-placeholder" style="color:var(--danger)">⚠ 連線中斷</p>';
+  };
+}
+
+function _renderPatents(companyId, autoShow = false) {
+  const c = state.companies.find(x => x.id === companyId);
+  const patents = c && c.patents;
+  const hint    = document.getElementById("modal-patents-hint");
+  const table   = document.getElementById("modal-patents-table");
+  const tbody   = document.getElementById("modal-patents-body");
+  if (!patents || !patents.length) {
+    if (hint) hint.textContent = "未找到專利資料";
+    return;
+  }
+  if (hint) hint.textContent = `共 ${patents.length} 筆（更新：${patents[0]?.fetched_at || ""}）`;
+  const makeRow = (p, idx) => {
+    const applicantPart = p.applicant
+      ? `<span class="inv-applicant">申請人：${escHtml(p.applicant)}</span>` : "";
+    const inventorPart = (p.inventors || []).length
+      ? `<span class="inv-inventor">發明人：${escHtml((p.inventors || []).join("、"))}</span>` : "";
+    const inventorsHtml = [applicantPart, inventorPart].filter(Boolean).join("") || "—";
+
+    const brief = p.brief || "";
+    const briefPreview = brief.length > 30 ? brief.slice(0, 30) + "…" : brief;
+    const hasMore = brief.length > 30;
+    const briefHtml = brief
+      ? `<span class="brief-preview" id="brief-pre-${idx}">${escHtml(briefPreview)}</span>`
+        + (hasMore
+          ? `<span class="brief-full" id="brief-full-${idx}" style="display:none">${escHtml(brief)}</span>`
+            + `<button class="brief-toggle" onclick="toggleBrief(${idx})">展開</button>`
+          : "")
+      : "—";
+
+    const hidden = idx >= _PATENT_FOLD ? ' class="patent-row-extra" style="display:none"' : '';
+    return `<tr${hidden}>
+      <td class="patent-no">${escHtml(p.patent_no || "—")}</td>
+      <td class="patent-title">${escHtml(p.title || "—")}</td>
+      <td class="patent-date">${escHtml(p.app_date || "—")}</td>
+      <td class="patent-status ${p.status === "核准" ? "status-granted" : ""}">${escHtml(p.status || "—")}</td>
+      <td class="patent-inventors">${inventorsHtml}</td>
+      <td class="patent-brief">${briefHtml}</td>
+    </tr>`;
+  };
+
+  let rows = patents.map(makeRow).join("");
+  if (patents.length > _PATENT_FOLD) {
+    const extra = patents.length - _PATENT_FOLD;
+    rows += `<tr id="patent-fold-row">
+      <td colspan="6" style="text-align:center;padding:6px 0">
+        <button class="brief-toggle" style="font-size:11px;padding:2px 12px"
+          onclick="togglePatentRows()">▼ 展開全部（剩餘 ${extra} 筆）</button>
+      </td>
+    </tr>`;
+  }
+  tbody.innerHTML = rows;
+  if (autoShow) {
+    if (table) table.style.display = "";
+    const patH4 = document.querySelector(".patent-section-h4");
+    if (patH4) patH4.classList.add("is-open");
+  }
+}
+
 function _subscribeDeepEnrich(companyId) {
   const key = getAiKey();
-  const sseUrl = key
-    ? `/api/companies/deep-enrich/${companyId}?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}`
-    : `/api/companies/${companyId}/deep-enrich`;
+  const sseUrl = `/api/companies/${companyId}/deep-enrich` +
+    (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
 
   return new Promise(resolve => {
     const es = new EventSource(sseUrl);
@@ -1476,8 +2038,10 @@ function _subscribeDeepEnrich(companyId) {
         if (company) {
           Object.assign(company, event.fields);
           renderGrid();
-          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open"))
+          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
             openModal(companyId);
+            _expandSummarySection();
+          }
         }
       } else if (event.type === "progress") {
         toast(event.message);
@@ -2188,7 +2752,10 @@ function subscribeEnrichment(companyId) {
         if (company) {
           Object.assign(company, event.fields);
           renderGrid();
-          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) openModal(companyId);
+          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
+            openModal(companyId);
+            _expandSummarySection();
+          }
         }
 
       } else if (event.type === "progress") {
@@ -2261,6 +2828,7 @@ function openRelationshipGraph(companyId) {
   }
   document.getElementById("rel-graph-overlay").classList.add("open");
   document.body.classList.add("rel-open");
+  _expandParentRows();
   // Cytoscape needs a layout pass after the container resizes (side-by-side mode shrinks it)
   setTimeout(() => renderOwnershipGraph(id), 50);
 }
@@ -2270,6 +2838,7 @@ function closeRelationshipGraph() {
   document.body.classList.remove("rel-open");
   _disposeCy();
   _relGraphCompanyId = null;
+  _collapseParentRows();
 }
 
 document.getElementById("rel-graph-overlay").addEventListener("click", e => {
@@ -2475,6 +3044,10 @@ async function buildRelationship(directorIndex) {
         // Also refresh the detail modal so the director ⊕/✓ marker updates
         if (_modalCompanyId === id && document.getElementById("modal-overlay").classList.contains("open")) {
           openModal(id);
+          // If relationship graph is still open, restore expanded state that openModal reset
+          if (document.getElementById("rel-graph-overlay").classList.contains("open")) {
+            _expandParentRows();
+          }
         }
         if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
         _relBuildingId = null;
