@@ -79,10 +79,15 @@ async def get_digest(
 
 async def refresh_all_digests() -> None:
     from services.data_store import get_industries
+    from services.jk_nb_exporter import export_industry_digest_to_jk_nb
     for ind in get_industries():
         try:
             log.info("Scheduler: refreshing digest for %s", ind)
-            await _generate(ind, cache_date(), api_key="", provider="anthropic")
+            digest = await _generate(ind, cache_date(), api_key="", provider="anthropic")
+            try:
+                export_industry_digest_to_jk_nb(ind, digest)
+            except Exception:
+                log.exception("jk_nb export failed for %s (non-fatal)", ind)
         except Exception as exc:
             log.warning("Scheduler: digest failed for %s: %s", ind, exc)
 

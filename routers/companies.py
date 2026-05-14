@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from services import company_extractor, company_exporter, data_store, gcis_client, report_generator, patent_scraper
 from services.ai_deps import ai_from_headers, ai_from_query
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
 _progress: dict[str, list[dict]] = {}
@@ -804,6 +806,12 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         except Exception as e:
             push(f"簡介生成失敗：{e}")
 
+        try:
+            from services.jk_nb_exporter import export_company_to_jk_nb
+            export_company_to_jk_nb(data_store.get_company(company_id) or {})
+        except Exception:
+            log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
+
         events.append({"type": "done"})
     finally:
         _running.discard(company_id)
@@ -835,6 +843,12 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
             push("深度生成完成")
         except Exception as e:
             push(f"深度生成失敗：{e}")
+
+        try:
+            from services.jk_nb_exporter import export_company_to_jk_nb
+            export_company_to_jk_nb(data_store.get_company(company_id) or {})
+        except Exception:
+            log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
 
         events.append({"type": "done"})
     finally:
