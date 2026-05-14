@@ -1,4 +1,4 @@
-.PHONY: setup start start-bg stop logs
+.PHONY: setup start start-bg stop logs enable disable status
 
 PID_FILE := /tmp/taiwan-company.pid
 LOG_FILE := /tmp/taiwan-company.log
@@ -49,3 +49,13 @@ stop:
 
 logs:
 	@tail -n 80 -f $(LOG_FILE)
+
+# ── systemd user service 管理 ──────────────────────────────────────────────────
+enable:
+	@systemctl --user enable taiwan-company.service && echo "✅ 已設為開機自啟"
+
+disable:
+	@systemctl --user disable taiwan-company.service && echo "⚠ 已取消開機自啟"
+
+status:
+	@systemctl --user status taiwan-company.service --no-pager
