@@ -14,6 +14,29 @@ log = logging.getLogger("report_generator")
 
 _CLAUDE_LOCK = asyncio.Semaphore(5)
 
+_CORP_SUFFIXES = ("股份有限公司", "有限公司")
+
+
+def _company_name_variants(name: str) -> tuple[str, str]:
+    short = name
+    for sfx in _CORP_SUFFIXES:
+        if short.endswith(sfx):
+            short = short[:-len(sfx)]
+            break
+    full = name if any(name.endswith(s) for s in _CORP_SUFFIXES) else name + "股份有限公司"
+    return short, full
+
+
+def _roc_to_ce(roc: str) -> str:
+    """Convert 民國 YYYMMDD string to 西元 YYYY-MM-DD; return input unchanged if not that format."""
+    if len(roc) != 7:
+        return roc
+    try:
+        y, m, d = int(roc[:3]) + 1911, int(roc[3:5]), int(roc[5:7])
+        return f"{y}-{m:02d}-{d:02d}"
+    except Exception:
+        return roc
+
 _WEB_TOOLS = ["WebSearch", "WebFetch"]
 
 
@@ -36,23 +59,9 @@ def _build_prompt(company: dict) -> str:
         f"{d['name']}（{d['title']}）" for d in directors[:5] if d.get("name")
     ) or "不詳"
 
-    # Derive short name (strip corporate type suffix) and full name
-    short_name = name
-    for sfx in ("股份有限公司", "有限公司"):
-        if short_name.endswith(sfx):
-            short_name = short_name[:-len(sfx)]
-            break
-    full_name = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
-
-    # Convert 民國 date string (YYYMMDD) to 西元 for readability
-    def roc_to_ce(roc: str) -> str:
-        try:
-            y, m, d = int(roc[:3]) + 1911, int(roc[3:5]), int(roc[5:7])
-            return f"{y}-{m:02d}-{d:02d}"
-        except Exception:
-            return roc
-    setup_ce  = roc_to_ce(setup_date)  if len(setup_date) == 7 else setup_date
-    change_ce = roc_to_ce(last_change) if len(last_change) == 7 else last_change
+    short_name, full_name = _company_name_variants(name)
+    setup_ce  = _roc_to_ce(setup_date)
+    change_ce = _roc_to_ce(last_change)
 
     # Hint: if last_change is set and differs from setup, company may have had a name or structure change
     name_change_hint = ""
@@ -121,12 +130,7 @@ def _build_deep_prompt(company: dict) -> str:
     name = company.get("name", "")
     existing = (company.get("summary") or "").strip()
 
-    short_name = name
-    for sfx in ("股份有限公司", "有限公司"):
-        if short_name.endswith(sfx):
-            short_name = short_name[:-len(sfx)]
-            break
-    full_name = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
+    short_name, full_name = _company_name_variants(name)
 
     base = f"以下是「{full_name}」的初步投資備忘錄（基於官網資料生成）：\n\n{existing}\n\n---\n\n" if existing else ""
 
