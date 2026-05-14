@@ -212,7 +212,7 @@ async def patent_stream(company_id: str):
 
 
 @router.get("/{company_id}/export")
-def export_company(company_id: str, format: str = Query("docx", regex="^(docx|pdf)$")):
+def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|pdf)$")):
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
