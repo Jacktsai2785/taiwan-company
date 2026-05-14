@@ -259,7 +259,8 @@ async def get_investee_holders(company_id: str, fuzzy: bool = False):
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
-    return {"query": company["name"], "count": len(results), "results": results}
+    total_shares = company.get("total_shares") or 0
+    return {"query": company["name"], "count": len(results), "total_shares": total_shares, "results": results}
 
 
 @router.post("/confirm")
