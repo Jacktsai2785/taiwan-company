@@ -310,7 +310,7 @@ function renderSidebar() {
         const isGrpActive = state.activeIndustry === ind && state.activeGroup === grp;
         const grpDiv = document.createElement("div");
         grpDiv.className = "group-item" + (isGrpActive ? " active" : "");
-        grpDiv.innerHTML = `<span title="${escHtml(grp)}">${escHtml(truncLabel(grp))}</span><span class="industry-badge">${grpCount}</span>`;
+        grpDiv.innerHTML = `<span title="${escHtml(grp)}">${escHtml(grp)}</span><span class="industry-badge">${grpCount}</span>`;
         grpDiv.addEventListener("click", () => {
           state.activeIndustry = ind;
           state.activeGroup = grp;
@@ -359,7 +359,7 @@ function renderSidebar() {
       lblDiv.className = "label-nav-item" + (isLblActive && !state.activeLabelIndustry ? " active" : "") + (isExpanded ? " open" : "");
       lblDiv.innerHTML = `
         <span class="label-chevron">›</span>
-        <span title="${escHtml(lbl)}">${escHtml(truncLabel(lbl))}</span>
+        <span title="${escHtml(lbl)}">${escHtml(lbl)}</span>
         <span class="industry-badge">${count}</span>`;
       lblDiv.addEventListener("click", () => {
         if (state.expandedLabels.has(lbl)) {
@@ -1454,7 +1454,7 @@ function openModal(id) {
   _updateModalWatchBtn(c);
 
   document.getElementById("modal-labels").innerHTML =
-    (c.labels || []).map(l => `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}</span>`).join("") || "（無標籤）";
+    (c.labels || []).map(l => `<span class="label-chip" title="${escHtml(l)}">${escHtml(l)}</span>`).join("") || "（無標籤）";
 
   const fmt = n => n ? `NT$ ${Number(n).toLocaleString()} 元` : "—";
   document.getElementById("modal-info").innerHTML = `
@@ -1463,7 +1463,7 @@ function openModal(id) {
     <span class="info-label">資本總額</span><span class="info-value">${fmt(c.authorized_capital)}</span>
     <span class="info-label">實收資本額</span><span class="info-value">${fmt(c.capital)}</span>
     <span class="info-label">每股金額</span><span class="info-value">${c.par_value ? `NT$ ${c.par_value} 元` : "—"}</span>
-    <span class="info-label">股份總數</span><span class="info-value">${c.total_shares ? Number(c.total_shares).toLocaleString() + " 股" : "—"}</span>
+    <span class="info-label">股份總數</span><span class="info-value">${c.total_shares ? Number(c.total_shares).toLocaleString() + " 股（" + Math.floor(c.total_shares / 1000).toLocaleString() + " 張）" : "—"}</span>
     <span class="info-label">公司所在地</span><span class="info-value">${escHtml(c.address || "—")}</span>
     <span class="info-label">產業別</span>
     <span class="info-value modal-industry-wrap">
@@ -1562,7 +1562,7 @@ function openModal(id) {
       (d.representative_of || "").trim() || _isLegalEntityName(d.name));
     collapseBtn.style.display = hasLegalEntities ? "" : "none";
     collapseBtn.dataset.collapsed = "1";
-    collapseBtn.textContent = "▶ 法人溯源";
+    collapseBtn.textContent = "法人溯源";
   }
   directors.forEach((d, i) => {
     const entity = (d.representative_of || "").trim() || (_isLegalEntityName(d.name) ? d.name : "");
@@ -1629,7 +1629,7 @@ function toggleParentRows(btn) {
   const isCollapsed = btn.dataset.collapsed === "1";
   rows.forEach(r => r.style.display = isCollapsed ? "" : "none");
   btn.dataset.collapsed = isCollapsed ? "0" : "1";
-  btn.textContent = isCollapsed ? "▼ 法人溯源" : "▶ 法人溯源";
+  btn.textContent = isCollapsed ? "法人溯源" : "法人溯源";
 }
 
 function _collapseParentRows() {
@@ -1638,7 +1638,7 @@ function _collapseParentRows() {
   const btn = document.getElementById("collapse-parent-rows-btn");
   if (btn && btn.style.display !== "none") {
     btn.dataset.collapsed = "1";
-    btn.textContent = "▶ 法人溯源";
+    btn.textContent = "法人溯源";
   }
 }
 
@@ -1648,7 +1648,7 @@ function _expandParentRows() {
   const btn = document.getElementById("collapse-parent-rows-btn");
   if (btn && btn.style.display !== "none") {
     btn.dataset.collapsed = "0";
-    btn.textContent = "▼ 法人溯源";
+    btn.textContent = "法人溯源";
   }
 }
 
@@ -1704,50 +1704,66 @@ function _renderShareholderSection(totalRatio, hasRatio) {
         <span class="alert-icon">⚠</span>
         <p>董監事持股合計 <b>${pct}%</b>，尚有 <b>${missing}%</b> 股份未在董監事名單中揭露，可能由其他股東持有</p>
       </div>
-      <button class="find-holders-btn" id="btn-find-holders" onclick="findPublicHolders()">
-        🔍 查找公發公司持股
-      </button>
-      <div id="modal-investee-holders"></div>`;
+      <div id="modal-investee-holders"><p class="no-holders-hint">正在查詢公發公司持股資料…</p></div>`;
   } else {
     content.innerHTML = `<p class="no-holders-hint">董監事持股合計 ${pct}%，持股已完整揭露</p>`;
+    return;
   }
+  findPublicHolders();
 }
 
 async function findPublicHolders() {
   const id = _modalCompanyId;
-  const btn = document.getElementById("btn-find-holders");
   const resultEl = document.getElementById("modal-investee-holders");
-  if (!btn || !resultEl) return;
-  btn.disabled = true;
-  btn.textContent = "查詢中…";
-  resultEl.innerHTML = "<p class='no-holders-hint'>正在查詢公發公司持股資料…</p>";
+  if (!resultEl) return;
   try {
     const data = await api("GET", `/api/companies/${id}/investee-holders`);
     if (data.count === 0) {
       resultEl.innerHTML = "<p class='no-holders-hint'>查無公發公司揭露持有此公司股份</p>";
-      btn.textContent = "✓ 查詢完畢";
     } else {
-      const categoryLabel = { subsidiary: "子公司", associate: "關聯企業", other_lt_equity: "其他長期股權" };
+      const categoryLabel = {
+        subsidiary:      "子公司",
+        associate:       "關聯企業",
+        fvoci_noncurrent:"FVOCI股權投資（非流動）",
+        fvoci_current:   "FVOCI股權投資（流動）",
+        fvoci_equity:    "FVOCI股權投資",
+        mainland_china:  "大陸投資",
+        other_lt_equity: "其他長期股權",
+      };
       const catClass = { subsidiary: "holder-category-subsidiary", associate: "holder-category-associate" };
       resultEl.innerHTML = `
         <p class="holders-found-hint">找到 <b>${data.count}</b> 家公發公司揭露持有此公司股份：</p>
         <table class="investee-holders-table">
-          <thead><tr><th>持有公司</th><th>代號</th><th>持股比例</th><th>資料日期</th><th>類型</th></tr></thead>
-          <tbody>${data.results.map(r => `
+          <thead><tr><th>持有公司</th><th>代號</th><th>持股張數/比例</th><th>資料日期</th><th>類型</th></tr></thead>
+          <tbody>${data.results.map(r => {
+            let pctDisplay;
+            const sharesNum = r.shares_nt != null ? Number(r.shares_nt) : null;
+            const sharesStr = sharesNum != null ? sharesNum.toLocaleString() + "張" : null;
+            let ratio = r.pct != null ? r.pct
+                      : (sharesNum != null && data.total_shares > 0 ? sharesNum * 1000 / data.total_shares : null);
+            const ratioStr = ratio != null ? "(" + (ratio * 100).toFixed(2) + "%)" : null;
+            if (sharesStr && ratioStr) {
+              pctDisplay = `${sharesStr} ${ratioStr}`;
+            } else if (sharesStr) {
+              pctDisplay = sharesStr;
+            } else if (ratioStr) {
+              pctDisplay = ratioStr;
+            } else {
+              pctDisplay = "—";
+            }
+            return `
             <tr>
               <td>${escHtml(r.holder_name || "—")}</td>
               <td>${escHtml(r.holder_id || "—")}</td>
-              <td>${r.pct != null ? (r.pct * 100).toFixed(4) + "%" : "—"}</td>
+              <td>${pctDisplay}</td>
               <td>${escHtml(r.as_of_date || "—")}</td>
               <td class="${catClass[r.category] || ""}">${categoryLabel[r.category] || escHtml(r.category || "—")}</td>
-            </tr>`).join("")}</tbody>
+            </tr>`;
+          }).join("")}</tbody>
         </table>`;
-      btn.textContent = "✓ 查詢完畢";
     }
   } catch (err) {
     resultEl.innerHTML = `<p class='no-holders-hint' style="color:#dc2626">查詢失敗：${escHtml(err.message)}</p>`;
-    btn.disabled = false;
-    btn.textContent = "🔍 查找公發公司持股";
   }
 }
 
