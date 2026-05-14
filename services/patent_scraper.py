@@ -6,12 +6,15 @@ reproducible with Python — no browser automation needed.
 """
 
 import asyncio
+import logging
 import random
 import re
 from datetime import date
 
 import httpx
 from bs4 import BeautifulSoup
+
+log = logging.getLogger(__name__)
 
 _BASE = "https://tiponet.tipo.gov.tw"
 _PATH = "/twpat1/twpatc/twpatkm"
@@ -192,26 +195,35 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
         all_patents: dict[str, dict] = {p["patent_no"]: p for p in company_patents}
         inventors_found: set[str] = set()
 
-        # ③ Fetch detail pages for first 15 results
+        # ③ Build detail-link map from the company search results page directly.
+        #    The results page already contains <a href=...>I923838</a> style links —
+        #    no need for a per-patent PN re-search (which breaks due to TIPO session
+        #    pagination state and returns the wrong page).
+        detail_links: dict[str, str] = {}
+        soup_r = BeautifulSoup(r.text, "html.parser")
+        for a in soup_r.find_all("a", href=True):
+            txt = a.get_text(strip=True)
+            if txt and txt[0] in "IMD" and txt[1:].isdigit():
+                detail_links[txt] = _BASE + a["href"]
+
         for i, pat in enumerate(company_patents[:15]):
             await asyncio.sleep(0.4)
+            pno = pat["patent_no"]
+            href = detail_links.get(pno)
+            if not href:
+                log.warning("detail link not found for %s", pno)
+                await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pno}"})
+                continue
             try:
-                r2 = await client.post(action, data={**base, "_5_5_T": f"PN=({pat['patent_no']})", "BUTTON": "檢索"})
-                soup2 = BeautifulSoup(r2.text, "html.parser")
-                detail_a = soup2.find("a", string=lambda t: t and t.strip() == pat["patent_no"])
-                if detail_a and detail_a.get("href"):
-                    r3 = await client.get(_BASE + detail_a["href"])
-                    det = _parse_detail(r3.text)
-                    pat["applicant"] = det["applicant"]
-                    pat["inventors"] = det["inventors"]
-                    pat["brief"]     = det["brief"]
-                    inventors_found.update(det["inventors"])
-                new_action, new_base = _get_form(r2.text)
-                if new_action:
-                    action, base = new_action, new_base
-            except Exception:
-                pass
-            await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pat['patent_no']}"})
+                r3 = await client.get(href)
+                det = _parse_detail(r3.text)
+                pat["applicant"] = det["applicant"]
+                pat["inventors"] = det["inventors"]
+                pat["brief"]     = det["brief"]
+                inventors_found.update(det["inventors"])
+            except Exception as exc:
+                log.warning("detail fetch failed for %s: %s", pno, exc)
+            await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pno}"})
 
         # ④ Inventor reverse-search
         await asyncio.sleep(0.5)
