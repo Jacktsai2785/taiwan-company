@@ -248,7 +248,7 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
                 info = title_info.get(title)
                 if info is None:
                     # Try a loose match: Claude may have lightly rephrased a title
-                    for cached_title, cached_info in title_info.items():
+                    for cached_title, cached_info in top_titles:
                         if title in cached_title or cached_title in title:
                             info = cached_info
                             title = cached_title
