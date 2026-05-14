@@ -1,61 +1,68 @@
-.PHONY: setup start start-bg stop logs enable disable status
+.PHONY: setup start start-bg stop restart logs enable disable status
 
-PID_FILE := /tmp/taiwan-company.pid
-LOG_FILE := /tmp/taiwan-company.log
+SERVICE := taiwan-company.service
+LOG_FILE := /home/jacktsai/taiwan-company/logs/app.log
 
 setup:
 	@echo "── 建立 Python 虛擬環境 ──"
 	uv venv
 	@echo "── 安裝套件 ──"
 	uv pip install -r requirements.txt
-	@mkdir -p data
+	@mkdir -p data logs
 	@echo ""
-	@echo "✅ 環境建立完成，執行 make start 啟動"
+	@echo "✅ 環境建立完成，執行 make start-bg 啟動（或 make start 跑 hot-reload）"
 
+# ── 前景 dev hot-reload ────────────────────────────────────────────────────────
+# 自動暫停 systemd 避免搶 port 8003。Ctrl+C 結束後 systemd 會在 5s 內自動重啟回 production code。
 start:
-	@echo "── 啟動台灣產業商情平台（http://localhost:8000）──"
-	.venv/bin/uvicorn main:app --reload --host 127.0.0.1 --port 8000
-
-start-bg:
-	@if [ -f "$(PID_FILE)" ] && kill -0 "$$(cat $(PID_FILE))" 2>/dev/null; then \
-		echo "⚠ 已在背景執行 (PID $$(cat $(PID_FILE)))，先 make stop 再啟動"; \
-		exit 1; \
+	@if systemctl --user is-active --quiet $(SERVICE); then \
+		echo "⏸  暫停 systemd service（避免搶 port 8003，Ctrl+C 結束後它會自動回來）"; \
+		systemctl --user stop $(SERVICE); \
 	fi
-	@echo "── 背景啟動（log: $(LOG_FILE)）──"
-	@nohup .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 \
-		> $(LOG_FILE) 2>&1 & echo $$! > $(PID_FILE)
-	@sleep 1
-	@if kill -0 "$$(cat $(PID_FILE))" 2>/dev/null; then \
-		echo "✅ 已啟動 (PID $$(cat $(PID_FILE)))，瀏覽 http://localhost:8000"; \
-		echo "   make logs 看日誌 / make stop 停止"; \
+	@echo "── 啟動台灣產業商情平台（http://localhost:8003，hot reload）──"
+	.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8003
+
+# ── systemd 背景模式（生產建議用法）────────────────────────────────────────────
+start-bg:
+	@systemctl --user start $(SERVICE)
+	@sleep 2
+	@if systemctl --user is-active --quiet $(SERVICE); then \
+		PID=$$(systemctl --user show -p MainPID --value $(SERVICE)); \
+		echo "✅ 已啟動 (PID $$PID)，瀏覽 http://localhost:8003"; \
+		echo "   make logs 看日誌 / make stop 停止 / make restart 套新 code"; \
 	else \
-		echo "❌ 啟動失敗，請查看 $(LOG_FILE)"; \
-		rm -f $(PID_FILE); \
+		echo "❌ 啟動失敗，systemctl --user status $(SERVICE) 看詳情"; \
 		exit 1; \
 	fi
 
 stop:
-	@if [ -f "$(PID_FILE)" ]; then \
-		PID=$$(cat $(PID_FILE)); \
-		if kill -0 "$$PID" 2>/dev/null; then \
-			kill "$$PID" && echo "✅ 已停止 (PID $$PID)"; \
-		else \
-			echo "ℹ PID $$PID 已不存在"; \
-		fi; \
-		rm -f $(PID_FILE); \
+	@if systemctl --user is-active --quiet $(SERVICE); then \
+		systemctl --user stop $(SERVICE) && echo "✅ 已停止"; \
 	else \
-		pkill -f "uvicorn main:app" && echo "✅ 已停止（透過 pkill）" || echo "ℹ 沒有執行中的 server"; \
+		echo "ℹ service 未在執行"; \
+	fi
+
+# ── 套用新 code（commit 後執行）────────────────────────────────────────────────
+restart:
+	@systemctl --user restart $(SERVICE)
+	@sleep 2
+	@if systemctl --user is-active --quiet $(SERVICE); then \
+		PID=$$(systemctl --user show -p MainPID --value $(SERVICE)); \
+		echo "✅ 已重啟 (PID $$PID)"; \
+	else \
+		echo "❌ 重啟失敗，systemctl --user status $(SERVICE) 看詳情"; \
+		exit 1; \
 	fi
 
 logs:
-	@tail -n 80 -f $(LOG_FILE)
+	@tail -n 80 -F $(LOG_FILE)
 
 # ── systemd user service 管理 ──────────────────────────────────────────────────
 enable:
-	@systemctl --user enable taiwan-company.service && echo "✅ 已設為開機自啟"
+	@systemctl --user enable $(SERVICE) && echo "✅ 已設為開機自啟"
 
 disable:
-	@systemctl --user disable taiwan-company.service && echo "⚠ 已取消開機自啟"
+	@systemctl --user disable $(SERVICE) && echo "⚠ 已取消開機自啟"
 
 status:
-	@systemctl --user status taiwan-company.service --no-pager
+	@systemctl --user status $(SERVICE) --no-pager
