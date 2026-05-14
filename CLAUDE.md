@@ -44,6 +44,85 @@ make stop      # 停止背景 server
 make logs      # 追蹤背景 server 的日誌（/tmp/taiwan-company.log）
 ```
 
+## 對外文件（`docs/`）
+
+本專案的對外知識集中在 `docs/`，給其他 agent 與知識庫引用。改 source 之後，請同步更新對應的 docs 頁。
+
+| 頁 | 內容 |
+|---|---|
+| `docs/index.md` | 平台一句話 + 模組總覽 |
+| `docs/architecture.md` | 後端 / 前端 / 部署架構 |
+| `docs/data-flow.md` | 公司資料的生命週期 + companies.json schema |
+| `docs/ai-features.md` | AI 用在哪、雙模式邏輯、provider 切換 |
+| `docs/integration.md` | 與 mops_investee / GCIS / TWSE 的串接 |
+| `docs/glossary.md` | 業務 + 技術術語表 |
+
+**docs 風格**：每頁 200-500 字、frontmatter 統一格式（含 `status` / `last_updated` / `source_repo`）、不用 emoji、不確定的標 `_TODO_`。
+
+## 被 jk_nb 引用
+
+本 repo 的 `docs/` 被 Jack 的個人 wiki（`~/jk_nb/`）以 symlink 方式引用：
+
+```
+~/jk_nb/wiki/_external/taiwan-company/ → ~/taiwan-company/docs/
+```
+
+實作後果：
+
+- `docs/*.md` 的**檔名**與**內部 anchor** 一旦穩定就不要隨便改（會打破 jk_nb 的 `[[_external/taiwan-company/...]]` 引用）
+- 要拆 / 改 docs 結構前，請先 grep 一下 `~/jk_nb/wiki/` 有沒有引到舊檔名
+- 對外 docs 是「**living**」狀態——會跟著程式碼演進但保持穩定的篇目骨架
+
+## 設計鐵則 / 不要做的事
+
+寫過幾次差點走偏的方向，明文禁止以下（除非使用者主動要求）：
+
+- **不要加資料庫**。所有資料 JSON 落地。如果效能不夠，先想 indexing / cache，最後才考慮 DB。
+- **不要加認證**。本平台預設單人單機，CORS `*`。要加 auth 是大改動，請先討論。
+- **不要加前端框架**（React / Vue 之類）。`static/app.js` 是純 JS，刻意保持「打開就能改」。
+- **不要在 service 層直接依賴外部 DB**。需要 MOPS 資料時，走 `mops_investee_client` 之類的 HTTP client，符合使用者「禁止直連 PostgreSQL」全域指令。
+- **不要把 API Key 寫進 source**。BYOK 流程已經建好，使用者透過 UI 帶 header。
+- **不要刪 `companies.json` 的欄位**（或重新命名）。前端 + AI 抽取流程都依賴現有 schema，加欄位 OK，刪欄位需先檢查所有讀取點。
+
+## 常見任務速查
+
+| 任務 | 該改哪 |
+|---|---|
+| 加新的 AI provider | `services/claude_client.py`（加 `_ask_xxx` + `ask` 分支） |
+| 加新的公司資料來源 | `services/gcis_client.py` 或新開一個 client |
+| 改 call memo 範本 | `data/call_memo_template.docx`（DOCX 直接改） |
+| 加新的 enrich 步驟 | `routers/companies.py` 的 `_enrich_company` / `_deep_enrich_company` |
+| 改前端 | `static/app.js`（單檔較大，用 Ctrl+F） |
+| 加新產業同義詞 | UI 設定面板 → 走 `industry_keywords.json` 流程；hardcoded 在 `services/news_fetcher.py` `_INDUSTRY_SYNONYMS` |
+
+## systemd user service（開機自啟 + crash 自動重啟）
+
+前後端統一由一個 FastAPI process 服務，已設定為 systemd user service：
+
+```bash
+# 查看狀態
+make status                            # 或 systemctl --user status taiwan-company
+
+# 啟動 / 停止 / 重啟
+systemctl --user start taiwan-company
+systemctl --user stop taiwan-company
+systemctl --user restart taiwan-company
+
+# 開機自啟 (已預設 enable)
+make enable    # 設為開機自啟
+make disable   # 取消開機自啟
+
+# 查看 service log
+journalctl --user -u taiwan-company -f
+# 或查看 append log 檔案
+tail -f /home/jacktsai/taiwan-company/logs/app.log
+tail -f /home/jacktsai/taiwan-company/logs/app-error.log
+```
+
+Service 檔案位置：`~/.config/systemd/user/taiwan-company.service`
+- `Restart=always`：crash 後 5 秒自動重啟
+- `WantedBy=default.target`：使用者登入後即自動啟動
+
 ## 注意事項
 
 - `data/companies.json` 和 `data/config.json` 不在 git 追蹤範圍，每台裝置獨立儲存
