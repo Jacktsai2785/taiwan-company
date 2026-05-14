@@ -264,8 +264,10 @@ def _find_cli() -> str:
                 if candidate.exists():
                     return str(candidate)
     gstack_nm = Path.home() / ".claude" / "skills" / "gstack" / "node_modules"
-    for candidate in gstack_nm.rglob("claude.exe"):
-        return str(candidate)
+    for name in ("claude.exe", "claude"):
+        for candidate in gstack_nm.rglob(name):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
     raise FileNotFoundError(
         "找不到 Claude CLI。請設定 API Key 或安裝 Claude Desktop。"
     )
