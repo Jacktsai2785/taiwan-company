@@ -89,6 +89,67 @@ def _fmt_capital(n) -> str:
     return f"NT$ {int(n):,} 元" if n else "—"
 
 
+def _basic_info_rows(company: dict) -> list[tuple[str, str]]:
+    """Ordered (label, value) pairs matching the modal's 基本資料 section."""
+    par = company.get("par_value")
+    no_par = company.get("no_par_value")
+    par_str = f"NT$ {par} 元" if par else ("無票面金額" if no_par else "—")
+
+    ts = company.get("total_shares")
+    shares_str = f"{int(ts):,} 股（{int(ts) // 1000:,} 張）" if ts else "—"
+
+    rows: list[tuple[str, str]] = [
+        ("統一編號",   company.get("tax_id") or "—"),
+        ("公司代表人", company.get("representative") or "—"),
+        ("資本總額",   _fmt_capital(company.get("authorized_capital"))),
+        ("實收資本額", _fmt_capital(company.get("capital"))),
+        ("每股金額",   par_str),
+        ("股份總數",   shares_str),
+        ("公司所在地", company.get("address") or "—"),
+        ("設立日期",   company.get("setup_date") or "—"),
+        ("產業別",     company.get("industry") or "—"),
+    ]
+    if company.get("website"):
+        rows.append(("官方網站", company.get("website")))
+    return rows
+
+
+def _dir_table_rows(directors: list[dict]) -> tuple[list[list[str]], bool]:
+    """
+    Returns (all_rows, has_shares).
+    all_rows = [header_row, *data_rows, total_row].
+    """
+    has_shares = any(d.get("shares") for d in directors)
+    header = ["職稱", "姓名", "所代表法人"]
+    if has_shares:
+        header.append("持股數")
+    header.append("持股比例")
+
+    total_shares, total_ratio, has_ratio = 0, 0.0, False
+    data: list[list[str]] = []
+    for d in directors:
+        ratio = d.get("ratio")
+        ratio_str = f"{ratio * 100:.2f}%" if ratio is not None else "—"
+        if ratio is not None:
+            total_ratio += ratio
+            has_ratio = True
+        sv = d.get("shares")
+        if sv:
+            total_shares += sv
+        row = [d.get("title") or "—", d.get("name") or "—", d.get("representative_of") or "—"]
+        if has_shares:
+            row.append(f"{int(sv):,}" if sv else "—")
+        row.append(ratio_str)
+        data.append(row)
+
+    total_row = ["合計", "", ""]
+    if has_shares:
+        total_row.append(f"{total_shares:,}" if total_shares else "—")
+    total_row.append(f"{total_ratio * 100:.2f}%" if has_ratio else "—")
+
+    return [header] + data + [total_row], has_shares
+
+
 # ── DOCX width helpers ────────────────────────────────────────────────────────
 
 def _docx_est_pt(text: str, size_pt: float = 9) -> float:
@@ -401,15 +462,7 @@ def build_docx(company: dict) -> bytes:
     info_tbl.columns[0].width = Inches(1.4)
     info_tbl.columns[1].width = Inches(4.2)
 
-    for label, value in [
-        ("統一編號",   company.get("tax_id") or "—"),
-        ("公司代表人", company.get("representative") or "—"),
-        ("資本總額",   _fmt_capital(company.get("authorized_capital"))),
-        ("實收資本額", _fmt_capital(company.get("capital"))),
-        ("公司所在地", company.get("address") or "—"),
-        ("設立日期",   company.get("setup_date") or "—"),
-        ("產業別",     company.get("industry") or "—"),
-    ]:
+    for label, value in _basic_info_rows(company):
         row = info_tbl.add_row()
         lc, vc = row.cells
         _cell_margins(lc, top=30, bottom=30, left=0, right=60)
@@ -434,33 +487,30 @@ def build_docx(company: dict) -> bytes:
         _docx_section_heading(doc, "董監事名單")
 
         CONTENT_PT = 468  # 6.5 in × 72 pt
-        dir_rows = [["職稱", "姓名", "所代表法人", "持股比例"]]
-        for d in directors:
-            ratio = f"{d['ratio']*100:.2f}%" if d.get("ratio") is not None else "—"
-            dir_rows.append([
-                d.get("title") or "—",
-                d.get("name") or "—",
-                d.get("representative_of") or "—",
-                ratio,
-            ])
-        cws = _docx_auto_cols(dir_rows, 9, CONTENT_PT)
+        dir_rows, _ = _dir_table_rows(directors)
+        n_cols = len(dir_rows[0])
+        cws = _docx_auto_cols(dir_rows[:-1], 9, CONTENT_PT)  # exclude total row from width calc
 
-        dt = doc.add_table(rows=1, cols=4)
+        dt = doc.add_table(rows=1, cols=n_cols)
         dt.style = "Table Grid"
         hdr_row = dt.rows[0]
-        for cell, txt, cw in zip(hdr_row.cells, dir_rows[0], cws):
+        for cell, txt_val, cw in zip(hdr_row.cells, dir_rows[0], cws):
             cell.width = cw
             _shading(cell, "edf4fb")
             _cell_margins(cell, top=50, bottom=50, left=80, right=80)
             cell.paragraphs[0].clear()
-            r = cell.paragraphs[0].add_run(txt)
+            r = cell.paragraphs[0].add_run(txt_val)
             r.bold = True
             r.font.size = Pt(9)
             r.font.color.rgb = _R.ACCENT
 
         for idx, vals in enumerate(dir_rows[1:]):
+            is_total = idx == len(dir_rows) - 2
             row = dt.add_row()
-            if idx % 2 == 1:
+            if is_total:
+                for cell in row.cells:
+                    _shading(cell, "edf4fb")
+            elif idx % 2 == 1:
                 for cell in row.cells:
                     _shading(cell, "f7fafd")
             for cell, val, cw in zip(row.cells, vals, cws):
@@ -469,7 +519,8 @@ def build_docx(company: dict) -> bytes:
                 cell.paragraphs[0].clear()
                 r = cell.paragraphs[0].add_run(val)
                 r.font.size = Pt(9)
-                r.font.color.rgb = _R.TEXT
+                r.font.color.rgb = _R.ACCENT if is_total else _R.TEXT
+                r.bold = is_total
 
         doc.add_paragraph()
 
@@ -764,15 +815,7 @@ def build_pdf(company: dict) -> bytes:
     COL1     = 88
     VAL_MAXW = CW - COL1
 
-    for label, value in [
-        ("統一編號",   company.get("tax_id") or "—"),
-        ("公司代表人", company.get("representative") or "—"),
-        ("資本總額",   _fmt_capital(company.get("authorized_capital"))),
-        ("實收資本額", _fmt_capital(company.get("capital"))),
-        ("公司所在地", company.get("address") or "—"),
-        ("設立日期",   company.get("setup_date") or "—"),
-        ("產業別",     company.get("industry") or "—"),
-    ]:
+    for label, value in _basic_info_rows(company):
         val_lines = _wrap_mixed(value, 9, VAL_MAXW)
         row_h     = max(16, len(val_lines) * 12 + 4)
         _need_space(row_h)
@@ -786,17 +829,23 @@ def build_pdf(company: dict) -> bytes:
     directors = company.get("directors") or []
     if directors:
         section_heading("董監事名單")
-        rows = [["職稱", "姓名", "所代表法人", "持股比例"]]
-        for d in directors:
-            ratio = f"{d['ratio']*100:.2f}%" if d.get("ratio") is not None else "—"
-            rows.append([
-                d.get("title") or "—",
-                d.get("name") or "—",
-                d.get("representative_of") or "—",
-                ratio,
-            ])
-        col_widths = _auto_col_widths(rows, 8.5, CW)
-        pdf_table(rows, col_widths)
+        dir_rows, _ = _dir_table_rows(directors)
+        col_widths = _auto_col_widths(dir_rows[:-1], 8.5, CW)  # exclude total from width calc
+        pdf_table(dir_rows[:-1], col_widths)
+
+        # Total row — accent-light background, bold accent text
+        total = dir_rows[-1]
+        n_cols = len(col_widths)
+        total_h = 20.0
+        total_w = sum(col_widths)
+        _need_space(total_h)
+        filled_rect(ML, y, ML + total_w, y + total_h, _F.ACCENT_LIGHT)
+        cx = ML
+        for ci, val in enumerate(total[:n_cols]):
+            txt(val, cx + 5, y + total_h - 6, size=8.5, color=_F.ACCENT)
+            cx += col_widths[ci]
+        hline(y + total_h, x0=ML, x1=ML + total_w, color=_F.BORDER, w=0.4)
+        y += total_h + 6
 
     # ── Summary ───────────────────────────────────────────────────────────────
     summary_raw = company.get("summary", "")

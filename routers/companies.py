@@ -463,7 +463,7 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
         result = await asyncio.to_thread(
             claude_client.ask,
             prompt, 60, ["WebSearch"],
-            ai.get("api_key", ""), ai.get("provider", "anthropic"), 3,
+            ai.get("api_key", ""), ai.get("provider", "anthropic"), 6,
         )
         url = result.strip().split("\n")[0].strip()
         if not url.startswith("http"):

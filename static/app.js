@@ -2114,15 +2114,34 @@ function _showWebsitePrompt(companyId) {
     const skipBtn    = document.getElementById("website-prompt-skip");
     const confirmBtn = document.getElementById("website-prompt-confirm");
     const hintEl     = document.getElementById("website-prompt-hint");
+    const progressEl   = document.getElementById("website-prompt-progress");
+    const progressFill = document.getElementById("website-prompt-progress-fill");
+    const progressPctEl= document.getElementById("website-prompt-progress-pct");
 
     nameEl.textContent = c?.name || "";
     if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
     overlay.classList.add("open");
 
     let dotTimer = null;
+    let progressTimer = null;
+    let progressPct = 0;
+
+    const _setProgress = (pct) => {
+      progressPct = pct;
+      const r = Math.round(pct);
+      if (progressFill)  progressFill.style.width = r + "%";
+      if (progressPctEl) progressPctEl.textContent = r + "%";
+    };
 
     const close = (website) => {
       clearInterval(dotTimer);
+      clearInterval(progressTimer);
+      input.classList.remove("searching");
+      if (progressEl) {
+        progressEl.classList.remove("active");
+        _setProgress(0);
+      }
+      if (hintEl) hintEl.classList.remove("searching");
       overlay.classList.remove("open");
       skipBtn.onclick = null;
       confirmBtn.onclick = null;
@@ -2141,19 +2160,42 @@ function _showWebsitePrompt(companyId) {
       input.placeholder = "https://example.com";
       setTimeout(() => input.focus(), 50);
     } else {
-      // 搜尋期間：input 與確認按鈕均 disabled，動態省略號告知使用者等待中
+      // 搜尋期間：input 與確認按鈕均 disabled，shimmer 動畫 + 動態省略號告知使用者等待中
+      input.value = "";
       input.value = "";
       input.disabled = true;
       confirmBtn.disabled = true;
-      if (hintEl) hintEl.textContent = "AI 正在自動搜尋官網，請耐心等候，搜尋完成前請勿按下按鈕…";
+      input.placeholder = "搜尋中…";
+      if (progressEl) { _setProgress(0); progressEl.classList.add("active"); }
+      if (hintEl) {
+        hintEl.textContent = "AI 正在自動搜尋官網，請稍候片刻…";
+        hintEl.classList.add("searching");
+      }
 
-      const dotFrames = [".", "..", "..."];
-      let dotIdx = 0;
-      input.placeholder = "搜尋中.";
-      dotTimer = setInterval(() => {
-        dotIdx = (dotIdx + 1) % 3;
-        input.placeholder = `搜尋中${dotFrames[dotIdx]}`;
-      }, 500);
+      // 模擬進度：每 400ms 往 85% 慢速逼近，讓使用者感受到搜尋需要時間
+      // 約 10s → 46%，20s → 71%，30s → 81%，不會快速衝到頂
+      _setProgress(0);
+      progressTimer = setInterval(() => {
+        _setProgress(progressPct + (85 - progressPct) * 0.025);
+      }, 400);
+
+      const _endSearchingUi = () => {
+        clearInterval(dotTimer);
+        clearInterval(progressTimer);
+        dotTimer = null;
+        progressTimer = null;
+        // 進度跳到 100%，短暫停留後隱藏
+        _setProgress(100);
+        setTimeout(() => {
+          if (progressEl) progressEl.classList.remove("active");
+          _setProgress(0);
+        }, 450);
+        input.classList.remove("searching");
+        if (hintEl) hintEl.classList.remove("searching");
+        input.disabled = false;
+        confirmBtn.disabled = false;
+        input.placeholder = "https://example.com";
+      };
 
       const key = getAiKey();
       const findUrl = `/api/companies/${companyId}/find-website` +
@@ -2161,28 +2203,19 @@ function _showWebsitePrompt(companyId) {
       fetch(findUrl)
         .then(r => r.json())
         .then(data => {
-          clearInterval(dotTimer);
-          dotTimer = null;
-          if (!overlay.classList.contains("open")) return;
-          input.disabled = false;
-          confirmBtn.disabled = false;
+          if (!overlay.classList.contains("open")) { _endSearchingUi(); return; }
+          _endSearchingUi();
           if (data.website) {
             input.value = data.website;
-            input.placeholder = "https://example.com";
             if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
           } else {
-            input.placeholder = "https://example.com";
             if (hintEl) hintEl.textContent = "找不到官網，若您知道請手動填入（或留空略過）。";
           }
           input.focus();
         })
         .catch(() => {
-          clearInterval(dotTimer);
-          dotTimer = null;
-          if (!overlay.classList.contains("open")) return;
-          input.disabled = false;
-          confirmBtn.disabled = false;
-          input.placeholder = "https://example.com";
+          if (!overlay.classList.contains("open")) { _endSearchingUi(); return; }
+          _endSearchingUi();
           if (hintEl) hintEl.textContent = "搜尋失敗，若您知道官網請手動填入（或留空略過）。";
           input.focus();
         });
