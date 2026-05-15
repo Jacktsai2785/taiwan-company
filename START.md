@@ -16,12 +16,12 @@ tail -f /home/jacktsai/taiwan-company/logs/app.log
 journalctl --user -u taiwan-company -f
 ```
 
-開啟瀏覽器：http://localhost:8000
+開啟瀏覽器：http://localhost:8003
 
 ## 驗證有沒有跑起來
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/health
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8003/health
 # 回 200 就 OK
 ```
 

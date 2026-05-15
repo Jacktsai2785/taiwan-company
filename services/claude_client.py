@@ -280,15 +280,16 @@ def _cli() -> str:
     return _CLI_PATH
 
 
-def _ask_cli(prompt: str, timeout: int = 120, allowed_tools: list[str] | None = None) -> str:
-    cmd = [_cli(), "-p", prompt, "--output-format", "text"]
+def _ask_cli(prompt: str, timeout: int = 120, allowed_tools: list[str] | None = None, max_turns: int = 20) -> str:
+    cmd = [_cli(), "-p", prompt, "--output-format", "text", "--max-turns", str(max_turns)]
     if allowed_tools:
         cmd += ["--allowedTools", ",".join(allowed_tools)]
     result = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
     stdout = result.stdout.decode("utf-8", errors="replace").strip()
+    stderr = result.stderr.decode("utf-8", errors="replace").strip()
     if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace")
-        raise RuntimeError(f"Claude CLI 錯誤 (exit {result.returncode}):\n{stderr[:400]}")
+        detail = stderr or stdout  # CLI often puts rate-limit messages in stdout
+        raise RuntimeError(f"Claude CLI 錯誤 (exit {result.returncode}):\n{detail[:400]}")
     if stdout.lower().startswith("execution error") or stdout.lower() == "error":
         raise RuntimeError(f"Claude CLI 執行錯誤：{stdout[:200]}")
     return stdout
@@ -342,12 +343,13 @@ def ask(
     allowed_tools: list[str] | None = None,
     api_key: str = "",
     provider: str = "anthropic",
+    max_turns: int = 20,
 ) -> str:
     if not api_key:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         provider = "anthropic"
     if not api_key:
-        return _try_local_cli(lambda: _ask_cli(prompt, timeout, allowed_tools))
+        return _try_local_cli(lambda: _ask_cli(prompt, timeout, allowed_tools, max_turns))
     if provider == "openai":
         return _ask_openai(prompt, allowed_tools, api_key)
     if provider == "gemini":

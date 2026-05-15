@@ -186,12 +186,13 @@ async def suggest_industries_for_companies(
         name = c.get("name", "")
         blurb = (c.get("blurb") or "").strip()
         summary = (c.get("summary") or "").strip()
-        excerpt = summary[:400].replace("\n", " ")
         parts = [f'{c["id"]}: {name}']
         if blurb:
+            # blurb is ≤10 chars and sufficient for classification
             parts.append(f"一句話：{blurb}")
-        if excerpt:
-            parts.append(f"摘要：{excerpt}")
+        elif summary:
+            # fallback: only the first 100 chars to keep prompt compact
+            parts.append(f"摘要：{summary[:100].replace(chr(10), ' ')}")
         lines.append(" | ".join(parts))
 
     industry_list = "\n".join(f"- {i}" for i in industries)
@@ -208,7 +209,7 @@ async def suggest_industries_for_companies(
     valid_ids = {c["id"] for c in companies}
     valid_inds = set(industries)
     try:
-        raw = await asyncio.to_thread(claude_client.ask, prompt, 120, None, api_key, provider)
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, api_key, provider)
         log.info("Industry classify raw: %s", raw[:300])
         start = raw.find("{")
         end = raw.rfind("}")

@@ -12,7 +12,7 @@ from . import claude_client
 
 log = logging.getLogger("report_generator")
 
-_CLAUDE_LOCK = asyncio.Semaphore(5)
+_CLAUDE_LOCK = asyncio.Semaphore(1)  # CLI mode: serialize to avoid concurrent session limit
 
 _CORP_SUFFIXES = ("股份有限公司", "有限公司")
 
@@ -52,6 +52,7 @@ def _build_prompt(company: dict) -> str:
     directors  = company.get("directors", [])
     setup_date = company.get("setup_date", "")
     last_change = company.get("last_change_date", "")
+    website    = (company.get("website") or "").strip()
 
     capital_str      = f"NT$ {capital:,}" if capital else "不詳"
     auth_capital_str = f"NT$ {auth_cap:,}" if auth_cap else "不詳"
@@ -71,6 +72,20 @@ def _build_prompt(company: dict) -> str:
             f"搜尋時亦請嘗試「{short_name}有限公司」以找到使用舊名的網頁或媒體報導。"
         )
 
+    if website:
+        base = website.rstrip("/")
+        step1 = f"步驟 1：直接用 WebFetch 讀取已知官網 {base}（首頁），取得具體服務項目、目標客戶、技術說明。"
+        step2 = f"步驟 2：若首頁資訊不足，繼續用 WebFetch 讀取 {base}/about 或 {base}/products 等子頁補充細節。"
+    else:
+        step1 = (
+            f"步驟 1：用 WebSearch 搜尋「{full_name}」的官方網站與公司介紹。\n"
+            f"        若無明確結果，改搜「{short_name} 公司 官網」或「{short_name} Taiwan」。{name_change_hint}"
+        )
+        step2 = (
+            f"步驟 2：若步驟 1 找到官網 URL，用 WebFetch 讀取該網站首頁（或 /about、/products、/service 等子頁），\n"
+            f"        取得具體服務項目、目標客戶、技術說明。"
+        )
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人，正對以下公司進行初步盡職調查（Due Diligence）。
 
 【基本資料】
@@ -88,11 +103,9 @@ def _build_prompt(company: dict) -> str:
 【任務】
 請依序執行以下所有搜尋步驟，每步都要執行，找不到結果時繼續往下，不要中途停止：
 
-步驟 1：用 WebSearch 搜尋「{full_name}」的官方網站與公司介紹。
-        若無明確結果，改搜「{short_name} 公司 官網」或「{short_name} Taiwan」。{name_change_hint}
+{step1}
 
-步驟 2：若步驟 1 找到官網 URL，用 WebFetch 讀取該網站首頁（或 /about、/products、/service 等子頁），
-        取得具體服務項目、目標客戶、技術說明。
+{step2}
 
 步驟 3：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
@@ -129,16 +142,22 @@ def _build_prompt(company: dict) -> str:
 def _build_deep_prompt(company: dict) -> str:
     name = company.get("name", "")
     existing = (company.get("summary") or "").strip()
+    website  = (company.get("website") or "").strip()
 
     short_name, full_name = _company_name_variants(name)
 
-    base = f"以下是「{full_name}」的初步投資備忘錄（基於官網資料生成）：\n\n{existing}\n\n---\n\n" if existing else ""
+    base = f"以下是「{full_name}」的初步投資備忘錄：\n\n{existing}\n\n---\n\n" if existing else ""
+
+    website_step = (
+        f"步驟 0：先用 WebFetch 讀取官網 {website}（首頁與 /about、/products 等子頁），"
+        f"確認初步備忘錄的業務描述是否正確，有誤則依官網內容修正。\n\n"
+    ) if website else ""
 
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
 
 {base}請執行深度補充搜尋，並據此修訂備忘錄：
 
-步驟 1：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
+{website_step}步驟 1：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
 
 步驟 2：若找到相關資訊，用 WebFetch 讀取最有參考價值的 1-2 篇文章全文。
@@ -158,7 +177,7 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
-                claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider
+                claude_client.ask, prompt, 300, _WEB_TOOLS, api_key, provider, 15
             )
             summary, blurb = _split_blurb(raw)
             if not blurb and len(summary.strip()) > 100:
@@ -182,7 +201,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
             try:
                 log.info("Generating DD memo for %s (attempt %d)", name, attempt + 1)
                 raw = await asyncio.to_thread(
-                    claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider
+                    claude_client.ask, prompt, 240, _WEB_TOOLS, api_key, provider, 12
                 )
                 summary, blurb = _split_blurb(raw)
 
@@ -228,11 +247,16 @@ def _split_blurb(raw: str) -> tuple[str, str]:
     """Extract [blurb: ...] from output; strip trailing Sources section; return (summary, blurb)."""
     import re
 
+    cleaned = raw.strip()
+
+    # Strip Claude status preamble before the first ## heading (e.g. "資料已蒐集完畢，開始撰寫投資備忘錄。\n\n---\n\n")
+    cleaned = re.sub(r'^(?!#+\s).*\n+[-—]{3,}\n+', '', cleaned, count=1)
+
     # Remove any trailing Sources/References block Claude sometimes appends
     cleaned = re.sub(
         r'\n+(?:Sources?|References?|來源|參考資料)\s*:?.*$',
         '',
-        raw.strip(),
+        cleaned,
         flags=re.DOTALL | re.IGNORECASE,
     ).rstrip()
 

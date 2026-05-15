@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234f46e5'/%3E%3Ctext x='32' y='44' font-size='40' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3E台%3C/text%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/style.css?v=64" />
+  <link rel="stylesheet" href="/static/style.css?v=68" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
@@ -45,6 +45,7 @@
       </div>
       <h2 id="toolbar-title"></h2>
       <input type="search" id="search-box" placeholder="搜尋公司名稱…" autocomplete="off" />
+      <button id="bulk-enrich-btn" class="sort-btn" onclick="openBulkEnrichDialog()" title="批次補齊 / 重新生成此清單的公司資料">✨ 批次生成</button>
       <div id="sort-group">
         <button class="sort-btn active" data-sort="capital">資本額 ▼</button>
         <button class="sort-btn" data-sort="name">A → Z</button>
@@ -87,7 +88,10 @@
     <div id="modal-body">
 
       <div class="modal-section">
-        <h4>基本資料</h4>
+        <div class="section-header-row">
+          <h4>基本資料</h4>
+          <button class="gcis-refresh-btn" onclick="refreshGcis()" title="重新從政府 API 拉取基本資料">🔃 更新</button>
+        </div>
         <div class="info-grid" id="modal-info"></div>
       </div>
 
@@ -114,8 +118,8 @@
               ✦ 生成 <span class="gen-caret">▾</span>
             </button>
             <div class="gen-dropdown-menu" id="gen-dropdown-menu">
-              <button onclick="regenSummary(); closeGenDropdown()">🔄 重新生成<span class="gen-hint">約 30–60 秒</span></button>
-              <button onclick="deepEnrich(); closeGenDropdown()">🔍 深度生成<span class="gen-hint">約 60–120 秒</span></button>
+              <button onclick="regenSummary(); closeGenDropdown()">🔄 重新生成<span class="gen-hint">約 2–4 分鐘</span></button>
+              <button onclick="deepEnrich(); closeGenDropdown()">🔍 深度生成<span class="gen-hint">約 3–5 分鐘</span></button>
               <div class="gen-divider"></div>
               <button onclick="patentGen(); closeGenDropdown()">📋 專利生成<span class="gen-hint">約 15–45 秒</span></button>
             </div>
@@ -170,7 +174,7 @@
   <div id="from-graph-dialog">
     <div id="from-graph-header">
       <h3>加入公司列表？</h3>
-      <p>系統將為這家公司建立資料並自動生成簡介（約 30–60 秒）</p>
+      <p>系統將為這家公司建立資料並自動生成簡介（約 2–4 分鐘）</p>
     </div>
     <div id="from-graph-body">
       <div class="from-graph-row"><span>公司名稱</span><strong id="from-graph-name"></strong></div>
@@ -352,6 +356,45 @@
   </div>
 </div>
 
+<!-- ── Bulk Enrich Dialog ── -->
+<div id="bulk-enrich-overlay">
+  <div id="bulk-enrich-dialog">
+    <div id="bulk-enrich-header">
+      <h3>批次生成公司資料</h3>
+      <p id="bulk-enrich-subtitle"></p>
+    </div>
+    <div id="bulk-enrich-body">
+      <div class="bulk-mode-card" id="bulk-mode-resume">
+        <div class="bulk-mode-row">
+          <div class="bulk-mode-info">
+            <div class="bulk-mode-title">補齊未完成</div>
+            <div class="bulk-mode-desc">針對因 session limit、斷網或失敗而中斷的公司，重跑 GCIS 與 AI 簡介。判定條件：缺代表人、缺簡介、或簡介含「尚待補充」。</div>
+          </div>
+          <div class="bulk-mode-count" id="bulk-resume-count">0</div>
+        </div>
+        <button class="btn btn-primary bulk-mode-btn" id="bulk-resume-btn">開始補齊</button>
+      </div>
+      <div class="bulk-mode-card" id="bulk-mode-reenrich">
+        <div class="bulk-mode-row">
+          <div class="bulk-mode-info">
+            <div class="bulk-mode-title">全部重新生成</div>
+            <div class="bulk-mode-desc">將此清單上所有公司全部重跑一次（覆蓋寫入舊資料）。適合更新 GCIS 變動或重新生成簡介。</div>
+          </div>
+          <div class="bulk-mode-count" id="bulk-reenrich-count">0</div>
+        </div>
+        <button class="btn btn-warning bulk-mode-btn" id="bulk-reenrich-btn">全部重跑</button>
+      </div>
+      <details class="bulk-preview-details" id="bulk-preview-details">
+        <summary>預覽範圍內公司清單</summary>
+        <div class="bulk-preview-list" id="bulk-preview-list"></div>
+      </details>
+    </div>
+    <div id="bulk-enrich-footer">
+      <button class="btn btn-ghost" id="bulk-enrich-cancel">關閉</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Batch Continue Dialog ── -->
 <div id="batch-overlay">
   <div id="batch-dialog">
@@ -362,6 +405,42 @@
     <div id="batch-footer">
       <button class="btn btn-ghost" id="batch-cancel">中止</button>
       <button class="btn btn-primary" id="batch-ok">繼續下一批</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── FindBiz 每股金額抓取 Dialog ── -->
+<div id="findbiz-overlay">
+  <div id="findbiz-dialog">
+    <div id="findbiz-header">
+      <h3>抓取每股金額</h3>
+      <p id="findbiz-subtitle">從 findbiz.nat.gov.tw 取得官方每股面額與已發行股份總數</p>
+    </div>
+    <div id="findbiz-body">
+      <div id="findbiz-steps">
+        <div class="findbiz-step" id="findbiz-step-1">
+          <span class="findbiz-step-num">1</span>
+          <span>開啟 Chromium 瀏覽器並導向 findbiz</span>
+          <span class="findbiz-step-status" id="findbiz-s1-status"></span>
+        </div>
+        <div class="findbiz-step" id="findbiz-step-2">
+          <span class="findbiz-step-num">2</span>
+          <span>在瀏覽器中通過 Cloudflare 驗證</span>
+          <span class="findbiz-step-status" id="findbiz-s2-status"></span>
+        </div>
+        <div class="findbiz-step" id="findbiz-step-3">
+          <span class="findbiz-step-num">3</span>
+          <span>自動搜尋並解析公司資料</span>
+          <span class="findbiz-step-status" id="findbiz-s3-status"></span>
+        </div>
+      </div>
+      <div id="findbiz-status-msg"></div>
+    </div>
+    <div id="findbiz-footer">
+      <button class="btn btn-ghost" id="findbiz-close-btn" onclick="closeFindBizDialog()">關閉</button>
+      <button class="btn btn-primary" id="findbiz-confirm-btn" onclick="confirmCloudflare()" style="display:none">
+        ✅ 已通過驗證，繼續
+      </button>
     </div>
   </div>
 </div>
@@ -420,6 +499,40 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=56"></script>
+<!-- ── Website Prompt Dialog (single) ── -->
+<div id="website-prompt-overlay">
+  <div id="website-prompt-dialog">
+    <div id="website-prompt-header">
+      <h3>生成公司簡介</h3>
+      <p id="website-prompt-company-name"></p>
+    </div>
+    <div id="website-prompt-body">
+      <label for="website-prompt-input">官方網站（選填）</label>
+      <input type="url" id="website-prompt-input" placeholder="https://example.com" autocomplete="off" />
+      <p class="website-prompt-hint" id="website-prompt-hint">提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。</p>
+    </div>
+    <div id="website-prompt-footer">
+      <button class="btn btn-ghost" id="website-prompt-skip">略過，直接生成</button>
+      <button class="btn btn-primary" id="website-prompt-confirm">確認並生成</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Batch Website Prompt Dialog ── -->
+<div id="batch-wp-overlay">
+  <div id="batch-wp-dialog">
+    <div id="batch-wp-header">
+      <h3>生成公司簡介</h3>
+      <p>提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網請留空。</p>
+    </div>
+    <div id="batch-wp-body"><!-- 動態填入 --></div>
+    <div id="batch-wp-footer">
+      <button class="btn btn-ghost" id="batch-wp-skip">略過全部，直接生成</button>
+      <button class="btn btn-primary" id="batch-wp-confirm">確認並生成</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=67"></script>
 </body>
 </html>

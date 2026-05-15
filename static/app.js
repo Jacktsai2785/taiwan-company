@@ -952,6 +952,7 @@ async function refreshPanel() {
 /* ── Grid ── */
 function renderGrid() {
   renderIndustryPanel();
+  updateBulkEnrichButtonVisibility();
   const grid = document.getElementById("company-grid");
   const title = document.getElementById("toolbar-title");
 
@@ -1440,6 +1441,39 @@ document.getElementById("sort-group").addEventListener("click", e => {
 });
 
 /* ── Modal ── */
+function _buildModalInfoHTML(c) {
+  const fmt = n => n ? `NT$ ${Number(n).toLocaleString()} 元` : "—";
+  const websiteRow = c.website
+    ? `<span class="info-label">官方網站</span>
+       <span class="info-value"><a href="${escAttr(c.website)}" target="_blank" rel="noopener noreferrer">${escHtml(c.website.replace(/\/$/, ""))}</a></span>`
+    : "";
+  return `
+    <span class="info-label">統一編號</span><span class="info-value">${escHtml(c.tax_id || "—")}</span>
+    <span class="info-label">公司代表人</span><span class="info-value">${escHtml(c.representative || "—")}</span>
+    <span class="info-label">資本總額</span><span class="info-value">${fmt(c.authorized_capital)}</span>
+    <span class="info-label">實收資本額</span><span class="info-value">${fmt(c.capital)}</span>
+    <span class="info-label">每股金額</span><span class="info-value">${
+      c.par_value
+        ? `NT$ ${c.par_value} 元`
+        : c.no_par_value
+          ? `<span class="no-par-badge">無票面金額</span>`
+          : c.is_corp && c.tax_id
+            ? `— <button class="fetch-par-btn" onclick="fetchParValue()" title="從 findbiz 抓取每股金額">🔍 抓取</button>`
+            : "—"
+    }</span>
+    <span class="info-label">股份總數</span><span class="info-value">${c.total_shares ? Number(c.total_shares).toLocaleString() + " 股（" + Math.floor(c.total_shares / 1000).toLocaleString() + " 張）" : "—"}</span>
+    <span class="info-label">公司所在地</span><span class="info-value">${escHtml(c.address || "—")}</span>
+    <span class="info-label">產業別</span>
+    <span class="info-value modal-industry-wrap">
+      <select id="modal-industry-select" onchange="saveModalIndustry()">
+        <option value="">— 未指定 —</option>
+        ${state.industries.map(ind => `<option value="${escHtml(ind)}"${ind === (c.industry || "") ? " selected" : ""}>${escHtml(ind)}</option>`).join("")}
+      </select>
+    </span>
+    ${websiteRow}
+  `;
+}
+
 function openModal(id) {
   _modalCompanyId = id;
   const c = state.companies.find(x => x.id === id);
@@ -1456,23 +1490,7 @@ function openModal(id) {
   document.getElementById("modal-labels").innerHTML =
     (c.labels || []).map(l => `<span class="label-chip" title="${escHtml(l)}">${escHtml(l)}</span>`).join("") || "（無標籤）";
 
-  const fmt = n => n ? `NT$ ${Number(n).toLocaleString()} 元` : "—";
-  document.getElementById("modal-info").innerHTML = `
-    <span class="info-label">統一編號</span><span class="info-value">${escHtml(c.tax_id || "—")}</span>
-    <span class="info-label">公司代表人</span><span class="info-value">${escHtml(c.representative || "—")}</span>
-    <span class="info-label">資本總額</span><span class="info-value">${fmt(c.authorized_capital)}</span>
-    <span class="info-label">實收資本額</span><span class="info-value">${fmt(c.capital)}</span>
-    <span class="info-label">每股金額</span><span class="info-value">${c.par_value ? `NT$ ${c.par_value} 元` : "—"}</span>
-    <span class="info-label">股份總數</span><span class="info-value">${c.total_shares ? Number(c.total_shares).toLocaleString() + " 股（" + Math.floor(c.total_shares / 1000).toLocaleString() + " 張）" : "—"}</span>
-    <span class="info-label">公司所在地</span><span class="info-value">${escHtml(c.address || "—")}</span>
-    <span class="info-label">產業別</span>
-    <span class="info-value modal-industry-wrap">
-      <select id="modal-industry-select" onchange="saveModalIndustry()">
-        <option value="">— 未指定 —</option>
-        ${state.industries.map(ind => `<option value="${escHtml(ind)}"${ind === (c.industry || "") ? " selected" : ""}>${escHtml(ind)}</option>`).join("")}
-      </select>
-    </span>
-  `;
+  document.getElementById("modal-info").innerHTML = _buildModalInfoHTML(c);
 
   const directors = c.directors || [];
   const tbody = document.getElementById("modal-directors");
@@ -1768,6 +1786,7 @@ async function findPublicHolders() {
 }
 
 
+
 async function saveModalIndustry() {
   const id = _modalCompanyId;
   if (!id) return;
@@ -1865,20 +1884,346 @@ document.addEventListener("click", e => {
   if (wrap && !wrap.contains(e.target)) closeGenDropdown();
 });
 
-function regenSummary() {
+/* ── FindBiz 每股金額抓取 ── */
+let _findBizSessionId = null;
+
+function fetchParValue() {
+  const id = _modalCompanyId;
+  const c  = state.companies.find(x => x.id === id);
+  if (!id || !c?.tax_id) return;
+
+  // 開啟 dialog，顯示 step 1 pending
+  document.getElementById("findbiz-overlay").classList.add("open");
+  document.getElementById("findbiz-subtitle").textContent = `公司：${c.name}（${c.tax_id}）`;
+  document.getElementById("findbiz-s1-status").textContent = "⏳";
+  document.getElementById("findbiz-s2-status").textContent = "";
+  document.getElementById("findbiz-s3-status").textContent = "";
+  document.getElementById("findbiz-status-msg").textContent = "正在啟動瀏覽器…";
+  document.getElementById("findbiz-confirm-btn").style.display = "none";
+  document.getElementById("findbiz-close-btn").textContent = "取消";
+
+  fetch(`/api/findbiz/scrape`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company_id: id, tax_id: c.tax_id }),
+  })
+    .then(r => r.json())
+    .then(({ session_id }) => {
+      _findBizSessionId = session_id;
+      _listenFindBizStream(session_id, id);
+    })
+    .catch(err => {
+      document.getElementById("findbiz-status-msg").textContent = `啟動失敗：${err}`;
+    });
+}
+
+function _listenFindBizStream(sessionId, companyId) {
+  const es = new EventSource(`/api/findbiz/stream/${sessionId}`);
+
+  es.onmessage = async e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "heartbeat") return;
+
+    const statusEl = document.getElementById("findbiz-status-msg");
+
+    if (msg.type === "browser_ready") {
+      document.getElementById("findbiz-s1-status").textContent = "✅";
+      document.getElementById("findbiz-s2-status").textContent = "⏳";
+      statusEl.textContent = msg.message;
+      document.getElementById("findbiz-confirm-btn").style.display = "";
+    } else if (msg.type === "progress") {
+      document.getElementById("findbiz-s2-status").textContent = "✅";
+      document.getElementById("findbiz-s3-status").textContent = "⏳";
+      statusEl.textContent = msg.message;
+      document.getElementById("findbiz-confirm-btn").style.display = "none";
+    } else if (msg.type === "done") {
+      es.close();
+      document.getElementById("findbiz-s2-status").textContent = "✅";
+      document.getElementById("findbiz-s3-status").textContent = "✅";
+      statusEl.innerHTML = `<span style="color:var(--success)">✅ ${msg.message}</span>`;
+      document.getElementById("findbiz-close-btn").textContent = "關閉";
+      document.getElementById("findbiz-confirm-btn").style.display = "none";
+      // 更新本地 state 並重繪 modal
+      try {
+        await loadCompanies();
+        renderGrid();
+        if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
+          openModal(companyId);
+        }
+      } catch (_) {}
+    } else if (msg.type === "error") {
+      es.close();
+      document.getElementById("findbiz-s1-status").textContent = "";
+      document.getElementById("findbiz-s2-status").textContent = "";
+      document.getElementById("findbiz-s3-status").textContent = "";
+      statusEl.innerHTML = `<span style="color:var(--danger)">❌ ${msg.message}</span>`;
+      document.getElementById("findbiz-close-btn").textContent = "關閉";
+      document.getElementById("findbiz-confirm-btn").style.display = "none";
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    const statusEl = document.getElementById("findbiz-status-msg");
+    if (statusEl && !statusEl.textContent.startsWith("✅") && !statusEl.textContent.startsWith("❌")) {
+      statusEl.innerHTML = `<span style="color:var(--danger)">❌ 連線中斷，請重試</span>`;
+    }
+    document.getElementById("findbiz-close-btn").textContent = "關閉";
+  };
+}
+
+function confirmCloudflare() {
+  if (!_findBizSessionId) return;
+  const btn = document.getElementById("findbiz-confirm-btn");
+  if (btn) btn.disabled = true;
+  fetch(`/api/findbiz/confirm/${_findBizSessionId}`, { method: "POST" })
+    .then(() => {
+      document.getElementById("findbiz-status-msg").textContent = "已通知後台，正在搜尋…";
+    })
+    .catch(() => {
+      if (btn) btn.disabled = false;
+    });
+}
+
+function closeFindBizDialog() {
+  document.getElementById("findbiz-overlay").classList.remove("open");
+  _findBizSessionId = null;
+}
+
+function refreshGcis() {
   const id = _modalCompanyId;
   if (!id) return;
+  toast("正在重新拉取基本資料…");
+  const btn = document.querySelector(".gcis-refresh-btn");
+  if (btn) btn.disabled = true;
+
+  const sseUrl = `/api/companies/${id}/refresh-gcis`;
+  const es = new EventSource(sseUrl);
+
+  es.onmessage = async e => {
+    const event = JSON.parse(e.data);
+    if (event.type === "data") {
+      const company = state.companies.find(c => c.id === id);
+      if (company) {
+        Object.assign(company, event.fields);
+        renderGrid();
+        if (_modalCompanyId === id && document.getElementById("modal-overlay").classList.contains("open")) {
+          openModal(id);
+        }
+      }
+    } else if (event.type === "progress") {
+      toast(event.message);
+    } else if (event.type === "done") {
+      es.close();
+      const b = document.querySelector(".gcis-refresh-btn");
+      if (b) b.disabled = false;
+      try { await loadCompanies(); renderGrid(); if (_modalCompanyId === id) openModal(id); } catch (_) {}
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    const b = document.querySelector(".gcis-refresh-btn");
+    if (b) b.disabled = false;
+  };
+}
+
+function _showBatchWebsitePrompt(companyIds) {
+  return new Promise(resolve => {
+    const overlay   = document.getElementById("batch-wp-overlay");
+    const body      = document.getElementById("batch-wp-body");
+    const skipBtn   = document.getElementById("batch-wp-skip");
+    const confirmBtn = document.getElementById("batch-wp-confirm");
+
+    // Build rows
+    body.innerHTML = companyIds.map((id, i) => {
+      const c = state.companies.find(x => x.id === id);
+      const name = c?.name || id;
+      const existing = (c?.website || "").trim();
+      return `
+        <div class="bwp-row">
+          <div class="bwp-row-header">
+            <span class="bwp-name">${escHtml(name)}</span>
+            <span class="bwp-status" id="bwp-status-${i}">${existing ? "已知官網" : "搜尋中…"}</span>
+          </div>
+          <input class="bwp-input" type="url" id="bwp-input-${i}"
+            placeholder="${existing ? "https://example.com" : "搜尋中…"}"
+            value="${escAttr(existing)}"
+            ${existing ? "" : "disabled"}
+            autocomplete="off" />
+        </div>`;
+    }).join("");
+
+    overlay.classList.add("open");
+
+    // Fire parallel searches for companies without a stored website
+    companyIds.forEach((id, i) => {
+      const c = state.companies.find(x => x.id === id);
+      if (c?.website) return; // already known
+      const key = getAiKey();
+      const findUrl = `/api/companies/${id}/find-website` +
+        (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+      fetch(findUrl)
+        .then(r => r.json())
+        .then(data => {
+          if (!overlay.classList.contains("open")) return;
+          const input  = document.getElementById(`bwp-input-${i}`);
+          const status = document.getElementById(`bwp-status-${i}`);
+          if (!input) return;
+          input.disabled = false;
+          if (data.website) {
+            input.value = data.website;
+            input.placeholder = "https://example.com";
+            if (status) { status.textContent = "找到官網 ✓"; status.className = "bwp-status found"; }
+          } else {
+            input.placeholder = "找不到，請手動填入";
+            if (status) { status.textContent = "找不到官網"; status.className = "bwp-status missing"; }
+          }
+        })
+        .catch(() => {
+          if (!overlay.classList.contains("open")) return;
+          const input = document.getElementById(`bwp-input-${i}`);
+          if (input) { input.disabled = false; input.placeholder = "https://example.com"; }
+        });
+    });
+
+    const close = (result) => {
+      overlay.classList.remove("open");
+      skipBtn.onclick = null;
+      confirmBtn.onclick = null;
+      resolve(result);
+    };
+
+    skipBtn.onclick = () => close(null); // null = 略過，不儲存任何網址
+    confirmBtn.onclick = () => {
+      const map = {};
+      companyIds.forEach((id, i) => {
+        const input = document.getElementById(`bwp-input-${i}`);
+        map[id] = input ? input.value.trim() : "";
+      });
+      close(map);
+    };
+  });
+}
+
+function _showWebsitePrompt(companyId) {
+  return new Promise(resolve => {
+    const c = state.companies.find(x => x.id === companyId);
+    const overlay    = document.getElementById("website-prompt-overlay");
+    const nameEl     = document.getElementById("website-prompt-company-name");
+    const input      = document.getElementById("website-prompt-input");
+    const skipBtn    = document.getElementById("website-prompt-skip");
+    const confirmBtn = document.getElementById("website-prompt-confirm");
+    const hintEl     = document.getElementById("website-prompt-hint");
+
+    nameEl.textContent = c?.name || "";
+    if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
+    overlay.classList.add("open");
+
+    let dotTimer = null;
+
+    const close = (website) => {
+      clearInterval(dotTimer);
+      overlay.classList.remove("open");
+      skipBtn.onclick = null;
+      confirmBtn.onclick = null;
+      input.onkeydown = null;
+      resolve(website);
+    };
+
+    skipBtn.onclick    = () => close(undefined);
+    confirmBtn.onclick = () => close(input.value.trim());
+    input.onkeydown    = e => { if (e.key === "Enter") close(input.value.trim()); };
+
+    if (c?.website) {
+      input.value = c.website;
+      input.disabled = false;
+      confirmBtn.disabled = false;
+      input.placeholder = "https://example.com";
+      setTimeout(() => input.focus(), 50);
+    } else {
+      // 搜尋期間：input 與確認按鈕均 disabled，動態省略號告知使用者等待中
+      input.value = "";
+      input.disabled = true;
+      confirmBtn.disabled = true;
+      if (hintEl) hintEl.textContent = "AI 正在自動搜尋官網，請耐心等候，搜尋完成前請勿按下按鈕…";
+
+      const dotFrames = [".", "..", "..."];
+      let dotIdx = 0;
+      input.placeholder = "搜尋中.";
+      dotTimer = setInterval(() => {
+        dotIdx = (dotIdx + 1) % 3;
+        input.placeholder = `搜尋中${dotFrames[dotIdx]}`;
+      }, 500);
+
+      const key = getAiKey();
+      const findUrl = `/api/companies/${companyId}/find-website` +
+        (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+      fetch(findUrl)
+        .then(r => r.json())
+        .then(data => {
+          clearInterval(dotTimer);
+          dotTimer = null;
+          if (!overlay.classList.contains("open")) return;
+          input.disabled = false;
+          confirmBtn.disabled = false;
+          if (data.website) {
+            input.value = data.website;
+            input.placeholder = "https://example.com";
+            if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
+          } else {
+            input.placeholder = "https://example.com";
+            if (hintEl) hintEl.textContent = "找不到官網，若您知道請手動填入（或留空略過）。";
+          }
+          input.focus();
+        })
+        .catch(() => {
+          clearInterval(dotTimer);
+          dotTimer = null;
+          if (!overlay.classList.contains("open")) return;
+          input.disabled = false;
+          confirmBtn.disabled = false;
+          input.placeholder = "https://example.com";
+          if (hintEl) hintEl.textContent = "搜尋失敗，若您知道官網請手動填入（或留空略過）。";
+          input.focus();
+        });
+    }
+  });
+}
+
+async function regenSummary() {
+  const id = _modalCompanyId;
+  if (!id) return;
+
+  const website = await _showWebsitePrompt(id);
+
+  // undefined = 使用者按「略過」，不動 website 欄位
+  // "" = 使用者清空網址
+  // "https://..." = 使用者填入網址
+  if (website !== undefined) {
+    const c = state.companies.find(x => x.id === id);
+    if (website !== (c?.website || "")) {
+      try {
+        const updated = await api("PUT", `/api/companies/${id}`, { website });
+        const idx = state.companies.findIndex(x => x.id === id);
+        if (idx !== -1) {
+          state.companies[idx] = updated;
+          document.getElementById("modal-info").innerHTML = _buildModalInfoHTML(updated);
+        }
+      } catch (_) {}
+    }
+  }
+
   const summaryEl = document.getElementById("modal-summary");
-  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 30-60 秒）…</p>";
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 2–4 分鐘）…</p>";
   _expandSummarySection();
-  subscribeEnrichment(id);
+  _subscribeSummarize(id);
 }
 
 function deepEnrich() {
   const id = _modalCompanyId;
   if (!id) return;
   const summaryEl = document.getElementById("modal-summary");
-  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 60-120 秒）…</p>";
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 3–5 分鐘）…</p>";
   _expandSummarySection();
   const btn = document.getElementById("modal-gen-btn");
   if (btn) btn.disabled = true;
@@ -2037,10 +2382,29 @@ function _renderPatents(companyId, autoShow = false) {
   }
 }
 
-function _subscribeDeepEnrich(companyId) {
+function _updateSummaryInModal(company) {
+  if (_modalCompanyId !== company.id) return;
+  if (!document.getElementById("modal-overlay").classList.contains("open")) return;
+  const summaryEl = document.getElementById("modal-summary");
+  if (!summaryEl) return;
+  summaryEl.innerHTML = company.summary
+    ? renderSummary(company.summary)
+    : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
+  _expandSummarySection();
+}
+
+function _subscribeSummarize(companyId) {
+  if (isCloudDeploy() && !getAiKey()) {
+    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
+    openSettings();
+    return Promise.resolve();
+  }
   const key = getAiKey();
-  const sseUrl = `/api/companies/${companyId}/deep-enrich` +
+  const sseUrl = `/api/companies/${companyId}/summarize` +
     (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+
+  state.enrichingIds.add(companyId);
+  renderGrid();
 
   return new Promise(resolve => {
     const es = new EventSource(sseUrl);
@@ -2054,19 +2418,67 @@ function _subscribeDeepEnrich(companyId) {
         if (company) {
           Object.assign(company, event.fields);
           renderGrid();
-          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
-            openModal(companyId);
-            _expandSummarySection();
-          }
+          _updateSummaryInModal(company);
         }
       } else if (event.type === "progress") {
         toast(event.message);
       } else if (event.type === "done") {
         es.close();
         settle();
+        state.enrichingIds.delete(companyId);
+        state.doneIds.add(companyId);
+        try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
+        setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
       }
     };
-    es.onerror = () => { es.close(); settle(); };
+    es.onerror = () => {
+      es.close();
+      state.enrichingIds.delete(companyId);
+      renderGrid();
+      settle();
+    };
+  });
+}
+
+function _subscribeDeepEnrich(companyId) {
+  const key = getAiKey();
+  const sseUrl = `/api/companies/${companyId}/deep-enrich` +
+    (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+
+  state.enrichingIds.add(companyId);
+  renderGrid();
+
+  return new Promise(resolve => {
+    const es = new EventSource(sseUrl);
+    let settled = false;
+    const settle = () => { if (!settled) { settled = true; resolve(); } };
+
+    es.onmessage = async e => {
+      const event = JSON.parse(e.data);
+      if (event.type === "data") {
+        const company = state.companies.find(c => c.id === companyId);
+        if (company) {
+          Object.assign(company, event.fields);
+          renderGrid();
+          _updateSummaryInModal(company);
+        }
+      } else if (event.type === "progress") {
+        toast(event.message);
+      } else if (event.type === "done") {
+        es.close();
+        settle();
+        state.enrichingIds.delete(companyId);
+        state.doneIds.add(companyId);
+        try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
+        setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      state.enrichingIds.delete(companyId);
+      renderGrid();
+      settle();
+    };
   });
 }
 
@@ -2266,21 +2678,12 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
     lookupResults = names.map(n => ({ input: n, matches: [] }));
   }
 
-  // Build resolution map: input → single match (or undefined if ambiguous/not found)
-  const autoResolved = {};   // input → {short_name, full_name, tax_id}
-  const ambiguousItems = []; // [{input, matches}] — needs user to pick
+  // All items with ≥1 match go to the disambiguation dialog so the user can verify
+  const ambiguousItems = lookupResults.filter(item => item.matches.length >= 1);
 
-  for (const item of lookupResults) {
-    if (item.matches.length === 1) {
-      autoResolved[item.input] = item.matches[0];
-    } else if (item.matches.length > 1) {
-      ambiguousItems.push(item);
-    }
-  }
-
-  // Build candidates from resolutionMap + disambiguation selections
+  // Build candidates from disambiguation selections (no auto-resolve)
   const buildCandidates = (disambigSelections) => {
-    const resolved = { ...autoResolved };
+    const resolved = {};
     const skipped = new Set();
     for (const s of disambigSelections) {
       if (s.skipped) skipped.add(s.input);
@@ -2291,8 +2694,8 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
     for (const name of names) {
       if (skipped.has(name)) continue;
       const match = resolved[name];
-      const displayName = match ? match.short_name : name;
-      const existing = state.companies.find(c => c.name === displayName);
+      const displayName = match ? match.full_name : name;
+      const existing = state.companies.find(c => c.name === displayName || c.name === (match?.short_name ?? name));
       const candidate = {
         name: displayName,
         tax_id: match ? (match.tax_id || null) : null,
@@ -2314,6 +2717,7 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
   if (ambiguousItems.length > 0) {
     openDisambigDialog(ambiguousItems, buildCandidates);
   } else {
+    // No matches at all — go straight to confirm with uncertain items
     buildCandidates([]);
   }
 });
@@ -2326,13 +2730,23 @@ function openDisambigDialog(items, onConfirm) {
   const body = document.getElementById("disambig-body");
   body.innerHTML = items.map((item, gi) => `
     <div class="disambig-group">
-      <div class="disambig-input-label">「${escHtml(item.input)}」查詢到 ${item.matches.length} 個結果：</div>
-      ${item.matches.map((m, mi) => `
+      <div class="disambig-input-label">「${escHtml(item.input)}」— 請選擇正確的公司（${item.matches.length} 筆）：</div>
+      ${item.matches.map((m, mi) => {
+        const statusDot = m.status === "核准設立"
+          ? `<span class="disambig-status active" title="核准設立">●</span>`
+          : `<span class="disambig-status unknown" title="${escHtml(m.status || '狀態不明')}">●</span>`;
+        const corpBadge = m.is_corp
+          ? `<span class="disambig-corp-badge">股份有限公司</span>`
+          : `<span class="disambig-corp-badge limited">有限公司</span>`;
+        return `
         <label class="disambig-option">
           <input type="radio" name="dg${gi}" value="${mi}" ${mi === 0 ? "checked" : ""} />
+          ${statusDot}
           <span class="disambig-short">${escHtml(m.short_name)}</span>
+          ${corpBadge}
           <span class="disambig-full">${escHtml(m.full_name)}</span>
-        </label>`).join("")}
+        </label>`;
+      }).join("")}
       <label class="disambig-option">
         <input type="radio" name="dg${gi}" value="skip" />
         <span class="disambig-skip">略過此公司</span>
@@ -2635,6 +3049,35 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     return;
   }
 
+  // Ask for website URL before enrichment (improves AI summary quality)
+  if (enrich_ids.length === 1) {
+    const website = await _showWebsitePrompt(enrich_ids[0]);
+    if (website !== undefined) {
+      const c = state.companies.find(x => x.id === enrich_ids[0]);
+      if (website !== (c?.website || "")) {
+        try {
+          const updated = await api("PUT", `/api/companies/${enrich_ids[0]}`, { website });
+          const idx = state.companies.findIndex(x => x.id === enrich_ids[0]);
+          if (idx !== -1) state.companies[idx] = updated;
+        } catch (_) {}
+      }
+    }
+  } else {
+    const websiteMap = await _showBatchWebsitePrompt(enrich_ids);
+    if (websiteMap) {
+      for (const [eid, website] of Object.entries(websiteMap)) {
+        const c = state.companies.find(x => x.id === eid);
+        if (website !== (c?.website || "")) {
+          try {
+            const updated = await api("PUT", `/api/companies/${eid}`, { website });
+            const idx = state.companies.findIndex(x => x.id === eid);
+            if (idx !== -1) state.companies[idx] = updated;
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
   // Decide batching strategy
   let batchSize = enrich_ids.length;
   if (enrich_ids.length > 10) {
@@ -2688,6 +3131,163 @@ async function runEnrichmentInBatches(ids, batchSize) {
       return;
     }
   }
+}
+
+/* ── Bulk Enrich Dialog ──
+   兩種模式：
+   (1) 補齊未完成 — 對因 session limit / 斷網 / 失敗 中斷的公司重跑
+   (2) 全部重新生成 — 範圍內所有公司重跑（覆蓋寫入）
+   範圍跟隨側邊欄目前篩選，與 renderGrid 同一份 filter 邏輯。 */
+
+function isIncompleteCompany(c) {
+  // 對齊 run_enrich.py 的判定條件
+  if (!c) return false;
+  if (!(c.representative || "").trim()) return true;
+  const summary = (c.summary || "").trim();
+  if (!summary) return true;
+  if (summary.includes("尚待補充")) return true;
+  return false;
+}
+
+function getScopedCompanies() {
+  // 與 renderGrid 同步的篩選邏輯（但不含 search box 與排序）
+  let companies = [...state.companies];
+  let scopeLabel = "全部公司";
+
+  if (state.activeTab === "watched") {
+    companies = companies.filter(c => c.watched === true);
+    scopeLabel = "⭐ 追蹤";
+  } else if (state.activeLabel) {
+    companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
+    if (state.activeLabelIndustry === "__none__") {
+      companies = companies.filter(c => !c.industry);
+      scopeLabel = `標籤：${state.activeLabel} — 未分類`;
+    } else if (state.activeLabelIndustry) {
+      companies = companies.filter(c => c.industry === state.activeLabelIndustry);
+      scopeLabel = `標籤：${state.activeLabel} — ${state.activeLabelIndustry}`;
+    } else {
+      scopeLabel = `標籤：${state.activeLabel}`;
+    }
+  } else if (state.activeIndustry) {
+    companies = companies.filter(c => c.industry === state.activeIndustry);
+    if (state.activeGroup === "__ungrouped__") {
+      companies = companies.filter(c => !c.labels || c.labels.length === 0);
+      scopeLabel = `產業：${state.activeIndustry} — 未分組`;
+    } else if (state.activeGroup) {
+      companies = companies.filter(c => (c.labels || []).includes(state.activeGroup));
+      scopeLabel = `產業：${state.activeIndustry} — ${state.activeGroup}`;
+    } else {
+      scopeLabel = `產業：${state.activeIndustry}`;
+    }
+  }
+
+  return { companies, scopeLabel };
+}
+
+function updateBulkEnrichButtonVisibility() {
+  const btn = document.getElementById("bulk-enrich-btn");
+  if (!btn) return;
+  // 有任何公司就顯示；空清單下隱藏，避免 toolbar 視覺干擾
+  btn.classList.toggle("visible", state.companies.length > 0);
+}
+
+function openBulkEnrichDialog() {
+  const overlay = document.getElementById("bulk-enrich-overlay");
+  const subtitle = document.getElementById("bulk-enrich-subtitle");
+  const resumeCount = document.getElementById("bulk-resume-count");
+  const reenrichCount = document.getElementById("bulk-reenrich-count");
+  const resumeBtn = document.getElementById("bulk-resume-btn");
+  const reenrichBtn = document.getElementById("bulk-reenrich-btn");
+  const previewList = document.getElementById("bulk-preview-list");
+  const previewDetails = document.getElementById("bulk-preview-details");
+
+  const { companies, scopeLabel } = getScopedCompanies();
+  const incomplete = companies.filter(isIncompleteCompany);
+
+  subtitle.textContent = `目前範圍：${scopeLabel}（共 ${companies.length} 間）`;
+  resumeCount.textContent = incomplete.length;
+  reenrichCount.textContent = companies.length;
+
+  resumeBtn.disabled = incomplete.length === 0;
+  reenrichBtn.disabled = companies.length === 0;
+  resumeBtn.textContent = incomplete.length === 0
+    ? "範圍內已全數完成"
+    : `開始補齊 ${incomplete.length} 間`;
+  reenrichBtn.textContent = companies.length === 0
+    ? "範圍為空"
+    : `全部重跑 ${companies.length} 間`;
+
+  // 預覽清單：未完成標紅，完成標綠
+  if (companies.length > 0) {
+    const incompleteIds = new Set(incomplete.map(c => c.id));
+    previewList.innerHTML = companies.map(c => {
+      const isInc = incompleteIds.has(c.id);
+      const tag = isInc
+        ? `<span class="bulk-preview-tag">未完成</span>`
+        : `<span class="bulk-preview-tag ok">已完成</span>`;
+      return `<div class="bulk-preview-item">
+        <span class="bulk-preview-name">${escHtml(c.name)}</span>
+        ${tag}
+      </div>`;
+    }).join("");
+    previewDetails.style.display = "";
+  } else {
+    previewList.innerHTML = `<div class="bulk-preview-item"><span class="bulk-preview-name" style="color:var(--muted)">範圍內沒有公司</span></div>`;
+    previewDetails.style.display = "none";
+  }
+  // 預設收合，使用者主動展開
+  previewDetails.removeAttribute("open");
+
+  resumeBtn.onclick = () => {
+    overlay.classList.remove("open");
+    const ids = incomplete.map(c => c.id);
+    startBulkEnrich(ids, "resume", scopeLabel);
+  };
+  reenrichBtn.onclick = () => {
+    overlay.classList.remove("open");
+    if (companies.length > 5 && !confirm(
+      `將對範圍內 ${companies.length} 間公司全部重新生成（覆蓋現有簡介與 GCIS 資料）。\n` +
+      `範圍：${scopeLabel}\n\n` +
+      `確定繼續？`
+    )) return;
+    const ids = companies.map(c => c.id);
+    startBulkEnrich(ids, "reenrich", scopeLabel);
+  };
+
+  overlay.classList.add("open");
+}
+
+document.getElementById("bulk-enrich-cancel").addEventListener("click", () =>
+  document.getElementById("bulk-enrich-overlay").classList.remove("open"));
+
+async function startBulkEnrich(ids, mode, scopeLabel) {
+  if (!ids || ids.length === 0) {
+    toast("範圍內沒有需要生成的公司");
+    return;
+  }
+  const modeLabel = mode === "resume" ? "補齊未完成" : "全部重跑";
+  toast(`▶ ${modeLabel}：${scopeLabel}，共 ${ids.length} 間`);
+
+  // 決定批次大小：>10 間時詢問是否分批，與既有 confirm 流程一致
+  let batchSize = ids.length;
+  if (ids.length > 10) {
+    const wantBatch = confirm(
+      `本次共需生成 ${ids.length} 間公司資料。\n` +
+      `數量較多，同時生成可能因 Claude rate limit 造成延遲或失敗。\n\n` +
+      `是否分批生成？\n[確定] = 分批  [取消] = 一次全跑`
+    );
+    if (wantBatch) {
+      const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
+      const n = parseInt(input, 10);
+      if (!input || isNaN(n) || n < 1) {
+        toast("已取消分批生成", true);
+        return;
+      }
+      batchSize = Math.max(1, n);
+    }
+  }
+
+  await runEnrichmentInBatches(ids, batchSize);
 }
 
 /* ── Batch continue dialog (DOM-based; survives Chrome's background-tab confirm() suppression) ── */

@@ -25,3 +25,6 @@ data/industry_trends.json
 
 # Runtime logs
 logs/
+
+# Chromium browser profile for findbiz scraper
+data/findbiz_profile/

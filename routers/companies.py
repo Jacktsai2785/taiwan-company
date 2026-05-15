@@ -6,15 +6,19 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from services import company_extractor, company_exporter, data_store, gcis_client, report_generator, patent_scraper
+from services import claude_client, company_extractor, company_exporter, data_store, gcis_client, report_generator, patent_scraper
 from services.ai_deps import ai_from_headers, ai_from_query
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["companies"])
+
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 _progress: dict[str, list[dict]] = {}
 _running: set[str] = set()
@@ -24,6 +28,10 @@ _deep_progress: dict[str, list[dict]] = {}
 _deep_running: set[str] = set()
 _patent_progress: dict[str, list[dict]] = {}
 _patent_running: set[str] = set()
+_gcis_progress: dict[str, list[dict]] = {}
+_gcis_running: set[str] = set()
+_summarize_progress: dict[str, list[dict]] = {}
+_summarize_running: set[str] = set()
 
 
 class ConfirmItem(BaseModel):
@@ -84,6 +92,7 @@ class UpdateRequest(BaseModel):
     summary: str | None = None
     blurb: str | None = None
     watched: bool | None = None
+    website: str | None = None
 
 
 @router.get("")
@@ -372,6 +381,180 @@ async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query))
         _deep_progress.pop(company_id, None)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+async def _summarize_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
+    """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation."""
+    events: list[dict] = []
+    _summarize_progress[company_id] = events
+
+    def push(msg: str):
+        events.append({"type": "progress", "message": msg})
+
+    def push_data(fields: dict):
+        events.append({"type": "data", "fields": fields})
+
+    try:
+        company = data_store.get_company(company_id)
+        if not company:
+            events.append({"type": "done"})
+            return
+
+        push("正在生成公司簡介（約 2–4 分鐘）…")
+        try:
+            result = await report_generator.generate_summary(company, api_key=api_key, provider=provider)
+            summary = result["summary"]
+            blurb   = result["blurb"]
+            data_store.update_company(company_id, {"summary": summary, "blurb": blurb})
+            push_data({"summary": summary, "blurb": blurb})
+            push("公司簡介已生成完成")
+        except Exception as e:
+            push(f"簡介生成失敗：{e}")
+
+        events.append({"type": "done"})
+    finally:
+        _summarize_running.discard(company_id)
+
+
+@router.get("/{company_id}/summarize")
+async def summarize_stream(company_id: str, ai: dict = Depends(ai_from_query)):
+    """SSE: regenerate AI summary only, without re-fetching GCIS data."""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    async def event_generator():
+        if company_id not in _summarize_running:
+            _summarize_running.add(company_id)
+            asyncio.create_task(_summarize_company(company_id, **ai))
+        sent = 0
+        for _ in range(3600):
+            events = _summarize_progress.get(company_id, [])
+            while sent < len(events):
+                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
+                sent += 1
+            if events and events[-1].get("type") == "done":
+                break
+            await asyncio.sleep(0.5)
+        yield 'data: {"type": "done"}\n\n'
+        _summarize_progress.pop(company_id, None)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{company_id}/find-website")
+async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
+    """Quick WebSearch to find the company's official website URL."""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    name = company.get("name", "")
+    tax_id = company.get("tax_id", "")
+    full = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
+
+    prompt = (
+        f"請用 WebSearch 搜尋「{full}」（統編：{tax_id}）的官方網站。\n"
+        f"只輸出最可能的官方網站 URL（含 https://），禁止任何其他說明文字。\n"
+        f"若找不到官方網站，輸出空字串。\n"
+        f"範例輸出：https://example.com"
+    )
+    try:
+        result = await asyncio.to_thread(
+            claude_client.ask,
+            prompt, 60, ["WebSearch"],
+            ai.get("api_key", ""), ai.get("provider", "anthropic"), 3,
+        )
+        url = result.strip().split("\n")[0].strip()
+        if not url.startswith("http"):
+            return {"website": ""}
+
+        # Verify the URL is actually reachable before returning it
+        try:
+            async with httpx.AsyncClient(
+                timeout=8.0, follow_redirects=True,
+                headers={"User-Agent": _UA},
+            ) as vc:
+                resp = await vc.head(url)
+                if resp.status_code >= 400:
+                    # Some servers reject HEAD; try a GET as fallback
+                    resp = await vc.get(url)
+            if resp.status_code >= 400:
+                log.info("find-website URL unreachable (%s) for %s: %s", resp.status_code, company_id, url)
+                return {"website": ""}
+        except Exception as verify_exc:
+            log.info("find-website URL verify failed for %s (%s): %s", company_id, url, verify_exc)
+            return {"website": ""}
+
+        return {"website": url}
+    except Exception as exc:
+        log.warning("find-website failed for %s: %s", company_id, exc)
+        return {"website": ""}
+
+
+@router.get("/{company_id}/refresh-gcis")
+async def refresh_gcis_stream(company_id: str):
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    async def event_generator():
+        if company_id not in _gcis_running:
+            _gcis_running.add(company_id)
+            asyncio.create_task(_refresh_gcis_only(company_id))
+        sent = 0
+        try:
+            for _ in range(120):
+                events = _gcis_progress.get(company_id, [])
+                while sent < len(events):
+                    yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
+                    sent += 1
+                if events and events[-1].get("type") == "done":
+                    break
+                await asyncio.sleep(0.5)
+            yield 'data: {"type": "done"}\n\n'
+        finally:
+            _gcis_progress.pop(company_id, None)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+async def _refresh_gcis_only(company_id: str) -> None:
+    events: list[dict] = []
+    _gcis_progress[company_id] = events
+
+    try:
+        company = data_store.get_company(company_id)
+        if not company:
+            events.append({"type": "done"})
+            return
+
+        name = company["name"]
+        stored_tax_id = company.get("tax_id", "")
+        events.append({"type": "progress", "message": f"正在重新拉取 GCIS 資料：{name}"})
+
+        try:
+            lookup_name = name
+            if stored_tax_id:
+                official = await gcis_client.fetch_company_name_by_tax_id(stored_tax_id)
+                if official:
+                    lookup_name = official
+            enrichment = await gcis_client.fetch_company_data(lookup_name)
+            matched_name: str = enrichment.pop("matched_name", "")
+            data_store.update_company(company_id, enrichment)
+            directors_count = len(enrichment.get("directors", []))
+            events.append({"type": "data", "fields": {k: v for k, v in enrichment.items()}})
+            events.append({"type": "progress", "message": f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）"})
+
+            if matched_name and matched_name != name:
+                data_store.update_company(company_id, {"name": matched_name})
+                events.append({"type": "data", "fields": {"name": matched_name}})
+        except Exception as e:
+            events.append({"type": "progress", "message": f"資料查詢失敗：{e}"})
+
+        events.append({"type": "done"})
+    finally:
+        _gcis_running.discard(company_id)
 
 
 @router.get("/{company_id}/build-relationship")
@@ -795,7 +978,7 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         except Exception as e:
             push(f"資料查詢失敗：{e}，跳過繼續")
 
-        push("正在生成公司簡介（約 30-60 秒）…")
+        push("正在生成公司簡介（約 2–4 分鐘）…")
         company = data_store.get_company(company_id)
         try:
             result = await report_generator.generate_summary(company, api_key=api_key, provider=provider)

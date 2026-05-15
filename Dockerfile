@@ -18,6 +18,6 @@ COPY . .
 # data/ 目錄放在容器內作為預設；Railway 可掛載持久磁碟覆蓋此路徑
 RUN mkdir -p data
 
-EXPOSE 8000
+EXPOSE 8003
 
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8003}

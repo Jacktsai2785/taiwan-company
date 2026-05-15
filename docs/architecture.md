@@ -13,7 +13,7 @@ source_repo: ~/taiwan-company
 
 ## 後端（FastAPI）
 
-- 入口：`main.py`，以 `uvicorn main:app` 啟動，預設 port `8000`。
+- 入口：`main.py`，以 `uvicorn main:app` 啟動，預設 port `8003`（見 `~/PORTS.md`）。
 - 路由分層在 `routers/`：`companies` / `upload` / `config` / `call_memo` / `industries`。每個 router 帶自己的 `prefix`（多半是 `/api/...`）。
 - 業務邏輯集中在 `services/`：
   - `claude_client.py` — 統一 AI 呼叫入口（Anthropic / OpenAI / Gemini / 本機 CLI）

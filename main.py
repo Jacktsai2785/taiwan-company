@@ -21,7 +21,7 @@ try:
 except ImportError:
     pass
 
-from routers import companies, config, upload, call_memo, industries
+from routers import companies, config, upload, call_memo, industries, findbiz
 
 log = logging.getLogger(__name__)
 TAIWAN_TZ = timezone(timedelta(hours=8))
@@ -80,6 +80,7 @@ app.include_router(companies.router)
 app.include_router(config.router)
 app.include_router(call_memo.router)
 app.include_router(industries.router)
+app.include_router(findbiz.router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

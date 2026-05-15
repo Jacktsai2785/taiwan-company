@@ -14,7 +14,9 @@ make setup
 make start
 ```
 
-開啟瀏覽器至 http://localhost:8000
+開啟瀏覽器至 http://localhost:8003
+
+> Port 分配統一見 `~/PORTS.md`。本專案佔 8003（與其他本機服務切開，避開 mops cluster 的 8080–8086）。
 
 ## AI 模式說明
 
@@ -95,6 +97,8 @@ make logs      # 追蹤背景 server 的日誌（/tmp/taiwan-company.log）
 | 改前端 | `static/app.js`（單檔較大，用 Ctrl+F） |
 | 加新產業同義詞 | UI 設定面板 → 走 `industry_keywords.json` 流程；hardcoded 在 `services/news_fetcher.py` `_INDUSTRY_SYNONYMS` |
 
+> 改任何 `*.py` 後，若是 systemd service 在跑，要 `systemctl --user restart taiwan-company` 才會生效（沒有 `--reload`）。詳見下方 systemd 區段。
+
 ## systemd user service（開機自啟 + crash 自動重啟）
 
 前後端統一由一個 FastAPI process 服務，已設定為 systemd user service：
@@ -122,6 +126,21 @@ tail -f /home/jacktsai/taiwan-company/logs/app-error.log
 Service 檔案位置：`~/.config/systemd/user/taiwan-company.service`
 - `Restart=always`：crash 後 5 秒自動重啟
 - `WantedBy=default.target`：使用者登入後即自動啟動
+
+### ⚠️ 改完 Python 檔後一定要 restart service
+
+systemd service 跑的是 `uvicorn main:app`（**沒有** `--reload`），所以改完任何 `*.py`（`services/`、`routers/`、`main.py`…）都**不會自動套用**，必須手動重啟：
+
+```bash
+systemctl --user restart taiwan-company
+```
+
+「我明明改好了，為什麼 UI 還是看到舊行為？」八成是這個。對照方式：
+
+- `make start`（前景）→ 有 `--reload`，存檔即生效
+- systemd service（背景 / 開機自啟）→ **沒有** `--reload`，必須 restart
+
+純改 `static/`（前端 JS/CSS/HTML）不用 restart，瀏覽器 hard reload (Ctrl+Shift+R) 即可——FastAPI 只是 serve static file。
 
 ## 注意事項
 
