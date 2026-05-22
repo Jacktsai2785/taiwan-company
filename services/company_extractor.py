@@ -45,7 +45,7 @@ def extract_companies_from_text(text: str, source_label: str, api_key: str = "",
         elif kind == "uncertain":
             result["uncertain"].append({"name": name})
         else:
-            existing = data_store.find_company_by_name(name)
+            existing = data_store.find_company_by_name_or_tax_id(name)
             result["valid"].append({
                 "name": name,
                 "is_new": existing is None,
@@ -108,7 +108,7 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
         elif kind == "uncertain":
             result["uncertain"].append({"name": name})
         else:
-            existing = data_store.find_company_by_name(name)
+            existing = data_store.find_company_by_name_or_tax_id(name)
             result["valid"].append({
                 "name": name,
                 "is_new": existing is None,
@@ -227,7 +227,7 @@ async def suggest_industries_for_companies(
 
 def build_candidate(name: str, source_label: str) -> dict:
     """Turn an uncertain name (confirmed by user) into a valid candidate dict."""
-    existing = data_store.find_company_by_name(name)
+    existing = data_store.find_company_by_name_or_tax_id(name)
     return {
         "name": name,
         "is_new": existing is None,

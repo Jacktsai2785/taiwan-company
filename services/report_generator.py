@@ -7,8 +7,12 @@ spawn competing Claude CLI processes simultaneously.
 """
 import asyncio
 import logging
+import re
+
+import httpx
 
 from . import claude_client
+from .gcis_client import _ensure_listing_cache, _resolve_listing_status
 
 log = logging.getLogger("report_generator")
 
@@ -40,7 +44,7 @@ def _roc_to_ce(roc: str) -> str:
 _WEB_TOOLS = ["WebSearch", "WebFetch"]
 
 
-def _build_prompt(company: dict) -> str:
+def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
     name       = company.get("name", "")
     industry   = company.get("industry", "") or "不詳"
     address    = company.get("address", "") or "不詳"
@@ -86,6 +90,35 @@ def _build_prompt(company: dict) -> str:
             f"        取得具體服務項目、目標客戶、技術說明。"
         )
 
+    # Build competitor context hints
+    known_hint = ""
+    known_table_rows = ""
+    direct = (competitor_context or {}).get("direct") or []
+    extended = (competitor_context or {}).get("extended") or []
+
+    if direct:
+        direct_list = "\n".join(
+            f"  - {c['name']}（{c['blurb'] or '同業'}，上市狀態：{c.get('listing_status') or '不詳'}）"
+            for c in direct
+        )
+        known_hint = (
+            f"\n\n⚠ 特別注意：系統記錄顯示以下公司與本案存在競業關係，"
+            f"請在步驟 4 搜尋時一併查閱，並**確保它們出現在競業分析表格中**：\n{direct_list}"
+        )
+        known_table_rows = "\n".join(
+            f"| {c['name']} | （請根據搜尋結果填入） | （填入差異化特點） | {c.get('listing_status') or '非公發'} | （AI 判斷填入） |"
+            for c in direct
+        ) + "\n"
+
+    if extended:
+        ext_list = "\n".join(
+            f"  - {c['name']}（{c['blurb'] or '同業'}，由「{c['via']}」延伸）"
+            for c in extended
+        )
+        known_hint += (
+            f"\n\n📋 延伸參考：以下公司與本案的已知競業處於同一競業圈，供 AI 判斷是否需要納入分析（不強制）：\n{ext_list}"
+        )
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人，正對以下公司進行初步盡職調查（Due Diligence）。
 
 【基本資料】
@@ -110,7 +143,12 @@ def _build_prompt(company: dict) -> str:
 步驟 3：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
 
-步驟 4：根據前面搜尋所掌握的業務性質，用 WebSearch 搜尋「台灣 {industry if industry != "不詳" else "[依業務性質自行推斷產業關鍵字]"} 競爭廠商 股份有限公司」，找出至少 3 家台灣同業競爭者。
+步驟 4：根據前面搜尋所掌握的業務性質，搜尋台灣競爭者——**請涵蓋以下四種競業類型，每類至少搜尋 1 家**：
+  - 正面競業：同產品／服務，直接搶相同客戶或標案
+  - 替代路徑：客戶解決相同問題的不同技術或商業模式
+  - 側翼潛入：現在不在此市場，但有能力、有誘因跨入的鄰近業者（如大型集團、跨國廠商）
+  - 垂直整合：重要客戶或上游供應商有可能自行發展相同能力者
+  搜尋字串建議：「台灣 {industry if industry != "不詳" else "[依業務性質自行推斷產業關鍵字]"} 競爭廠商」、「[核心技術關鍵字] 替代方案 台灣」{known_hint}
 
 完成搜尋後，用繁體中文撰寫以下格式的投資備忘錄（純 Markdown，不加開頭標題行）：
 
@@ -121,10 +159,12 @@ def _build_prompt(company: dict) -> str:
 
 ## 競業分析
 
-| 公司名稱 | 核心業務 | 主要差異化特點 | 上市狀態 |
-|------|------|------|------|
-| {full_name}（本案）| （填入） | （填入） | {listing} |
-（補充至少 3 家台灣競業列）
+競業類型定義：正面競業／替代路徑／側翼潛入／垂直整合
+
+| 公司名稱 | 核心業務 | 主要差異化特點 | 上市狀態 | 競業類型 |
+|------|------|------|------|------|
+| {full_name}（本案）| （填入） | （填入） | {listing} | — |
+{known_table_rows}（四種競業類型各補充至少 1 家，合計至少 4 家）
 
 （表格後以條列說明：本案在市場中的相對優勢 2-3 點、相對劣勢或挑戰 2-3 點。若有已知專利或技術壁壘請一併提及。）
 
@@ -139,7 +179,7 @@ def _build_prompt(company: dict) -> str:
 [blurb: 核心產品或服務描述]"""
 
 
-def _build_deep_prompt(company: dict) -> str:
+def _build_deep_prompt(company: dict, competitor_context: dict | None = None) -> str:
     name = company.get("name", "")
     existing = (company.get("summary") or "").strip()
     website  = (company.get("website") or "").strip()
@@ -153,6 +193,28 @@ def _build_deep_prompt(company: dict) -> str:
         f"確認初步備忘錄的業務描述是否正確，有誤則依官網內容修正。\n\n"
     ) if website else ""
 
+    known_hint = ""
+    direct = (competitor_context or {}).get("direct") or []
+    extended = (competitor_context or {}).get("extended") or []
+
+    if direct:
+        direct_list = "\n".join(
+            f"  - {c['name']}（{c['blurb'] or '同業'}，上市狀態：{c.get('listing_status') or '不詳'}）"
+            for c in direct
+        )
+        known_hint = (
+            f"\n\n⚠ 特別注意：系統記錄顯示以下公司與本案存在競業關係，"
+            f"若競業表格中尚未包含它們，請補入並填寫差異化分析：\n{direct_list}"
+        )
+    if extended:
+        ext_list = "\n".join(
+            f"  - {c['name']}（{c['blurb'] or '同業'}，由「{c['via']}」延伸）"
+            for c in extended
+        )
+        known_hint += (
+            f"\n\n📋 延伸參考：以下公司與本案的已知競業處於同一競業圈，供 AI 判斷是否需要納入分析（不強制）：\n{ext_list}"
+        )
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
 
 {base}請執行深度補充搜尋，並據此修訂備忘錄：
@@ -160,9 +222,11 @@ def _build_deep_prompt(company: dict) -> str:
 {website_step}步驟 1：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
 
-步驟 2：若找到相關資訊，用 WebFetch 讀取最有參考價值的 1-2 篇文章全文。
+步驟 2：若找到相關資訊，用 WebFetch 讀取最有參考價值的 1-2 篇文章全文。{known_hint}
 
 完成搜尋後，輸出修訂版完整備忘錄（格式：## 業務概況、## 競業分析、## 主要風險）。
+競業分析表格請使用五欄格式：公司名稱 ｜ 核心業務 ｜ 主要差異化特點 ｜ 上市狀態 ｜ 競業類型
+競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合
 若新資料提供了原版沒有的具體資訊，更新對應段落；若無新資訊，維持原內容。
 **嚴格禁止在末尾輸出任何 Sources、References、來源清單或 URL 列表。**
 
@@ -170,30 +234,42 @@ def _build_deep_prompt(company: dict) -> str:
 [blurb: 核心產品或服務描述]"""
 
 
-async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic") -> dict:
-    """Search news/media and refine the existing summary. Returns {summary, blurb}."""
+_DEEP_MODEL = "claude-opus-4-7"
+
+
+async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic",
+                              competitor_context: dict | None = None) -> dict:
+    """Search news/media and refine the existing summary. Returns {summary, blurb}.
+    Uses claude-opus-4-7 for Anthropic/CLI to get higher-quality deep analysis."""
     name = company.get("name", "")
-    prompt = _build_deep_prompt(company)
+    prompt = _build_deep_prompt(company, competitor_context)
+    model = _DEEP_MODEL if provider == "anthropic" else ""
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
-                claude_client.ask, prompt, 300, _WEB_TOOLS, api_key, provider, 15
+                claude_client.ask, prompt, 300, _WEB_TOOLS, api_key, provider, 15, model
             )
             summary, blurb = _split_blurb(raw)
             if not blurb and len(summary.strip()) > 100:
                 blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
-            return {"summary": summary, "blurb": blurb}
+            async with httpx.AsyncClient() as client:
+                await _ensure_listing_cache(client)
+            summary = _fix_competitor_listing(summary)
+            competitors = _parse_competitor_table(summary)
+            return {"summary": summary, "blurb": blurb, "competitors": competitors}
         except Exception as e:
             raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
-async def generate_summary(company: dict, api_key: str = "", provider: str = "anthropic") -> dict:
+async def generate_summary(company: dict, api_key: str = "", provider: str = "anthropic",
+                           competitor_context: dict | None = None) -> dict:
     """
     Returns a due-diligence memo in Traditional Chinese Markdown.
     Retries once on failure with a 5-second gap.
     """
     name = company.get("name", "")
-    prompt = _build_prompt(company)
+    prompt = _build_prompt(company, competitor_context)
+    model = _DEEP_MODEL if provider == "anthropic" else ""
 
     last_error: Exception | None = None
     async with _CLAUDE_LOCK:
@@ -201,7 +277,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
             try:
                 log.info("Generating DD memo for %s (attempt %d)", name, attempt + 1)
                 raw = await asyncio.to_thread(
-                    claude_client.ask, prompt, 240, _WEB_TOOLS, api_key, provider, 12
+                    claude_client.ask, prompt, 240, _WEB_TOOLS, api_key, provider, 12, model
                 )
                 summary, blurb = _split_blurb(raw)
 
@@ -210,8 +286,15 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
                     log.info("Blurb missing for %s, running fallback generation", name)
                     blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
 
-                log.info("DD memo done for %s (%d chars, blurb=%r)", name, len(summary), blurb)
-                return {"summary": summary, "blurb": blurb}
+                # Correct AI-hallucinated listing status using TWSE/TPEX API
+                async with httpx.AsyncClient() as client:
+                    await _ensure_listing_cache(client)
+                summary = _fix_competitor_listing(summary)
+                competitors = _parse_competitor_table(summary)
+
+                log.info("DD memo done for %s (%d chars, blurb=%r, competitors=%d)",
+                         name, len(summary), blurb, len(competitors))
+                return {"summary": summary, "blurb": blurb, "competitors": competitors}
             except Exception as e:
                 last_error = e
                 log.warning("DD memo attempt %d failed for %s: %s", attempt + 1, name, e)
@@ -241,6 +324,113 @@ async def _generate_blurb_fallback(summary: str, name: str, api_key: str = "", p
     except Exception as e:
         log.warning("Blurb fallback failed for %s: %s", name, e)
         return ""
+
+
+_VALID_LISTING = {"上市", "上櫃", "興櫃", "創新板", "非公發"}
+
+
+_VALID_COMPETITION_TYPES = {"正面競業", "替代路徑", "側翼潛入", "垂直整合"}
+
+
+def _parse_competitor_table(summary: str) -> list[dict]:
+    """
+    Extract structured competitor rows from the ## 競業分析 section.
+    Supports both 4-column (legacy) and 5-column (with 競業類型) formats.
+    Skips the header, separator, and 本案 rows.
+    """
+    competitors: list[dict] = []
+    in_section = False
+
+    for line in summary.split("\n"):
+        s = line.strip()
+
+        if re.match(r"^##\s+競業分析", s):
+            in_section = True
+            continue
+        if in_section and re.match(r"^##\s+", s):
+            break
+
+        if not in_section or not (s.startswith("|") and s.endswith("|") and s.count("|") >= 5):
+            continue
+
+        cells = [c.strip() for c in s[1:-1].split("|")]
+        if len(cells) < 4:
+            continue
+        if cells[0] == "公司名稱" or all(re.match(r"^-*$", c) for c in cells):
+            continue
+        if "（本案）" in cells[0]:
+            continue
+
+        name = cells[0]
+        if not name:
+            continue
+
+        # 5-column: 公司名稱|核心業務|差異化|上市狀態|競業類型
+        # 4-column (legacy): 公司名稱|核心業務|差異化|上市狀態
+        if len(cells) >= 5 and cells[-1] in _VALID_COMPETITION_TYPES | {"—", "（AI 判斷填入）", ""}:
+            listing = cells[-2] if cells[-2] in _VALID_LISTING else "非公發"
+            competition_type = cells[-1] if cells[-1] in _VALID_COMPETITION_TYPES else ""
+        else:
+            listing = cells[-1] if cells[-1] in _VALID_LISTING else "非公發"
+            competition_type = ""
+
+        competitors.append({
+            "name": name,
+            "tax_id": None,
+            "company_id": None,
+            "core_biz": cells[1],
+            "listing_status": listing,
+            "competition_type": competition_type,
+        })
+
+    return competitors
+
+
+def _fix_competitor_listing(text: str) -> str:
+    """
+    Scan competitor table rows and correct listing status via TWSE/TPEX cache.
+    Supports both 4-column (legacy) and 5-column (with 競業類型) formats.
+    Cache must be warm before calling (call _ensure_listing_cache first).
+    """
+    lines = text.split("\n")
+    result = []
+    for line in lines:
+        s = line.strip()
+        if not (s.startswith("|") and s.endswith("|") and s.count("|") >= 5):
+            result.append(line)
+            continue
+        cells = [c.strip() for c in s[1:-1].split("|")]
+        if len(cells) < 4:
+            result.append(line)
+            continue
+
+        # Detect format: 5-col has 競業類型 as last cell (not a listing value)
+        if len(cells) >= 5 and cells[-1] not in _VALID_LISTING:
+            listing_idx = len(cells) - 2  # 上市狀態 is second-to-last
+        else:
+            listing_idx = len(cells) - 1  # 上市狀態 is last (legacy)
+
+        listing = cells[listing_idx]
+        if listing not in _VALID_LISTING:
+            result.append(line)
+            continue
+
+        company_name = cells[0].replace("（本案）", "").strip()
+        if not company_name:
+            result.append(line)
+            continue
+
+        resolved = _resolve_listing_status("", company_name)
+        if resolved != listing:
+            # Replace via pipe-split to handle any column position correctly
+            parts = line.split("|")
+            cell_pos = listing_idx + 1  # +1 because parts[0] is the leading ""
+            if cell_pos < len(parts) and parts[cell_pos].strip() == listing:
+                parts[cell_pos] = f" {resolved} "
+                line = "|".join(parts)
+            log.info("Corrected listing for %s: %s → %s", company_name, listing, resolved)
+        result.append(line)
+    return "\n".join(result)
 
 
 def _split_blurb(raw: str) -> tuple[str, str]:

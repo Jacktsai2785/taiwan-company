@@ -44,10 +44,11 @@ def _ask_anthropic(
     timeout: int = 120,
     allowed_tools: list[str] | None = None,
     api_key: str = "",
+    model: str = "",
 ) -> str:
     import anthropic
     try:
-        return _ask_anthropic_inner(prompt, timeout, allowed_tools, api_key)
+        return _ask_anthropic_inner(prompt, timeout, allowed_tools, api_key, model)
     except anthropic.AuthenticationError:
         raise RuntimeError("Claude API Key 無效。請點 ⚙ 重新輸入正確的 Key。")
     except anthropic.PermissionDeniedError:
@@ -63,15 +64,17 @@ def _ask_anthropic_inner(
     timeout: int,
     allowed_tools: list[str] | None,
     api_key: str,
+    model: str = "",
 ) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     use_web = bool(allowed_tools and any(t in {"WebSearch", "WebFetch"} for t in allowed_tools))
     tools: list[dict[str, Any]] = [{"type": "web_search_20250305"}] if use_web else []
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    _model = model or MODEL_ANTHROPIC
 
     for _round in range(10):
-        kwargs: dict[str, Any] = {"model": MODEL_ANTHROPIC, "max_tokens": 8096, "messages": messages}
+        kwargs: dict[str, Any] = {"model": _model, "max_tokens": 8096, "messages": messages}
         if tools:
             kwargs["tools"] = tools
         response = client.messages.create(**kwargs)
@@ -280,16 +283,32 @@ def _cli() -> str:
     return _CLI_PATH
 
 
-def _ask_cli(prompt: str, timeout: int = 120, allowed_tools: list[str] | None = None, max_turns: int = 20) -> str:
+def _ask_cli(prompt: str, timeout: int = 120, allowed_tools: list[str] | None = None, max_turns: int = 20, model: str = "") -> str:
+    import os
+    import signal
     cmd = [_cli(), "-p", prompt, "--output-format", "text", "--max-turns", str(max_turns)]
+    if model:
+        cmd += ["--model", model]
     if allowed_tools:
         cmd += ["--allowedTools", ",".join(allowed_tools)]
-    result = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
-    stdout = result.stdout.decode("utf-8", errors="replace").strip()
-    stderr = result.stderr.decode("utf-8", errors="replace").strip()
-    if result.returncode != 0:
-        detail = stderr or stdout  # CLI often puts rate-limit messages in stdout
-        raise RuntimeError(f"Claude CLI 錯誤 (exit {result.returncode}):\n{detail[:400]}")
+    # start_new_session=True 讓 Claude CLI 及其所有子 process 在同一個 process group，
+    # timeout 時用 killpg 整組殺掉，避免子 process 持住 pipe 導致永久卡住。
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        stdout_b, stderr_b = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise RuntimeError(f"Claude CLI 執行超時（>{timeout}s），已強制終止。")
+    stdout = stdout_b.decode("utf-8", errors="replace").strip()
+    stderr = stderr_b.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        detail = stderr or stdout
+        raise RuntimeError(f"Claude CLI 錯誤 (exit {proc.returncode}):\n{detail[:400]}")
     if stdout.lower().startswith("execution error") or stdout.lower() == "error":
         raise RuntimeError(f"Claude CLI 執行錯誤：{stdout[:200]}")
     return stdout
@@ -344,17 +363,18 @@ def ask(
     api_key: str = "",
     provider: str = "anthropic",
     max_turns: int = 20,
+    model: str = "",
 ) -> str:
     if not api_key:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         provider = "anthropic"
     if not api_key:
-        return _try_local_cli(lambda: _ask_cli(prompt, timeout, allowed_tools, max_turns))
+        return _try_local_cli(lambda: _ask_cli(prompt, timeout, allowed_tools, max_turns, model))
     if provider == "openai":
         return _ask_openai(prompt, allowed_tools, api_key)
     if provider == "gemini":
         return _ask_gemini(prompt, allowed_tools, api_key)
-    return _ask_anthropic(prompt, timeout, allowed_tools, api_key)
+    return _ask_anthropic(prompt, timeout, allowed_tools, api_key, model)
 
 
 def ask_with_image(

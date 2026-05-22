@@ -79,6 +79,7 @@ class FromGraphRequest(BaseModel):
 
 class UpdateRequest(BaseModel):
     name: str | None = None
+    tax_id: str | None = None
     labels: list[str] | None = None
     industry: str | None = None
     group: str | None = None
@@ -138,11 +139,24 @@ async def investee_lookup(name: str, tax_id: str | None = None, fuzzy: bool = Fa
 
 @router.post("/name-lookup")
 async def lookup_company_names(req: NameLookupRequest):
-    """Search Ronny API for each name and return up to 5 candidate matches."""
+    """Search Ronny API for each name and return up to 5 candidate matches.
+
+    Each item: {input, matches, rejected}
+    rejected=True means Ronny found the company but GCIS confirmed it is dissolved.
+    """
     names = [n.strip() for n in req.names if n.strip()]
     tasks = [gcis_client.search_company_matches(n) for n in names]
     results = await asyncio.gather(*tasks)
-    return [{"input": n, "matches": m} for n, m in zip(names, results)]
+    return [
+        {
+            "input": n,
+            "matches": r["matches"],
+            "rejected": r.get("rejected", False),
+            "not_found": r.get("not_found", False),
+            "suggestions": r.get("suggestions", []),
+        }
+        for n, r in zip(names, results)
+    ]
 
 
 @router.post("/suggest-industries")
@@ -402,11 +416,14 @@ async def _summarize_company(company_id: str, api_key: str = "", provider: str =
 
         push("正在生成公司簡介（約 2–4 分鐘）…")
         try:
-            result = await report_generator.generate_summary(company, api_key=api_key, provider=provider)
-            summary = result["summary"]
-            blurb   = result["blurb"]
-            data_store.update_company(company_id, {"summary": summary, "blurb": blurb})
-            push_data({"summary": summary, "blurb": blurb})
+            ctx = _gather_competitor_context(company_id, company.get("name", ""))
+            if ctx["direct"]:
+                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+            result = await report_generator.generate_summary(
+                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+            )
+            saved = _save_summary_result(company_id, result)
+            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
             push("公司簡介已生成完成")
         except Exception as e:
             push(f"簡介生成失敗：{e}")
@@ -534,12 +551,10 @@ async def _refresh_gcis_only(company_id: str) -> None:
         events.append({"type": "progress", "message": f"正在重新拉取 GCIS 資料：{name}"})
 
         try:
-            lookup_name = name
             if stored_tax_id:
-                official = await gcis_client.fetch_company_name_by_tax_id(stored_tax_id)
-                if official:
-                    lookup_name = official
-            enrichment = await gcis_client.fetch_company_data(lookup_name)
+                enrichment = await gcis_client.fetch_company_data_by_tax_id(stored_tax_id)
+            else:
+                enrichment = await gcis_client.fetch_company_data(name)
             matched_name: str = enrichment.pop("matched_name", "")
             data_store.update_company(company_id, enrichment)
             directors_count = len(enrichment.get("directors", []))
@@ -674,6 +689,65 @@ def get_ownership_graph(company_id: str):
     }
 
 
+@router.get("/{company_id}/competitor-graph")
+def get_competitor_graph(company_id: str):
+    """Return Cytoscape-friendly nodes/edges for the competitor landscape."""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    seen: set[str] = set()
+
+    def add_node(node_id: str, label: str, role: str, **extra):
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        nodes.append({"data": {"id": node_id, "label": label, "role": role, **extra}})
+
+    def add_edge(src: str, tgt: str):
+        eid = "ce:" + "-".join(sorted([src, tgt]))
+        if eid in seen:
+            return
+        seen.add(eid)
+        edges.append({"data": {"id": eid, "source": src, "target": tgt, "type": "competition"}})
+
+    self_id = f"c:{company_id}"
+    add_node(self_id, _short(company["name"]), "self",
+             company_id=company_id, in_db=True,
+             listing_status=company.get("listing_status", ""))
+
+    # Primary competitors listed in this company's memo
+    for comp in (company.get("competitors") or []):
+        name = comp.get("name", "")
+        cid  = comp.get("company_id")
+        node_id = f"comp:{cid}" if cid else f"comp:name:{name}"
+        in_db = bool(cid)
+        add_node(node_id, _short(name), "competitor",
+                 name=name, in_db=in_db, company_id=cid or "",
+                 listing_status=comp.get("listing_status", ""),
+                 core_biz=comp.get("core_biz", ""))
+        add_edge(self_id, node_id)
+
+    # Reverse lookup: companies in DB that list this company as their competitor
+    self_name_key = _short(company["name"])
+    for other in data_store.get_all_companies():
+        if other["id"] == company_id:
+            continue
+        for comp in (other.get("competitors") or []):
+            if comp.get("company_id") == company_id or _short(comp.get("name", "")) == self_name_key:
+                node_id = f"comp:{other['id']}"
+                add_node(node_id, _short(other["name"]), "competitor",
+                         name=other["name"], in_db=True, company_id=other["id"],
+                         listing_status=other.get("listing_status", ""),
+                         core_biz="")
+                add_edge(self_id, node_id)
+                break
+
+    return {"nodes": nodes, "edges": edges}
+
+
 @router.post("/from-graph")
 async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_from_headers)):
     """Create a new company entry from a graph node and start enrichment.
@@ -702,6 +776,117 @@ async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_fr
     asyncio.create_task(_enrich_company(company["id"], **ai))
 
     return {"existed": False, "company_id": company["id"], "name": company["name"]}
+
+
+@router.post("/symmetrize-competitors")
+def symmetrize_competitors():
+    """
+    Make competitor relationships bidirectional.
+    For every A → B link (B has company_id), ensure B's competitors[] also contains A.
+    Synthetic reverse entries use the company's blurb as core_biz.
+    """
+    all_cos = data_store.get_all_companies()
+    by_id = {c["id"]: c for c in all_cos}
+
+    working: dict[str, list[dict]] = {}
+    changed: set[str] = set()
+
+    def get_working(cid: str) -> list[dict]:
+        if cid not in working:
+            working[cid] = [dict(c) for c in (by_id[cid].get("competitors") or [])]
+        return working[cid]
+
+    added = 0
+    for co in all_cos:
+        a_id = co["id"]
+        a_key = _short(co["name"])
+        for comp in (co.get("competitors") or []):
+            b_id = comp.get("company_id")
+            if not b_id or b_id not in by_id or b_id == a_id:
+                continue
+            b_comps = get_working(b_id)
+            already = any(
+                c.get("company_id") == a_id or _short(c.get("name", "")) == a_key
+                for c in b_comps
+            )
+            if not already:
+                b_comps.append({
+                    "name": co["name"],
+                    "tax_id": co.get("tax_id") or None,
+                    "company_id": a_id,
+                    "core_biz": co.get("blurb") or "",
+                    "listing_status": co.get("listing_status") or "非公發",
+                })
+                changed.add(b_id)
+                added += 1
+
+    for cid in changed:
+        data_store.update_company(cid, {"competitors": working[cid]})
+
+    return {"updated_companies": len(changed), "added_links": added}
+
+
+@router.post("/relink-competitors")
+def relink_competitors():
+    """
+    Re-resolve company_id for ALL competitors entries that currently have company_id=null.
+    Use this after fixing name-normalization bugs or adding new companies in bulk.
+    """
+    all_cos = data_store.get_all_companies()
+    name_to_id: dict[str, str] = {}
+    for c in all_cos:
+        name_to_id[c["name"]] = c["id"]
+        name_to_id[_short(c["name"])] = c["id"]
+    updated_companies = 0
+    resolved_links = 0
+    for co in all_cos:
+        comps = co.get("competitors")
+        if not comps:
+            continue
+        changed = False
+        for comp in comps:
+            if comp.get("company_id") is not None:
+                continue
+            n = comp.get("name", "")
+            cid = name_to_id.get(n) or name_to_id.get(_short(n)) or None
+            if cid:
+                comp["company_id"] = cid
+                changed = True
+                resolved_links += 1
+        if changed:
+            data_store.update_company(co["id"], {"competitors": comps})
+            updated_companies += 1
+    return {"updated_companies": updated_companies, "resolved_links": resolved_links}
+
+
+@router.post("/backfill-competitors")
+def backfill_competitors():
+    """
+    One-shot: parse existing summaries that have no competitors field yet,
+    fill structured competitors data, and resolve company_id cross-references.
+    Returns a summary of how many companies were updated.
+    """
+    all_cos = data_store.get_all_companies()
+    name_to_id: dict[str, str] = {}
+    for c in all_cos:
+        name_to_id[c["name"]] = c["id"]
+        name_to_id[_short(c["name"])] = c["id"]
+    updated = 0
+    for co in all_cos:
+        if co.get("competitors") is not None:
+            continue
+        summary = co.get("summary") or ""
+        if not summary:
+            continue
+        comps = report_generator._parse_competitor_table(summary)
+        if not comps:
+            continue
+        for comp in comps:
+            n = comp.get("name", "")
+            comp["company_id"] = name_to_id.get(n) or name_to_id.get(_short(n)) or None
+        data_store.update_company(co["id"], {"competitors": comps})
+        updated += 1
+    return {"updated": updated, "total": len(all_cos)}
 
 
 def _short(name: str) -> str:
@@ -928,6 +1113,104 @@ def _build_siblings(
     return out
 
 
+def _gather_competitor_context(company_id: str, company_name: str) -> dict:
+    """
+    Return two layers of competitor context for prompt injection:
+      direct   – companies in DB that explicitly list this company as their competitor
+      extended – those companies' own DB-linked competitors (one hop), for AI reference only
+    """
+    name_key = _short(company_name)
+    all_cos = data_store.get_all_companies()
+    by_id = {c["id"]: c for c in all_cos}
+
+    # Layer 1: direct (companies that list this company as competitor)
+    direct: list[dict] = []
+    seen_direct: set[str] = set()
+    for other in all_cos:
+        if other["id"] == company_id:
+            continue
+        for comp in (other.get("competitors") or []):
+            if comp.get("company_id") == company_id or _short(comp.get("name", "")) == name_key:
+                if other["id"] not in seen_direct:
+                    seen_direct.add(other["id"])
+                    direct.append({
+                        "name": other["name"],
+                        "id": other["id"],
+                        "blurb": other.get("blurb") or "",
+                        "listing_status": other.get("listing_status") or "",
+                    })
+                break
+
+    # Layer 2: extended – DB-linked competitors of direct companies (one hop)
+    extended: list[dict] = []
+    seen_extended: set[str] = set()
+    for direct_co in direct:
+        source = by_id.get(direct_co["id"])
+        if not source:
+            continue
+        for comp in (source.get("competitors") or []):
+            cid = comp.get("company_id")
+            if not cid or cid == company_id or cid in seen_direct or cid in seen_extended:
+                continue
+            ext = by_id.get(cid)
+            if not ext:
+                continue
+            seen_extended.add(cid)
+            extended.append({
+                "name": ext["name"],
+                "id": cid,
+                "blurb": ext.get("blurb") or "",
+                "listing_status": ext.get("listing_status") or "",
+                "via": direct_co["name"],
+            })
+
+    return {"direct": direct, "extended": extended}
+
+
+def _resolve_competitor_ids(competitors: list[dict]) -> list[dict]:
+    """Fill in company_id for competitors that are already in the DB."""
+    all_cos = data_store.get_all_companies()
+    # Index by both stored name and short name so full/short mismatches resolve correctly
+    name_to_id: dict[str, str] = {}
+    for c in all_cos:
+        name_to_id[c["name"]] = c["id"]
+        name_to_id[_short(c["name"])] = c["id"]
+    for comp in competitors:
+        name = comp.get("name", "")
+        comp["company_id"] = name_to_id.get(name) or name_to_id.get(_short(name)) or None
+    return competitors
+
+
+def _backlink_competitor(new_id: str, new_name: str) -> None:
+    """When a new company is added, update other companies' competitors[].company_id."""
+    new_key = _short(new_name)
+    for co in data_store.get_all_companies():
+        if co["id"] == new_id:
+            continue
+        comps = co.get("competitors")
+        if not comps:
+            continue
+        updated = False
+        for comp in comps:
+            if comp.get("company_id") is None and _short(comp.get("name", "")) == new_key:
+                comp["company_id"] = new_id
+                updated = True
+        if updated:
+            data_store.update_company(co["id"], {"competitors": comps})
+
+
+def _save_summary_result(company_id: str, result: dict) -> dict:
+    """Persist summary/blurb/competitors from a generation result. Returns the fields saved."""
+    fields: dict = {
+        "summary": result.get("summary", ""),
+        "blurb":   result.get("blurb", ""),
+    }
+    if "competitors" in result:
+        fields["competitors"] = _resolve_competitor_ids(result["competitors"])
+    data_store.update_company(company_id, fields)
+    return fields
+
+
 async def _enrich_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
     _running.add(company_id)
     events: list[dict] = []
@@ -950,14 +1233,10 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         push(f"正在查詢公司資料：{name}")
 
         try:
-            # If we already know the tax_id (from user disambiguation), look up the
-            # official full name first so Ronny search is unambiguous.
-            lookup_name = name
             if stored_tax_id:
-                official = await gcis_client.fetch_company_name_by_tax_id(stored_tax_id)
-                if official:
-                    lookup_name = official
-            enrichment = await gcis_client.fetch_company_data(lookup_name)
+                enrichment = await gcis_client.fetch_company_data_by_tax_id(stored_tax_id)
+            else:
+                enrichment = await gcis_client.fetch_company_data(name)
             matched_name: str = enrichment.pop("matched_name", "")
             data_store.update_company(company_id, enrichment)
             directors_count = len(enrichment.get("directors", []))
@@ -981,12 +1260,17 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         push("正在生成公司簡介（約 2–4 分鐘）…")
         company = data_store.get_company(company_id)
         try:
-            result = await report_generator.generate_summary(company, api_key=api_key, provider=provider)
-            summary = result["summary"]
-            blurb   = result["blurb"]
-            data_store.update_company(company_id, {"summary": summary, "blurb": blurb})
-            push_data({"summary": summary, "blurb": blurb})
+            ctx = _gather_competitor_context(company_id, company.get("name", ""))
+            if ctx["direct"]:
+                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+            result = await report_generator.generate_summary(
+                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+            )
+            saved = _save_summary_result(company_id, result)
+            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
             push("公司簡介已生成完成")
+            # Reverse link: if this company appears in other companies' competitor lists, fill company_id
+            _backlink_competitor(company_id, company["name"])
         except Exception as e:
             push(f"簡介生成失敗：{e}")
 
@@ -1019,11 +1303,14 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
 
         push("正在深度搜尋媒體報導與新聞（約 60-120 秒）…")
         try:
-            result = await report_generator.deep_enrich_summary(company, api_key=api_key, provider=provider)
-            summary = result["summary"]
-            blurb   = result["blurb"]
-            data_store.update_company(company_id, {"summary": summary, "blurb": blurb})
-            push_data({"summary": summary, "blurb": blurb})
+            ctx = _gather_competitor_context(company_id, company.get("name", ""))
+            if ctx["direct"]:
+                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+            result = await report_generator.deep_enrich_summary(
+                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+            )
+            saved = _save_summary_result(company_id, result)
+            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
             push("深度生成完成")
         except Exception as e:
             push(f"深度生成失敗：{e}")

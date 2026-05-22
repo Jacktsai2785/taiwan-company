@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<title>側欄 Wireframe — B+C 方案</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; font-size: 14px; background: #f1f5f9;
+  display: flex; height: 100vh; overflow: hidden; }
+
+/* ── 側欄 ── */
+#sidebar {
+  width: 200px; flex-shrink: 0;
+  background: #1e293b; color: #cbd5e1;
+  display: flex; flex-direction: column;
+  padding: 12px 0; gap: 2px; overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 0 14px 12px; font-size: 15px; font-weight: 700; color: #f8fafc;
+  border-bottom: 1px solid #334155; margin-bottom: 6px;
+}
+.sidebar-logo small { display: block; font-size: 11px; color: #64748b; font-weight: 400; margin-top: 2px; }
+
+.sb-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px; cursor: pointer; border-radius: 0;
+  transition: background .12s; color: #94a3b8; font-size: 13px;
+}
+.sb-row:hover { background: #334155; color: #e2e8f0; }
+.sb-row.active { background: #0f172a; color: #f8fafc; font-weight: 600; }
+.sb-row .sb-label { flex: 1; }
+.sb-row .sb-count {
+  font-size: 11px; background: #334155; color: #94a3b8;
+  padding: 1px 6px; border-radius: 99px; min-width: 24px; text-align: center;
+}
+.sb-row.active .sb-count { background: #3b82f6; color: #fff; }
+
+.sb-section-label {
+  padding: 10px 14px 4px; font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: #475569; font-weight: 600;
+}
+
+/* 釘選標記 */
+.sb-row .pin-icon { font-size: 10px; color: #f59e0b; opacity: 0; transition: opacity .15s; }
+.sb-row:hover .pin-icon { opacity: 1; }
+
+/* 未分類警示列 */
+.sb-alert {
+  margin: 4px 10px; padding: 6px 10px; border-radius: 6px;
+  background: #422006; color: #fb923c; font-size: 12px;
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+}
+.sb-alert:hover { background: #7c2d12; }
+
+/* 所有產業&標籤按鈕 */
+.sb-all-btn {
+  margin: 8px 10px 4px;
+  padding: 7px 10px; border-radius: 6px;
+  background: #1e3a5f; color: #93c5fd;
+  border: 1px solid #2563eb44; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; transition: background .12s;
+}
+.sb-all-btn:hover { background: #1d4ed8; color: #fff; }
+
+.sb-divider { height: 1px; background: #334155; margin: 6px 14px; }
+
+/* 底部操作 */
+.sb-bottom { margin-top: auto; border-top: 1px solid #334155; padding: 8px 0 0; }
+
+/* ── 主內容（假的） ── */
+#main {
+  flex: 1; padding: 24px 32px; overflow-y: auto;
+}
+.mock-card {
+  background: #fff; border-radius: 10px; padding: 16px 20px;
+  margin-bottom: 12px; box-shadow: 0 1px 3px #0001;
+  display: flex; gap: 16px; align-items: flex-start;
+}
+.mock-card .mc-name { font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+.mock-card .mc-meta { font-size: 12px; color: #64748b; }
+.mock-tag {
+  display: inline-block; font-size: 10px; padding: 1px 7px;
+  border-radius: 99px; background: #dbeafe; color: #1d4ed8; margin-right: 4px;
+}
+
+/* ── 展開面板（slide-over） ── */
+#panel-backdrop {
+  position: fixed; inset: 0; background: #0006;
+  display: none; z-index: 100;
+}
+#panel-backdrop.open { display: block; }
+
+#panel {
+  position: fixed; left: 0; top: 0; bottom: 0;
+  width: 340px; background: #fff; box-shadow: 4px 0 20px #0003;
+  display: flex; flex-direction: column;
+  transform: translateX(-100%); transition: transform .22s ease;
+  z-index: 102;
+}
+#panel.open { transform: translateX(0); }
+
+.panel-header {
+  padding: 16px 16px 0; display: flex; align-items: center; gap: 8px;
+}
+.panel-header h3 { font-size: 15px; font-weight: 700; color: #1e293b; flex: 1; }
+.panel-close {
+  width: 28px; height: 28px; border-radius: 50%; border: none;
+  background: #f1f5f9; color: #64748b; cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.panel-close:hover { background: #e2e8f0; }
+
+/* 分頁 */
+.panel-tabs {
+  display: flex; border-bottom: 2px solid #e2e8f0;
+  padding: 10px 16px 0; gap: 0;
+}
+.panel-tab {
+  padding: 6px 16px 8px; font-size: 13px; font-weight: 600;
+  color: #94a3b8; cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -2px; transition: color .12s, border-color .12s;
+}
+.panel-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+.panel-tab:hover:not(.active) { color: #475569; }
+
+/* 搜尋 + 排序 */
+.panel-toolbar {
+  padding: 10px 16px; display: flex; gap: 8px; border-bottom: 1px solid #f1f5f9;
+}
+.panel-search {
+  flex: 1; padding: 6px 10px; border: 1px solid #e2e8f0;
+  border-radius: 6px; font-size: 13px; outline: none;
+}
+.panel-search:focus { border-color: #3b82f6; }
+.panel-sort {
+  padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px;
+  font-size: 12px; color: #64748b; cursor: pointer; background: #f8fafc;
+}
+.panel-add-btn {
+  padding: 6px 10px; border: 1px solid #bfdbfe; border-radius: 6px;
+  font-size: 14px; color: #2563eb; cursor: pointer; background: #eff6ff;
+  font-weight: 600; white-space: nowrap; transition: background .12s;
+  display: none;
+}
+.panel-add-btn:hover { background: #dbeafe; }
+.panel-add-btn.visible { display: block; }
+
+/* 列表 */
+.panel-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.panel-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; cursor: pointer; transition: background .1s;
+}
+.panel-item:hover { background: #f8fafc; }
+.panel-item.active-filter { background: #eff6ff; }
+.panel-item .pi-name { flex: 1; font-size: 13px; color: #1e293b; }
+.panel-item .pi-count {
+  font-size: 11px; background: #f1f5f9; color: #64748b;
+  padding: 1px 6px; border-radius: 99px;
+}
+.pin-btn {
+  width: 22px; height: 22px; border: none; background: transparent;
+  color: #cbd5e1; cursor: pointer; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  transition: color .12s, background .12s;
+}
+.pin-btn:hover { color: #f59e0b; background: #fef3c7; }
+.pin-btn.pinned { color: #f59e0b; }
+
+.panel-section-label {
+  padding: 6px 16px 2px; font-size: 10px; letter-spacing: .07em;
+  text-transform: uppercase; color: #94a3b8; font-weight: 600;
+}
+
+/* 「釘選提示」空白 */
+.pinned-hint {
+  padding: 10px 16px; font-size: 12px; color: #94a3b8;
+  font-style: italic;
+}
+</style>
+</head>
+<body>
+
+<!-- ── 側欄 ── -->
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    台灣產業商情
+    <small>本機 Claude</small>
+  </div>
+
+  <div class="sb-row active">
+    <span class="sb-label">全部公司</span>
+    <span class="sb-count">176</span>
+  </div>
+
+  <div class="sb-alert" onclick="alert('前往未分類')">
+    <span>⚡</span>
+    <span style="flex:1">12 間未分類</span>
+    <span style="font-size:10px">自動分類</span>
+  </div>
+
+  <div class="sb-divider"></div>
+
+  <!-- 展開面板入口 -->
+  <button class="sb-all-btn" id="open-panel-btn">
+    <span>≡</span>
+    <span>所有產業 &amp; 標籤</span>
+    <span id="open-panel-badge" style="background:#3b82f633;color:#93c5fd;font-size:10px;padding:1px 5px;border-radius:99px;margin-left:auto">13</span>
+  </button>
+
+  <div id="pinned-sidebar"></div>
+
+  <div class="sb-bottom">
+    <div style="position:relative">
+      <div class="sb-row" id="add-company-btn" onclick="toggleAddMenu()">
+        <span>＋</span>
+        <span class="sb-label">新增公司</span>
+        <span id="add-menu-arrow" style="font-size:10px;transition:transform .15s">▲</span>
+      </div>
+      <div id="add-company-menu" style="display:none;position:absolute;bottom:100%;left:0;right:0;background:#1e293b;border:1px solid #334155;border-radius:6px;overflow:hidden;margin-bottom:4px">
+        <div class="sb-row" onclick="alert('上傳檔案'); toggleAddMenu()" style="font-size:13px">
+          <span>↑</span>
+          <span class="sb-label">上傳檔案</span>
+        </div>
+        <div class="sb-row" onclick="alert('手動輸入'); toggleAddMenu()" style="font-size:13px">
+          <span>✏</span>
+          <span class="sb-label">手動輸入</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ── 主內容（示意） ── -->
+<main id="main">
+  <h2 style="font-size:20px;font-weight:700;color:#1e293b;margin-bottom:16px">全部公司 <span style="font-size:14px;color:#64748b;font-weight:400">176 間</span></h2>
+  <div id="main-cards"></div>
+</main>
+
+<!-- ── 展開面板 ── -->
+<div id="panel-backdrop"></div>
+<div id="panel">
+  <div class="panel-header">
+    <h3>產業 &amp; 標籤</h3>
+    <button class="panel-close" id="close-panel-btn">×</button>
+  </div>
+
+  <div class="panel-tabs">
+    <div class="panel-tab active" data-tab="industry">產業別</div>
+    <div class="panel-tab" data-tab="label">標籤</div>
+    <div class="panel-tab" data-tab="pinned">釘選管理</div>
+  </div>
+
+  <div class="panel-toolbar">
+    <input class="panel-search" id="panel-search" placeholder="搜尋…" />
+    <select class="panel-sort" id="panel-sort">
+      <option value="count">依數量</option>
+      <option value="alpha">依字母</option>
+    </select>
+    <button class="panel-add-btn" id="panel-add-btn" title="新增">＋</button>
+  </div>
+
+  <div class="panel-list" id="panel-list"></div>
+</div>
+
+<script>
+// ── 示範資料 ──
+const industries = [
+  { name: "前瞻科技", count: 36 },
+  { name: "消費生活", count: 32 },
+  { name: "綠色永續", count: 39 },
+];
+const labels = [
+  { name: "宏齊", count: 7 },
+  { name: "創業大聯盟決賽2026", count: 25 },
+  { name: "創業大聯盟複賽2026", count: 59 },
+  { name: "綠色配投", count: 26 },
+  { name: "潛在案源", count: 56 },
+  { name: "觀察名單", count: 11 },
+  { name: "AAMA-1", count: 9 },
+  { name: "AAMA-2", count: 12 },
+  { name: "智慧製造", count: 18 },
+  { name: "深科技", count: 4 },
+];
+
+// ── 狀態 ──
+let pinned = new Set(["潛在案源", "觀察名單", "前瞻科技"]);
+let activeTab = "industry";
+let searchQ = "";
+let sortMode = "count";
+let activeFilter = null;
+
+// ── 假公司資料 ──
+const mockCompanies = [
+  { name: "台積電股份有限公司", tag: "前瞻科技", label: "潛在案源", capital: "NT$2,593B", blurb: "全球最大晶圓代工廠" },
+  { name: "聯發科技股份有限公司", tag: "前瞻科技", label: "觀察名單", capital: "NT$159B", blurb: "無線通訊 IC 設計龍頭" },
+  { name: "統一企業股份有限公司", tag: "消費生活", label: "AAMA-1", capital: "NT$56B", blurb: "台灣最大食品飲料集團" },
+  { name: "台達電子工業股份有限公司", tag: "綠色永續", label: "AAMA-2", capital: "NT$258B", blurb: "電源管理與工業自動化" },
+  { name: "威剛科技股份有限公司", tag: "前瞻科技", label: "潛在案源", capital: "NT$33B", blurb: "記憶體模組製造商" },
+];
+
+function renderSidebar() {
+  const el = document.getElementById("pinned-sidebar");
+  const pinnedIndustries = industries.filter(x => pinned.has(x.name));
+  const pinnedLabels = labels.filter(x => pinned.has(x.name));
+  if (pinnedIndustries.length === 0 && pinnedLabels.length === 0) {
+    el.innerHTML = `<div style="padding:6px 14px;font-size:12px;color:#475569;font-style:italic">點面板中的 ☆ 釘選常用項目</div>`;
+    return;
+  }
+  const renderRows = (items) => items.map(x => `
+    <div class="sb-row ${activeFilter === x.name ? 'active' : ''}" onclick="setFilter('${escJ(x.name)}')">
+      <span class="pin-icon">★</span>
+      <span class="sb-label">${esc(x.name)}</span>
+      <span class="sb-count">${x.count}</span>
+    </div>
+  `).join("");
+  el.innerHTML = `
+    ${pinnedIndustries.length > 0 ? `
+      <div class="sb-section-label" style="padding-top:4px">產業別</div>
+      ${renderRows(pinnedIndustries)}
+    ` : ""}
+    ${pinnedLabels.length > 0 ? `
+      <div class="sb-section-label" style="padding-top:4px">標籤</div>
+      ${renderRows(pinnedLabels)}
+    ` : ""}
+  `;
+}
+
+function renderPanel() {
+  const list = document.getElementById("panel-list");
+  const q = searchQ.toLowerCase();
+
+  if (activeTab === "pinned") {
+    const pinnedIndustries = industries.filter(x => pinned.has(x.name));
+    const pinnedLabels = labels.filter(x => pinned.has(x.name));
+    if (pinnedIndustries.length === 0 && pinnedLabels.length === 0) {
+      list.innerHTML = `<div class="pinned-hint">尚未釘選任何項目。<br>切到「產業別」或「標籤」分頁，點 ☆ 即可釘選。</div>`;
+      return;
+    }
+    const renderGroup = (items) => items.map(x => `
+      <div class="panel-item">
+        <span class="pi-name">★ ${esc(x.name)}</span>
+        <span class="pi-count">${x.count}</span>
+        <button class="pin-btn pinned" onclick="togglePin('${escJ(x.name)}')" title="取消釘選">✕</button>
+      </div>
+    `).join("");
+    list.innerHTML = `
+      ${pinnedIndustries.length > 0 ? `
+        <div class="panel-section-label">產業別</div>
+        ${renderGroup(pinnedIndustries)}
+      ` : ""}
+      ${pinnedLabels.length > 0 ? `
+        <div class="panel-section-label">標籤</div>
+        ${renderGroup(pinnedLabels)}
+      ` : ""}
+    `;
+    return;
+  }
+
+  const src = activeTab === "industry" ? industries : labels;
+  let items = src.filter(x => x.name.toLowerCase().includes(q));
+  if (sortMode === "count") items = [...items].sort((a,b) => b.count - a.count);
+  else items = [...items].sort((a,b) => a.name.localeCompare(b.name, "zh-TW"));
+
+  list.innerHTML = items.map(x => `
+    <div class="panel-item ${activeFilter === x.name ? 'active-filter' : ''}" onclick="setFilter('${escJ(x.name)}')">
+      <span class="pi-name">${esc(x.name)}</span>
+      <span class="pi-count">${x.count}</span>
+      <button class="pin-btn ${pinned.has(x.name) ? 'pinned' : ''}"
+        onclick="event.stopPropagation(); togglePin('${escJ(x.name)}')"
+        title="${pinned.has(x.name) ? '取消釘選' : '釘選到側欄'}">
+        ${pinned.has(x.name) ? '★' : '☆'}
+      </button>
+    </div>
+  `).join("");
+}
+
+function togglePin(name) {
+  if (pinned.has(name)) pinned.delete(name);
+  else pinned.add(name);
+  renderSidebar();
+  renderPanel();
+}
+
+function setFilter(name) {
+  activeFilter = activeFilter === name ? null : name;
+  renderSidebar();
+  renderPanel();
+  renderMainCards();
+}
+
+function renderMainCards() {
+  const el = document.getElementById("main-cards");
+  const cards = activeFilter
+    ? mockCompanies.filter(c => c.tag === activeFilter || c.label === activeFilter)
+    : mockCompanies;
+  const title = activeFilter
+    ? `${activeFilter} <span style="font-size:14px;color:#64748b;font-weight:400">${cards.length} 間</span>`
+    : `全部公司 <span style="font-size:14px;color:#64748b;font-weight:400">${mockCompanies.length} 間（示意）</span>`;
+  document.querySelector("#main h2").innerHTML = title;
+  el.innerHTML = cards.map(c => `
+    <div class="mock-card">
+      <div style="flex:1">
+        <div class="mc-name">${esc(c.name)}</div>
+        <div class="mc-meta">${esc(c.blurb)}</div>
+        <div style="margin-top:6px">
+          <span class="mock-tag">${esc(c.tag)}</span>
+          <span class="mock-tag" style="background:#f0fdf4;color:#166534">${esc(c.label)}</span>
+        </div>
+      </div>
+      <div style="text-align:right;color:#64748b;font-size:12px">${esc(c.capital)}</div>
+    </div>
+  `).join("");
+}
+
+// ── 面板開關 ──
+document.getElementById("open-panel-btn").onclick = () => {
+  document.getElementById("panel").classList.add("open");
+  document.getElementById("panel-backdrop").classList.add("open");
+  updateToolbar();
+  renderPanel();
+};
+const closePanel = () => {
+  document.getElementById("panel").classList.remove("open");
+  document.getElementById("panel-backdrop").classList.remove("open");
+};
+document.getElementById("close-panel-btn").onclick = closePanel;
+document.getElementById("panel-backdrop").onclick = closePanel;
+
+// ── 分頁切換 ──
+function updateToolbar() {
+  const isPinned = activeTab === "pinned";
+  document.getElementById("panel-search").style.display = isPinned ? "none" : "";
+  document.getElementById("panel-sort").style.display = isPinned ? "none" : "";
+  const addBtn = document.getElementById("panel-add-btn");
+  addBtn.classList.toggle("visible", activeTab === "industry");
+  addBtn.title = "新增產業別";
+}
+document.getElementById("panel-add-btn").onclick = () => {
+  alert("（示意）點此跳出「新增產業別」輸入框，即原 ＋ 新增產業別 的流程");
+};
+document.querySelectorAll(".panel-tab").forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll(".panel-tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    activeTab = tab.dataset.tab;
+    updateToolbar();
+    renderPanel();
+  };
+});
+
+// ── 搜尋 + 排序 ──
+document.getElementById("panel-search").oninput = e => { searchQ = e.target.value; renderPanel(); };
+document.getElementById("panel-sort").onchange = e => { sortMode = e.target.value; renderPanel(); };
+
+// ── 新增公司選單 ──
+function toggleAddMenu() {
+  const menu = document.getElementById("add-company-menu");
+  const arrow = document.getElementById("add-menu-arrow");
+  const open = menu.style.display === "none";
+  menu.style.display = open ? "block" : "none";
+  arrow.style.transform = open ? "rotate(180deg)" : "";
+}
+
+// ── 工具 ──
+function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function escJ(s) { return String(s).replace(/'/g,"\\'"); }
+
+// ── 初始化 ──
+renderSidebar();
+renderMainCards();
+</script>
+</body>
+</html>

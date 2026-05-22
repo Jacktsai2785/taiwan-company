@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234f46e5'/%3E%3Ctext x='32' y='44' font-size='40' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3E台%3C/text%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/style.css?v=68" />
+  <link rel="stylesheet" href="/static/style.css?v=69" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
@@ -22,19 +22,64 @@
         <button id="settings-btn" onclick="openSettings()" title="AI 設定">⚙</button>
       </div>
     </div>
-    <nav id="industry-list"><!-- rendered by JS --></nav>
-    <button id="add-industry-btn">＋ 新增產業別</button>
-    <div id="upload-zone">
-      <div id="drop-target">
-        <span class="upload-icon">⬆️</span>
-        <span>上傳檔案<small>PDF / Word / Excel / 圖片</small></span>
-      </div>
+
+    <div id="sb-main-btn" class="sb-row">
+      <span class="sb-label">全部公司</span>
+      <span class="sb-count" id="sb-all-count">0</span>
+      <span class="sb-panel-icon">≡</span>
+    </div>
+
+    <div id="sb-unclassified-wrap"></div>
+
+    <div id="pinned-sidebar" class="sb-pinned-area"></div>
+
+    <div class="sb-bottom">
       <input type="file" id="file-input"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp" />
-      <button id="manual-input-btn">✏️ 手動輸入公司</button>
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp"
+        style="display:none" />
       <div id="upload-progress"></div>
+      <div style="position:relative">
+        <div class="sb-row" id="add-company-menu-btn">
+          <span>＋</span>
+          <span class="sb-label">新增公司</span>
+          <span class="sb-add-arrow" id="add-company-arrow">▲</span>
+        </div>
+        <div id="add-company-submenu">
+          <div class="sb-row" id="upload-trigger-btn">
+            <span>⬆️</span>
+            <span class="sb-label">上傳檔案</span>
+          </div>
+          <div class="sb-row" id="manual-input-btn">
+            <span>✏️</span>
+            <span class="sb-label">手動輸入</span>
+          </div>
+        </div>
+      </div>
     </div>
   </aside>
+
+  <!-- ── Side Panel (slide-over) ── -->
+  <div id="side-panel-backdrop"></div>
+  <div id="side-panel">
+    <div class="sp-header">
+      <h3>產業 &amp; 標籤</h3>
+      <button class="sp-close-btn" id="close-side-panel-btn">×</button>
+    </div>
+    <div class="sp-tabs">
+      <div class="sp-tab active" data-tab="industry">產業別</div>
+      <div class="sp-tab" data-tab="label">標籤</div>
+      <div class="sp-tab" data-tab="pinned">釘選管理</div>
+    </div>
+    <div class="sp-toolbar">
+      <input class="sp-search" id="sp-search" placeholder="搜尋…" />
+      <select class="sp-sort" id="sp-sort">
+        <option value="count">依數量</option>
+        <option value="alpha" selected>依名稱</option>
+      </select>
+      <button class="sp-add-btn" id="sp-add-btn">＋</button>
+    </div>
+    <div class="sp-list" id="sp-list"></div>
+  </div>
 
   <!-- ── Main ── -->
   <main id="main">
@@ -73,7 +118,7 @@
       <div id="modal-name"></div>
       <div id="modal-labels"></div>
       <div id="modal-actions">
-        <button id="modal-open-rel-btn" onclick="openRelationshipGraph()">🔗 母子公司關係圖</button>
+        <button id="modal-open-rel-btn" onclick="openRelationshipGraph()">🔗 競合關係圖</button>
         <div class="export-dropdown-wrap" id="export-dropdown-wrap">
           <button class="export-dropdown-toggle" id="modal-export-btn" onclick="toggleExportDropdown()">
             ↓ 匯出 <span class="gen-caret">▾</span>
@@ -148,8 +193,12 @@
   <div id="rel-graph-dialog" role="dialog" aria-modal="true">
     <div id="rel-graph-header">
       <button id="rel-graph-close" onclick="closeRelationshipGraph()" aria-label="關閉">✕</button>
-      <div id="rel-graph-title">母子公司關係圖</div>
+      <div id="rel-graph-title">競合關係圖</div>
       <div id="rel-graph-subtitle"></div>
+      <div id="rel-graph-tabs">
+        <button class="rel-tab active" data-tab="ownership" onclick="switchRelTab('ownership')">股權關係</button>
+        <button class="rel-tab" data-tab="competitor" onclick="switchRelTab('competitor')">競業版圖</button>
+      </div>
       <div id="rel-graph-actions">
         <button id="rel-graph-rebuild-btn" onclick="buildRelationship()">🔗 重新分析</button>
       </div>
@@ -157,12 +206,18 @@
     <div id="rel-graph-body">
       <div id="rel-graph-status"></div>
       <div id="rel-graph-canvas"></div>
-      <div id="rel-graph-legend">
+      <div id="rel-graph-legend" data-legend="ownership">
         <span class="legend-item"><span class="legend-dot legend-self"></span>本公司</span>
         <span class="legend-item"><span class="legend-dot legend-parent"></span>錨點：母法人</span>
         <span class="legend-item"><span class="legend-dot legend-anchor-person"></span>錨點：自然人</span>
         <span class="legend-item"><span class="legend-dot legend-sibling-in"></span>相關公司（已收錄）</span>
         <span class="legend-item"><span class="legend-dot legend-sibling-out"></span>相關公司（未收錄，可加入）</span>
+      </div>
+      <div id="rel-graph-legend-competitor" style="display:none">
+        <span class="legend-item"><span class="legend-dot legend-self"></span>本公司</span>
+        <span class="legend-item"><span class="legend-dot legend-comp-in"></span>競業（已收錄）</span>
+        <span class="legend-item"><span class="legend-dot legend-comp-out"></span>競業（未收錄，可加入）</span>
+        <span class="legend-item"><span class="legend-dot legend-comp-edge"></span>競爭關係</span>
       </div>
       <div id="rel-graph-note"></div>
     </div>
@@ -445,6 +500,19 @@
   </div>
 </div>
 
+<!-- ── 專利簡要說明 Modal ── -->
+<div id="patent-brief-overlay" onclick="closeBriefModal(event)">
+  <div id="patent-brief-dialog">
+    <div id="patent-brief-header">
+      <div id="patent-brief-title"></div>
+      <button id="patent-brief-close" onclick="document.getElementById('patent-brief-overlay').classList.remove('open')">✕</button>
+    </div>
+    <div id="patent-brief-body">
+      <div id="patent-brief-text"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Toast ── -->
 <div id="toast-container"></div>
 
@@ -539,6 +607,6 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=67"></script>
+<script src="/static/app.js?v=69"></script>
 </body>
 </html>

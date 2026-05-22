@@ -6,9 +6,9 @@ const state = {
   groups: {},                    // {industry: [group, ...]}
   expandedIndustries: new Set(),
   activeIndustry: null,          // null = all
-  activeGroup: null,             // null = all groups, "__ungrouped__" = no group
-  activeLabel: null,             // cross-industry label filter
-  activeLabelIndustry: null,     // industry drill-down within a label
+  activeGroup: null,
+  activeLabel: null,
+  activeLabelIndustry: null,
   expandedLabels: new Set(),
   activeTab: "all",              // "all" | "watched"
   sortBy: "capital",
@@ -17,8 +17,12 @@ const state = {
   pendingCandidates: [],
   pendingUncertain: [],
   pendingLabel: "",
-  enrichingIds: new Set(),       // currently enriching company ids
-  doneIds: new Set(),            // briefly green after enrichment completes
+  enrichingIds: new Set(),
+  doneIds: new Set(),
+  pinnedItems: new Set(JSON.parse(localStorage.getItem("pinnedItems") || "[]")),
+  sidePanelTab: "industry",
+  sidePanelSearch: "",
+  sidePanelSort: "alpha",
 };
 
 let _modalCompanyId = null;
@@ -213,214 +217,302 @@ function computeGroups() {
 
 /* ── Sidebar ── */
 function renderSidebar() {
-  const list = document.getElementById("industry-list");
-  list.innerHTML = "";
+  // 全部公司 / 面板入口
+  const mainBtn = document.getElementById("sb-main-btn");
+  const isAll = state.activeIndustry === null && state.activeLabel === null;
+  mainBtn.className = "sb-row" + (isAll ? " active" : "");
+  document.getElementById("sb-all-count").textContent = state.companies.length;
 
-  // "All" entry
-  const allDiv = document.createElement("div");
-  allDiv.className = "industry-item" + (state.activeIndustry === null ? " active" : "");
-  allDiv.innerHTML = `
-    <span class="chevron">›</span>
-    <span class="ind-label">全部公司</span>
-    <span class="industry-badge">${state.companies.length}</span>
-  `;
-  allDiv.addEventListener("click", () => {
-    state.activeIndustry = null;
-    state.activeGroup = null;
-    state.activeLabel = null;
-    state.activeLabelIndustry = null;
-    renderSidebar();
-    renderGrid();
-  });
-  list.appendChild(allDiv);
-
-  // Unclassified badge — only shown when companies exist without an industry
+  // 未分類警示
   const unclassifiedCount = state.companies.filter(c => !c.industry).length;
+  const uncWrap = document.getElementById("sb-unclassified-wrap");
   if (unclassifiedCount > 0) {
-    const badgeDiv = document.createElement("div");
-    badgeDiv.id = "unclassified-badge";
-    badgeDiv.innerHTML = `
-      <span class="unclassified-dot"></span>
-      <span class="unclassified-label">${unclassifiedCount} 間未分類</span>
-      <button class="unclassified-classify-btn" title="AI 自動分類">✨ 自動分類</button>
-    `;
-    badgeDiv.querySelector(".unclassified-classify-btn").addEventListener("click", e => {
+    uncWrap.innerHTML = `
+      <div class="sb-unclassified">
+        <span class="sb-unc-dot"></span>
+        <span class="sb-unc-label">${unclassifiedCount} 間未分類</span>
+        <button class="sb-unc-btn">✨ 自動分類</button>
+      </div>`;
+    uncWrap.querySelector(".sb-unc-btn").addEventListener("click", e => {
       e.stopPropagation();
       runClassify();
     });
-    list.appendChild(badgeDiv);
+  } else {
+    uncWrap.innerHTML = "";
   }
 
-  for (const ind of state.industries) {
-    const indCount = state.companies.filter(c => c.industry === ind).length;
-    const isExpanded = state.expandedIndustries.has(ind);
-    const isActive = state.activeIndustry === ind && state.activeGroup === null;
+  const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
 
-    const div = document.createElement("div");
-    div.className = "industry-item" + (isActive ? " active" : "") + (isExpanded ? " open" : "");
-    div.innerHTML = `
-      <span class="chevron">›</span>
-      <span class="ind-label">${escHtml(ind)}</span>
-      <span class="industry-badge">${indCount}</span>
-      <span class="industry-actions">
-        <button class="rename-ind" title="重新命名">✏️</button>
-        <button class="delete-ind" title="刪除">🗑</button>
-      </span>
+  // 釘選區
+  const pinnedEl = document.getElementById("pinned-sidebar");
+  const nat = (a, b) => a.localeCompare(b, "zh-TW", { numeric: true });
+  const pinnedIndustries = state.industries.filter(i => state.pinnedItems.has(i)).sort(nat);
+  const pinnedLabels = allLabels.filter(l => state.pinnedItems.has(l)).sort(nat);
+
+  if (pinnedIndustries.length === 0 && pinnedLabels.length === 0) {
+    pinnedEl.innerHTML = `<div style="padding:6px 14px;font-size:12px;color:var(--sb-muted);font-style:italic">點面板中的 ☆ 釘選常用項目</div>`;
+  } else {
+    const makeRows = (items, isLabel) => items.map(name => {
+      const count = isLabel
+        ? state.companies.filter(c => (c.labels || []).includes(name)).length
+        : state.companies.filter(c => c.industry === name).length;
+      const isActive = isLabel
+        ? state.activeLabel === name
+        : state.activeIndustry === name && state.activeGroup === null;
+      return `<div class="sb-row ${isActive ? (isLabel ? "active-label" : "active") : ""}" data-pinned="${escHtml(name)}" data-is-label="${isLabel}">
+        <span class="sb-label">${escHtml(name)}</span>
+        <span class="sb-count">${count}</span>
+      </div>`;
+    }).join("");
+
+    pinnedEl.innerHTML = `
+      ${pinnedIndustries.length > 0 ? `<div class="sb-section-label">產業別</div>${makeRows(pinnedIndustries, false)}` : ""}
+      ${pinnedLabels.length > 0 ? `<div class="sb-section-label">標籤</div>${makeRows(pinnedLabels, true)}` : ""}
     `;
 
-    div.addEventListener("click", e => {
-      if (e.target.closest(".industry-actions")) return;
-      if (state.expandedIndustries.has(ind)) {
-        state.expandedIndustries.delete(ind);
-      } else {
-        state.expandedIndustries.add(ind);
-      }
-      state.activeIndustry = ind;
-      state.activeGroup = null;
-      state.activeLabel = null;
-      state.activeLabelIndustry = null;
-      renderSidebar();
-      renderGrid();
-    });
-
-    div.querySelector(".rename-ind").addEventListener("click", e => {
-      e.stopPropagation();
-      startRenameIndustry(div, ind);
-    });
-    div.querySelector(".delete-ind").addEventListener("click", async e => {
-      e.stopPropagation();
-      if (!confirm(`確定要刪除產業別「${ind}」嗎？`)) return;
-      await api("DELETE", `/api/config/industries/${encodeURIComponent(ind)}`);
-      if (state.activeIndustry === ind) { state.activeIndustry = null; state.activeGroup = null; }
-      state.expandedIndustries.delete(ind);
-      await loadIndustries();
-      renderSidebar();
-      renderGrid();
-    });
-
-    list.appendChild(div);
-
-    // Group sub-items (only when expanded)
-    if (isExpanded) {
-      const companiesInInd = state.companies.filter(c => c.industry === ind);
-      const groups = state.groups[ind] || [];
-
-      for (const grp of groups) {
-        const grpCount = companiesInInd.filter(c => (c.labels || []).includes(grp)).length;
-        const isGrpActive = state.activeIndustry === ind && state.activeGroup === grp;
-        const grpDiv = document.createElement("div");
-        grpDiv.className = "group-item" + (isGrpActive ? " active" : "");
-        grpDiv.innerHTML = `<span title="${escHtml(grp)}">${escHtml(grp)}</span><span class="industry-badge">${grpCount}</span>`;
-        grpDiv.addEventListener("click", () => {
-          state.activeIndustry = ind;
-          state.activeGroup = grp;
+    pinnedEl.querySelectorAll(".sb-row[data-pinned]").forEach(row => {
+      row.addEventListener("click", () => {
+        const name = row.dataset.pinned;
+        const isLabel = row.dataset.isLabel === "true";
+        if (isLabel) {
+          state.activeLabel = state.activeLabel === name ? null : name;
+          state.activeLabelIndustry = null;
+          state.activeIndustry = null;
+          state.activeGroup = null;
+          state.activeTab = "all";
+          document.querySelectorAll(".tab-btn").forEach(b =>
+            b.classList.toggle("active", b.dataset.tab === "all"));
+        } else {
+          state.activeIndustry = state.activeIndustry === name ? null : name;
+          state.activeGroup = null;
           state.activeLabel = null;
           state.activeLabelIndustry = null;
-          renderSidebar();
-          renderGrid();
-        });
-        list.appendChild(grpDiv);
-      }
+        }
+        renderSidebar();
+        renderGrid();
+      });
+    });
+  }
+}
 
-      const ungroupedCount = companiesInInd.filter(c => !c.labels || c.labels.length === 0).length;
-      if (ungroupedCount > 0) {
-        const isUngroupedActive = state.activeIndustry === ind && state.activeGroup === "__ungrouped__";
-        const ungroupedDiv = document.createElement("div");
-        ungroupedDiv.className = "group-item" + (isUngroupedActive ? " active" : "");
-        ungroupedDiv.innerHTML = `<span>未分組</span><span class="industry-badge">${ungroupedCount}</span>`;
-        ungroupedDiv.addEventListener("click", () => {
-          state.activeIndustry = ind;
-          state.activeGroup = "__ungrouped__";
-          state.activeLabel = null;
-          state.activeLabelIndustry = null;
-          renderSidebar();
-          renderGrid();
-        });
-        list.appendChild(ungroupedDiv);
-      }
+/* ── Side Panel ── */
+function _clearFilter() {
+  state.activeIndustry = null;
+  state.activeGroup = null;
+  state.activeLabel = null;
+  state.activeLabelIndustry = null;
+  renderSidebar();
+  renderSidePanel();
+  renderGrid();
+}
+
+function openSidePanel() {
+  document.getElementById("side-panel").classList.add("open");
+  document.getElementById("side-panel-backdrop").classList.add("open");
+  document.getElementById("main").classList.add("side-panel-open");
+  _renderSidePanelToolbar();
+  renderSidePanel();
+}
+function closeSidePanel() {
+  document.getElementById("side-panel").classList.remove("open");
+  document.getElementById("side-panel-backdrop").classList.remove("open");
+  document.getElementById("main").classList.remove("side-panel-open");
+}
+
+function _renderSidePanelToolbar() {
+  const isPinned = state.sidePanelTab === "pinned";
+  document.getElementById("sp-search").style.display = isPinned ? "none" : "";
+  document.getElementById("sp-sort").style.display = isPinned ? "none" : "";
+  const addBtn = document.getElementById("sp-add-btn");
+  addBtn.classList.toggle("visible", state.sidePanelTab === "industry");
+}
+
+function renderSidePanel() {
+  const list = document.getElementById("sp-list");
+  const q = state.sidePanelSearch.toLowerCase();
+
+  if (state.sidePanelTab === "pinned") {
+    const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
+    const _nat = (a, b) => a.localeCompare(b, "zh-TW", { numeric: true });
+    const pinnedInds = state.industries.filter(i => state.pinnedItems.has(i)).sort(_nat);
+    const pinnedLbls = allLabels.filter(l => state.pinnedItems.has(l)).sort(_nat);
+    if (pinnedInds.length === 0 && pinnedLbls.length === 0) {
+      list.innerHTML = `<div class="sp-empty">尚未釘選任何項目。<br>切到「產業別」或「標籤」分頁，點 ☆ 即可釘選。</div>`;
+      return;
     }
+    const renderGroup = (items, isLabel) => items.map(name => {
+      const count = isLabel
+        ? state.companies.filter(c => (c.labels || []).includes(name)).length
+        : state.companies.filter(c => c.industry === name).length;
+      return `<div class="sp-item">
+        <span class="sp-name">${escHtml(name)}</span>
+        <span class="sp-count">${count}</span>
+        <button class="sp-pin-btn pinned" data-name="${escHtml(name)}" title="取消釘選">★</button>
+      </div>`;
+    }).join("");
+    list.innerHTML = `
+      ${pinnedInds.length > 0 ? `<div class="sp-section-label">產業別</div>${renderGroup(pinnedInds, false)}` : ""}
+      ${pinnedLbls.length > 0 ? `<div class="sp-section-label">標籤</div>${renderGroup(pinnedLbls, true)}` : ""}
+    `;
+    list.querySelectorAll(".sp-pin-btn").forEach(btn => {
+      btn.addEventListener("click", e => { e.stopPropagation(); toggleSidePin(btn.dataset.name); });
+    });
+    return;
   }
 
-  // ── 標籤區塊（cross-industry，可展開看產業分布）──
-  const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))].sort((a, b) => a.localeCompare(b, "zh-TW"));
-  if (allLabels.length > 0) {
-    const divider = document.createElement("div");
-    divider.className = "sidebar-section-divider";
-    divider.textContent = "標籤";
-    list.appendChild(divider);
+  const isIndustryTab = state.sidePanelTab === "industry";
+  let items;
+  if (isIndustryTab) {
+    items = state.industries.map(name => ({
+      name,
+      count: state.companies.filter(c => c.industry === name).length,
+    }));
+  } else {
+    const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
+    items = allLabels.map(name => ({
+      name,
+      count: state.companies.filter(c => (c.labels || []).includes(name)).length,
+    }));
+  }
 
-    for (const lbl of allLabels) {
-      const companiesWithLbl = state.companies.filter(c => (c.labels || []).includes(lbl));
-      const count = companiesWithLbl.length;
-      const isLblActive = state.activeLabel === lbl;
-      const isExpanded = state.expandedLabels.has(lbl);
+  if (q) items = items.filter(x => x.name.toLowerCase().includes(q));
+  if (state.sidePanelSort === "count") items.sort((a, b) => b.count - a.count);
+  else items.sort((a, b) => a.name.localeCompare(b.name, "zh-TW", { numeric: true }));
 
-      const lblDiv = document.createElement("div");
-      lblDiv.className = "label-nav-item" + (isLblActive && !state.activeLabelIndustry ? " active" : "") + (isExpanded ? " open" : "");
-      lblDiv.innerHTML = `
-        <span class="label-chevron">›</span>
-        <span title="${escHtml(lbl)}">${escHtml(lbl)}</span>
-        <span class="industry-badge">${count}</span>`;
-      lblDiv.addEventListener("click", () => {
-        if (state.expandedLabels.has(lbl)) {
-          state.expandedLabels.delete(lbl);
-        } else {
-          state.expandedLabels.add(lbl);
-        }
-        state.activeLabel = lbl;
+  // 全部公司頂列
+  const isAllActive = state.activeIndustry === null && state.activeLabel === null;
+  const allRow = `<div class="sp-item ${isAllActive ? "active-filter" : ""}" id="sp-all-row">
+    <span class="sp-name" style="font-weight:600">全部公司</span>
+    <span class="sp-count">${state.companies.length}</span>
+  </div>`;
+
+  if (items.length === 0) {
+    list.innerHTML = allRow + `<div class="sp-empty">${q ? "無符合的項目" : "尚無資料"}</div>`;
+    list.querySelector("#sp-all-row").addEventListener("click", _clearFilter);
+    return;
+  }
+
+  list.innerHTML = allRow + items.map(x => {
+    const isActive = isIndustryTab
+      ? state.activeIndustry === x.name
+      : state.activeLabel === x.name;
+    const pinned = state.pinnedItems.has(x.name);
+    const actions = isIndustryTab
+      ? `<span class="sp-actions">
+           <button class="sp-rename-btn" data-name="${escHtml(x.name)}" title="重新命名">✏️</button>
+           <button class="sp-delete-btn" data-name="${escHtml(x.name)}" title="刪除">🗑</button>
+         </span>`
+      : "";
+    return `<div class="sp-item ${isActive ? (isIndustryTab ? "active-filter" : "active-filter-label") : ""}"
+               data-name="${escHtml(x.name)}" data-is-label="${!isIndustryTab}">
+      <span class="sp-name">${escHtml(x.name)}</span>
+      <span class="sp-count">${x.count}</span>
+      ${actions}
+      <button class="sp-pin-btn ${pinned ? "pinned" : ""}" data-name="${escHtml(x.name)}" title="${pinned ? "取消釘選" : "釘選到側欄"}">${pinned ? "★" : "☆"}</button>
+    </div>`;
+  }).join("");
+
+  list.querySelector("#sp-all-row")?.addEventListener("click", _clearFilter);
+
+  list.querySelectorAll(".sp-item:not(#sp-all-row)").forEach(item => {
+    item.addEventListener("click", e => {
+      if (e.target.closest(".sp-pin-btn") || e.target.closest(".sp-actions")) return;
+      const name = item.dataset.name;
+      const isLabel = item.dataset.isLabel === "true";
+      if (isLabel) {
+        state.activeLabel = state.activeLabel === name ? null : name;
         state.activeLabelIndustry = null;
         state.activeIndustry = null;
         state.activeGroup = null;
         state.activeTab = "all";
         document.querySelectorAll(".tab-btn").forEach(b =>
-          b.classList.toggle("active", b.dataset.tab === "all")
-        );
+          b.classList.toggle("active", b.dataset.tab === "all"));
+      } else {
+        state.activeIndustry = state.activeIndustry === name ? null : name;
+        state.activeGroup = null;
+        state.activeLabel = null;
+        state.activeLabelIndustry = null;
+      }
+      renderSidebar();
+      renderSidePanel();
+      renderGrid();
+    });
+  });
+
+  list.querySelectorAll(".sp-pin-btn").forEach(btn => {
+    btn.addEventListener("click", e => { e.stopPropagation(); toggleSidePin(btn.dataset.name); });
+  });
+
+  if (isIndustryTab) {
+    list.querySelectorAll(".sp-rename-btn").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const oldName = btn.dataset.name;
+        const nameEl = btn.closest(".sp-item").querySelector(".sp-name");
+        startRenameIndustryInPanel(nameEl, oldName);
+      });
+    });
+    list.querySelectorAll(".sp-delete-btn").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        e.stopPropagation();
+        const name = btn.dataset.name;
+        if (!confirm(`確定要刪除產業別「${name}」嗎？`)) return;
+        await api("DELETE", `/api/config/industries/${encodeURIComponent(name)}`);
+        if (state.activeIndustry === name) { state.activeIndustry = null; state.activeGroup = null; }
+        state.expandedIndustries.delete(name);
+        state.pinnedItems.delete(name);
+        _savePinnedItems();
+        await loadIndustries();
         renderSidebar();
+        renderSidePanel();
         renderGrid();
       });
-      list.appendChild(lblDiv);
-
-      if (isExpanded) {
-        const industriesInLbl = [...new Set(companiesWithLbl.map(c => c.industry).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-TW"));
-
-        for (const ind of industriesInLbl) {
-          const indCount = companiesWithLbl.filter(c => c.industry === ind).length;
-          const isIndActive = isLblActive && state.activeLabelIndustry === ind;
-          const subDiv = document.createElement("div");
-          subDiv.className = "label-ind-item" + (isIndActive ? " active" : "");
-          subDiv.innerHTML = `<span title="${escHtml(ind)}">${escHtml(truncLabel(ind))}</span><span class="industry-badge">${indCount}</span>`;
-          subDiv.addEventListener("click", e => {
-            e.stopPropagation();
-            state.activeLabel = lbl;
-            state.activeLabelIndustry = isIndActive ? null : ind;
-            state.activeIndustry = null;
-            state.activeGroup = null;
-            renderSidebar();
-            renderGrid();
-          });
-          list.appendChild(subDiv);
-        }
-
-        const unclassifiedInLbl = companiesWithLbl.filter(c => !c.industry).length;
-        if (unclassifiedInLbl > 0) {
-          const isUncActive = isLblActive && state.activeLabelIndustry === "__none__";
-          const uncDiv = document.createElement("div");
-          uncDiv.className = "label-ind-item" + (isUncActive ? " active" : "");
-          uncDiv.innerHTML = `<span>未分類</span><span class="industry-badge">${unclassifiedInLbl}</span>`;
-          uncDiv.addEventListener("click", e => {
-            e.stopPropagation();
-            state.activeLabel = lbl;
-            state.activeLabelIndustry = isUncActive ? null : "__none__";
-            state.activeIndustry = null;
-            state.activeGroup = null;
-            renderSidebar();
-            renderGrid();
-          });
-          list.appendChild(uncDiv);
-        }
-      }
-    }
+    });
   }
+}
+
+function toggleSidePin(name) {
+  if (state.pinnedItems.has(name)) state.pinnedItems.delete(name);
+  else state.pinnedItems.add(name);
+  _savePinnedItems();
+  renderSidebar();
+  renderSidePanel();
+}
+
+function _savePinnedItems() {
+  localStorage.setItem("pinnedItems", JSON.stringify([...state.pinnedItems]));
+}
+
+function startRenameIndustryInPanel(nameEl, oldName) {
+  const input = document.createElement("input");
+  input.className = "industry-edit-input";
+  input.value = oldName;
+  input.style.cssText = "font-size:13px;padding:2px 6px;border:1px solid #3b82f6;border-radius:4px;width:100%;outline:none;";
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  const commit = async () => {
+    const newName = input.value.trim();
+    if (newName && newName !== oldName) {
+      await api("PUT", "/api/config/industries", { old_name: oldName, new_name: newName });
+      if (state.activeIndustry === oldName) state.activeIndustry = newName;
+      if (state.pinnedItems.has(oldName)) {
+        state.pinnedItems.delete(oldName);
+        state.pinnedItems.add(newName);
+        _savePinnedItems();
+      }
+      await Promise.all([loadIndustries(), loadCompanies()]);
+      computeGroups();
+    }
+    renderSidebar();
+    renderSidePanel();
+    renderGrid();
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { input.value = oldName; input.blur(); }
+  });
 }
 
 function startRenameIndustry(div, oldName) {
@@ -455,7 +547,7 @@ function startRenameIndustry(div, oldName) {
   });
 }
 
-document.getElementById("add-industry-btn").addEventListener("click", async () => {
+document.getElementById("sp-add-btn").addEventListener("click", async () => {
   const name = prompt("請輸入新產業別名稱：");
   if (!name || !name.trim()) return;
   const indName = name.trim();
@@ -1178,6 +1270,18 @@ function listingBadge(status) {
   return `<span class="listing-badge ${cls}">${escHtml(status)}</span>`;
 }
 
+// Fallback for old company records not yet re-enriched: look up rep entity in local DB.
+function _dirRepListingBadge(repName, repTaxId) {
+  if (!repName) return "";
+  const norm = n => n.replace(/股份有限公司$|有限公司$/, "").trim();
+  const found = state.companies.find(c =>
+    (repTaxId && c.tax_id === repTaxId) || norm(c.name) === norm(repName)
+  );
+  return (found?.listing_status && found.listing_status !== "非公發")
+    ? listingBadge(found.listing_status)
+    : "";
+}
+
 /* ── Watch list ── */
 async function toggleWatch(id) {
   const c = state.companies.find(x => x.id === id);
@@ -1553,11 +1657,17 @@ function openModal(id) {
       const loadingRow = entityName
         ? `<tr class="director-parent-row" id="parent-row-${i}" style="display:none"><td colspan="6" class="director-parent-cell no-parent">查詢母公司中…</td></tr>`
         : "";
+      const repBadge = d.representative_of
+        ? (d.representative_of_listing
+            ? listingBadge(d.representative_of_listing)
+            : _dirRepListingBadge(d.representative_of, d.representative_of_tax_id))
+        : "";
+      const nameBadge = (!d.representative_of && d.name_listing) ? listingBadge(d.name_listing) : "";
       return `
       <tr${isActive ? ' class="director-row-active"' : ""} data-dir-idx="${i}">
         <td>${escHtml(d.title || "—")}</td>
-        <td>${escHtml(d.name || "—")}${badge}</td>
-        <td>${escHtml(d.representative_of || "—")}</td>
+        <td>${escHtml(d.name || "—")}${badge}${nameBadge}</td>
+        <td>${escHtml(d.representative_of || "—")}${repBadge}</td>
         <td>${d.shares ? Number(d.shares).toLocaleString() : "—"}</td>
         <td>${d.ratio != null ? (d.ratio * 100).toFixed(2) + "%" : "—"}</td>
         <td><button class="${cls}" title="${tip}" onclick="setAnchorDirector(${i})">${isActive ? "✓" : "⊕"}</button></td>
@@ -2043,7 +2153,7 @@ function _showBatchWebsitePrompt(companyIds) {
         <div class="bwp-row">
           <div class="bwp-row-header">
             <span class="bwp-name">${escHtml(name)}</span>
-            <span class="bwp-status" id="bwp-status-${i}">${existing ? "已知官網" : "搜尋中…"}</span>
+            <span class="bwp-status${existing ? "" : " searching"}" id="bwp-status-${i}">${existing ? "已知官網" : "搜尋中…"}</span>
           </div>
           <input class="bwp-input" type="url" id="bwp-input-${i}"
             placeholder="${existing ? "https://example.com" : "搜尋中…"}"
@@ -2052,6 +2162,14 @@ function _showBatchWebsitePrompt(companyIds) {
             autocomplete="off" />
         </div>`;
     }).join("");
+
+    // Disable confirm until all searches finish; skip is always available
+    const needSearch = companyIds.filter((id, i) => !state.companies.find(x => x.id === id)?.website);
+    let pending = needSearch.length;
+    const _updateConfirmBtn = () => {
+      confirmBtn.disabled = pending > 0;
+    };
+    _updateConfirmBtn();
 
     overlay.classList.add("open");
 
@@ -2082,7 +2200,13 @@ function _showBatchWebsitePrompt(companyIds) {
         .catch(() => {
           if (!overlay.classList.contains("open")) return;
           const input = document.getElementById(`bwp-input-${i}`);
+          const status = document.getElementById(`bwp-status-${i}`);
           if (input) { input.disabled = false; input.placeholder = "https://example.com"; }
+          if (status) { status.className = "bwp-status missing"; status.textContent = "搜尋失敗"; }
+        })
+        .finally(() => {
+          pending = Math.max(0, pending - 1);
+          _updateConfirmBtn();
         });
     });
 
@@ -2279,16 +2403,86 @@ function patentGen() {
 
 const _PATENT_FOLD = 3;
 
-function toggleBrief(idx) {
-  const pre  = document.getElementById(`brief-pre-${idx}`);
-  const full = document.getElementById(`brief-full-${idx}`);
-  const btn  = full && full.nextElementSibling;
-  if (!full) return;
-  const expanded = full.style.display !== "none";
-  if (pre)  pre.style.display  = expanded ? "" : "none";
-  full.style.display = expanded ? "none" : "";
-  if (btn)  btn.textContent    = expanded ? "展開" : "收合";
+// 儲存專利資料供 modal 使用
+const _patentBriefData = {};
+
+function _formatBriefHtml(rawText) {
+  const text = rawText.replace(/^﻿/, '').replace(/  +/g, ' ').trim();
+
+  const claimsIdx = text.search(/專利範圍|申請專利範圍/);
+  const refIdx    = text.search(/參考文獻/);
+  const firstBreak = [claimsIdx, refIdx].filter(i => i !== -1).reduce((a, b) => Math.min(a, b), Infinity);
+
+  const abstract = (firstBreak < Infinity ? text.slice(0, firstBreak) : text).trim();
+  const rest     = firstBreak < Infinity ? text.slice(firstBreak) : '';
+
+  const html = [];
+
+  // 摘要：每 2 句一段
+  if (abstract) {
+    const parts = abstract.split('。').filter(s => s.trim());
+    const withDot = parts.map((s, i) => s.trim() + (i < parts.length - 1 || abstract.endsWith('。') ? '。' : ''));
+    for (let i = 0; i < withDot.length; i += 2) {
+      const chunk = withDot.slice(i, i + 2).join('');
+      if (chunk.trim()) html.push(`<p>${escHtml(chunk)}</p>`);
+    }
+  }
+
+  if (!rest) return html.join('') || `<p>${escHtml(text)}</p>`;
+
+  // 專利範圍
+  const claimsMatch = rest.match(/^(?:申請專利範圍|專利範圍)([\s\S]*?)(?=參考文獻|$)/);
+  const refMatch    = rest.match(/參考文獻([\s\S]*)$/);
+
+  if (claimsMatch) {
+    const claimsText = claimsMatch[1]
+      .replace(/^\s*\d+:\d+\s*/, '')
+      .replace(/^(?:申請專利範圍|專利範圍)\s*/, '')
+      .trim();
+    if (claimsText) {
+      html.push('<h4>專利範圍</h4>');
+      // 嘗試按編號分段 "1.一種..." "2.如..."
+      const items = claimsText.split(/(?=\d+\.\s*[一-鿿＀-￯])/).filter(s => s.trim());
+      if (items.length > 1) {
+        items.forEach(item => html.push(`<p class="patent-claim-item">${escHtml(item.trim())}</p>`));
+      } else {
+        const parts = claimsText.split('。').filter(s => s.trim());
+        for (let i = 0; i < parts.length; i += 2) {
+          const chunk = parts.slice(i, i + 2).map((s, j) => s + (i + j < parts.length - 1 ? '。' : '')).join('');
+          if (chunk.trim()) html.push(`<p>${escHtml(chunk)}</p>`);
+        }
+      }
+    }
+  }
+
+  // 參考文獻
+  if (refMatch) {
+    const refsText = refMatch[1].replace(/^引用專利\s*/, '').trim();
+    if (refsText) {
+      html.push('<h4>參考文獻</h4>');
+      html.push(`<p class="patent-ref-text">${escHtml(refsText)}</p>`);
+    }
+  }
+
+  return html.join('') || `<p>${escHtml(text)}</p>`;
 }
+
+function openBriefModal(idx) {
+  const d = _patentBriefData[idx];
+  if (!d) return;
+  document.getElementById("patent-brief-title").textContent = d.title || "簡要說明";
+  document.getElementById("patent-brief-text").innerHTML = _formatBriefHtml(d.brief);
+  document.getElementById("patent-brief-overlay").classList.add("open");
+}
+
+function closeBriefModal(e) {
+  if (e && e.target !== document.getElementById("patent-brief-overlay")) return;
+  document.getElementById("patent-brief-overlay").classList.remove("open");
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.getElementById("patent-brief-overlay")?.classList.remove("open");
+});
 
 function togglePatentRows() {
   const rows = document.querySelectorAll(".patent-row-extra");
@@ -2378,11 +2572,11 @@ function _renderPatents(companyId, autoShow = false) {
     const brief = p.brief || "";
     const briefPreview = brief.length > 30 ? brief.slice(0, 30) + "…" : brief;
     const hasMore = brief.length > 30;
+    if (brief) _patentBriefData[idx] = { title: p.title, brief };
     const briefHtml = brief
-      ? `<span class="brief-preview" id="brief-pre-${idx}">${escHtml(briefPreview)}</span>`
+      ? `<span class="brief-preview">${escHtml(briefPreview)}</span>`
         + (hasMore
-          ? `<span class="brief-full" id="brief-full-${idx}" style="display:none">${escHtml(brief)}</span>`
-            + `<button class="brief-toggle" onclick="toggleBrief(${idx})">展開</button>`
+          ? `<button class="brief-toggle" onclick="openBriefModal(${idx})">展開</button>`
           : "")
       : "—";
 
@@ -2527,23 +2721,56 @@ document.getElementById("modal-overlay").addEventListener("click", e => {
 });
 
 /* ── Upload ── */
-const dropTarget = document.getElementById("drop-target");
 const fileInput = document.getElementById("file-input");
 const uploadProgress = document.getElementById("upload-progress");
 
-dropTarget.addEventListener("click", () => fileInput.click());
+// 開啟/關閉「新增公司」子選單
+const _addMenuBtn = document.getElementById("add-company-menu-btn");
+const _addSubmenu = document.getElementById("add-company-submenu");
+const _addArrow = document.getElementById("add-company-arrow");
+_addMenuBtn.addEventListener("click", () => {
+  const open = _addSubmenu.style.display === "none" || !_addSubmenu.style.display;
+  _addSubmenu.style.display = open ? "block" : "none";
+  _addArrow.style.transform = open ? "rotate(180deg)" : "";
+});
+
+// 上傳檔案觸發
+document.getElementById("upload-trigger-btn").addEventListener("click", () => {
+  _addSubmenu.style.display = "none";
+  _addArrow.style.transform = "";
+  fileInput.click();
+});
 fileInput.addEventListener("change", () => {
   if (fileInput.files[0]) handleUpload(fileInput.files[0]);
 });
-dropTarget.addEventListener("dragover", e => {
-  e.preventDefault();
-  dropTarget.classList.add("drag-over");
+
+// 全部公司 / 面板入口（合一）
+document.getElementById("sb-main-btn").addEventListener("click", openSidePanel);
+
+// Panel 開關
+document.getElementById("open-side-panel-btn")?.addEventListener("click", openSidePanel);
+document.getElementById("close-side-panel-btn").addEventListener("click", closeSidePanel);
+document.getElementById("main").addEventListener("click", e => {
+  if (document.getElementById("side-panel").classList.contains("open")) closeSidePanel();
 });
-dropTarget.addEventListener("dragleave", () => dropTarget.classList.remove("drag-over"));
-dropTarget.addEventListener("drop", e => {
-  e.preventDefault();
-  dropTarget.classList.remove("drag-over");
-  if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]);
+
+// Panel 分頁切換
+document.querySelectorAll(".sp-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".sp-tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    state.sidePanelTab = tab.dataset.tab;
+    _renderSidePanelToolbar();
+    renderSidePanel();
+  });
+});
+document.getElementById("sp-search").addEventListener("input", e => {
+  state.sidePanelSearch = e.target.value;
+  renderSidePanel();
+});
+document.getElementById("sp-sort").addEventListener("change", e => {
+  state.sidePanelSort = e.target.value;
+  renderSidePanel();
 });
 
 async function handleUpload(file) {
@@ -2589,7 +2816,11 @@ async function handleUpload(file) {
 }
 
 /* ── Manual Input Dialog ── */
-document.getElementById("manual-input-btn").addEventListener("click", () => openManualDialog());
+document.getElementById("manual-input-btn").addEventListener("click", () => {
+  _addSubmenu.style.display = "none";
+  _addArrow.style.transform = "";
+  openManualDialog();
+});
 document.getElementById("manual-cancel").addEventListener("click", () =>
   document.getElementById("manual-overlay").classList.remove("open"));
 document.getElementById("manual-overlay").addEventListener("click", e => {
@@ -2686,11 +2917,33 @@ function _getManualLabel() {
 }
 
 async function openManualDialog(suggestedLabel = "") {
-  await loadLabels();
+  try { await loadLabels(); } catch (_) { /* 標籤 API 失敗時用快取的 state.labels */ }
   document.getElementById("manual-names").value = "";
   _buildLabelOptions(suggestedLabel);
   document.getElementById("manual-overlay").classList.add("open");
   setTimeout(() => document.getElementById("manual-names").focus(), 50);
+}
+
+async function openManualDialogWithName(name) {
+  try { await loadLabels(); } catch (_) {}
+  document.getElementById("manual-names").value = name;
+  _buildLabelOptions("");
+  document.getElementById("manual-overlay").classList.add("open");
+  setTimeout(() => document.getElementById("manual-names").focus(), 50);
+}
+
+function openCompanyByName(name) {
+  const co = state.companies.find(
+    c => c.name === name || c.name === name + "股份有限公司" || c.name === name + "有限公司"
+  );
+  if (co) openModal(co.id);
+}
+
+function handleCompetitorChip(el) {
+  const name  = el.dataset.cname;
+  const added = el.dataset.added === "true";
+  if (added) openCompanyByName(name);
+  else       openManualDialogWithName(name);
 }
 
 document.getElementById("manual-ok").addEventListener("click", async () => {
@@ -2728,7 +2981,7 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
       if (skipped.has(name)) continue;
       const match = resolved[name];
       const displayName = match ? match.full_name : name;
-      const existing = state.companies.find(c => c.name === displayName || c.name === (match?.short_name ?? name));
+      const existing = _findExistingCompany(displayName) || _findExistingCompany(match?.short_name ?? name);
       const candidate = {
         name: displayName,
         tax_id: match ? (match.tax_id || null) : null,
@@ -2737,6 +2990,7 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
         is_new: !existing,
         existing_id: existing ? existing.id : null,
         existing_labels: existing ? (existing.labels || []) : [],
+        is_unverified: match?.is_unverified || false,
       };
       if (match || displayName.endsWith("股份有限公司") || displayName.endsWith("有限公司")) {
         valid.push(candidate);
@@ -2763,18 +3017,37 @@ function openDisambigDialog(items, onConfirm) {
   const body = document.getElementById("disambig-body");
   body.innerHTML = items.map((item, gi) => `
     <div class="disambig-group">
-      <div class="disambig-input-label">「${escHtml(item.input)}」— 請選擇正確的公司（${item.matches.length} 筆）：</div>
+      <div class="disambig-input-label">${item._label || `「${escHtml(item.input)}」— 請選擇正確的公司（${item.matches.length} 筆）：`}</div>
       ${item.matches.map((m, mi) => {
-        const statusDot = m.status === "核准設立"
-          ? `<span class="disambig-status active" title="核准設立">●</span>`
-          : `<span class="disambig-status unknown" title="${escHtml(m.status || '狀態不明')}">●</span>`;
+        const _ACTIVE = new Set(["核准設立","登記","認許"]);
+        const _DISSOLVED = new Set(["解散","廢止","撤銷","命令解散","廢止認許","撤回認許"]);
+        const st = m.status || "";
+        const isMDissolved = m.is_dissolved || _DISSOLVED.has(st) || ["解散","撤銷","廢止","命令解散"].some(k => st.includes(k));
+        const statusBadge = isMDissolved
+          ? `<span class="disambig-status dissolved" title="${escHtml(st || '已解散')}">解散</span>`
+          : m.is_unverified
+            ? `<span class="disambig-status unverified" title="Ronny 顯示核准，但政府網站驗證失敗，請謹慎確認">待確認</span>`
+            : _ACTIVE.has(st)
+              ? `<span class="disambig-status active"   title="${escHtml(st)}">核准</span>`
+              : `<span class="disambig-status unknown"  title="${escHtml(st || '狀態不明')}">?</span>`;
         const corpBadge = m.is_corp
           ? `<span class="disambig-corp-badge">股份有限公司</span>`
           : `<span class="disambig-corp-badge limited">有限公司</span>`;
+        const isFirstActive = mi === item.matches.findIndex(x => !x.is_dissolved);
+        if (isMDissolved) {
+          return `
+          <div class="disambig-option dissolved-ref" title="已解散，僅供參考">
+            <span class="disambig-radio-spacer"></span>
+            ${statusBadge}
+            <span class="disambig-short">${escHtml(m.short_name)}</span>
+            ${corpBadge}
+            <span class="disambig-full">${escHtml(m.full_name)}</span>
+          </div>`;
+        }
         return `
         <label class="disambig-option">
-          <input type="radio" name="dg${gi}" value="${mi}" ${mi === 0 ? "checked" : ""} />
-          ${statusDot}
+          <input type="radio" name="dg${gi}" value="${mi}" ${isFirstActive ? "checked" : ""} />
+          ${statusBadge}
           <span class="disambig-short">${escHtml(m.short_name)}</span>
           ${corpBadge}
           <span class="disambig-full">${escHtml(m.full_name)}</span>
@@ -2809,30 +3082,44 @@ document.getElementById("disambig-ok").addEventListener("click", () => {
 /* ── Name Review Dialog ── */
 let _nameReviewMeta = null;
 
+function _normCompanyName(name) {
+  return (name || "").replace(/股份有限公司$|有限公司$/, "").trim();
+}
+
+function _findExistingCompany(name) {
+  const norm = _normCompanyName(name);
+  return state.companies.find(c => _normCompanyName(c.name) === norm) || null;
+}
+
 function openNameReviewDialog(valid, uncertain, excluded, suggestedLabel) {
-  // If nothing identified, skip straight to confirm (which will show an appropriate message)
-  if (valid.length === 0 && uncertain.length === 0) {
-    openConfirmDialog([], [], excluded, suggestedLabel);
+  if (valid.length === 0 && uncertain.length === 0 && excluded.length === 0) {
+    openConfirmDialog([], [], [], suggestedLabel);
     return;
   }
 
-  _nameReviewMeta = { excluded, suggestedLabel };
+  _nameReviewMeta = { suggestedLabel };
 
   const rows = [
     ...valid.map(c => ({ name: c.name, kind: "valid" })),
+    ...excluded.map(c => ({ name: c.name, kind: "excluded" })),
     ...uncertain.map(c => ({ name: c.name, kind: "uncertain" })),
   ];
 
-  document.getElementById("name-review-rows").innerHTML = rows.map((c, i) => `
+  const kindMeta = {
+    valid:    { cls: "nr-valid",    icon: "✔", title: "含股份有限公司" },
+    excluded: { cls: "nr-excluded", icon: "!",  title: "含有限公司（下一步可確認是否升格）" },
+    uncertain:{ cls: "nr-uncertain",icon: "?",  title: "名稱待確認" },
+  };
+
+  document.getElementById("name-review-rows").innerHTML = rows.map((c, i) => {
+    const m = kindMeta[c.kind];
+    return `
     <div class="name-review-row" id="nr-row-${i}">
-      <span class="nr-kind ${c.kind === "valid" ? "nr-valid" : "nr-uncertain"}"
-            title="${c.kind === "valid" ? "含股份有限公司" : "名稱待確認"}">
-        ${c.kind === "valid" ? "✔" : "?"}
-      </span>
+      <span class="nr-kind ${m.cls}" title="${m.title}">${m.icon}</span>
       <input class="name-review-input" id="nr-input-${i}" value="${escHtml(c.name)}" placeholder="公司名稱" />
       <button class="nr-delete" onclick="document.getElementById('nr-row-${i}').remove()">✕</button>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
 
   document.getElementById("name-review-overlay").classList.add("open");
   // Focus first input
@@ -2842,41 +3129,136 @@ function openNameReviewDialog(valid, uncertain, excluded, suggestedLabel) {
 document.getElementById("name-review-cancel").addEventListener("click", () =>
   document.getElementById("name-review-overlay").classList.remove("open"));
 
-document.getElementById("name-review-ok").addEventListener("click", () => {
+document.getElementById("name-review-ok").addEventListener("click", async () => {
   const inputs = document.querySelectorAll(".name-review-input");
   if (inputs.length === 0) {
     toast("未保留任何公司名稱", true);
     return;
   }
 
-  const newValid = [], newUncertain = [];
+  const validNames = [];
+  const newExcluded = [];
+  const uncertainCandidates = [];
   const { suggestedLabel } = _nameReviewMeta;
 
   inputs.forEach(input => {
     const name = input.value.trim();
     if (!name) return;
     if (name.includes("股份有限公司")) {
-      const existing = state.companies.find(c => c.name === name);
-      newValid.push({
-        name,
-        is_new: !existing,
-        existing_id: existing ? existing.id : null,
-        existing_labels: existing ? (existing.labels || []) : [],
-        suggested_label: suggestedLabel,
-        suggested_industry: existing ? existing.industry : (state.industries[0] || ""),
-      });
+      validNames.push(name);
+    } else if (name.includes("有限公司")) {
+      newExcluded.push({ name });
     } else {
-      newUncertain.push({
-        name,
-        suggested_label: suggestedLabel,
-        suggested_industry: state.industries[0] || "",
-      });
+      uncertainCandidates.push({ name, suggested_label: suggestedLabel, suggested_industry: state.industries[0] || "" });
     }
   });
 
   document.getElementById("name-review-overlay").classList.remove("open");
-  openConfirmDialog(newValid, newUncertain, _nameReviewMeta.excluded, suggestedLabel);
+
+  if (validNames.length === 0) {
+    openConfirmDialog([], uncertainCandidates, newExcluded, suggestedLabel);
+    return;
+  }
+
+  // Same lookup + disambig flow as manual input
+  let lookupResults = [];
+  try {
+    toast("正在驗證公司登記狀態…");
+    lookupResults = await api("POST", "/api/companies/name-lookup", { names: validNames });
+  } catch (e) {
+    lookupResults = validNames.map(n => ({ input: n, matches: [] }));
+  }
+
+  // Auto-resolve single matches; only show disambig for truly ambiguous (>1 match)
+  const autoResolved = {};
+  const ambiguousItems = [];
+  const rejectedNames = new Set();
+  const notFoundNames = new Set();
+  const notFoundSuggestions = {};   // name → suggestions array from backend
+  for (const item of lookupResults) {
+    if (item.rejected) {
+      rejectedNames.add(item.input);
+    } else if (item.not_found) {
+      notFoundNames.add(item.input);
+      if (item.suggestions?.length) notFoundSuggestions[item.input] = item.suggestions;
+    } else if (item.matches.length === 1) {
+      autoResolved[item.input] = item.matches[0];
+    } else if (item.matches.length > 1) {
+      ambiguousItems.push(item);
+    }
+  }
+
+  const buildCandidates = (disambigSelections) => {
+    const resolved = { ...autoResolved };
+    const skipped = new Set();
+    for (const s of disambigSelections) {
+      if (s.skipped) skipped.add(s.input);
+      else resolved[s.input] = s.match;
+    }
+
+    const valid = [];
+    for (const name of validNames) {
+      if (skipped.has(name)) continue;
+      const match = resolved[name];
+      const displayName = match ? match.full_name : name;
+      const existing = _findExistingCompany(displayName) || _findExistingCompany(match?.short_name ?? name);
+      valid.push({
+        name: displayName,
+        tax_id: match ? (match.tax_id || null) : null,
+        suggested_label: suggestedLabel,
+        suggested_industry: existing ? existing.industry : (state.industries[0] || ""),
+        is_new: !existing,
+        existing_id: existing ? existing.id : null,
+        existing_labels: existing ? (existing.labels || []) : [],
+        rejected: rejectedNames.has(name),
+        not_found: notFoundNames.has(name),
+        suggestions: notFoundSuggestions[name] || [],
+        is_unverified: match?.is_unverified || false,
+      });
+    }
+    openConfirmDialog(valid, uncertainCandidates, newExcluded, suggestedLabel);
+  };
+
+  if (ambiguousItems.length > 0) {
+    openDisambigDialog(ambiguousItems, buildCandidates);
+  } else {
+    buildCandidates([]);
+  }
 });
+
+/* ── Not-found suggestion picker ── */
+function selectNotFoundSuggestion(i, suggestion) {
+  const c = state.pendingCandidates[i];
+  if (!c) return;
+
+  // Capture current label values before re-render
+  const labelVals = {};
+  state.pendingCandidates.forEach((_, idx) => {
+    const el = document.getElementById(`label-v${idx}`);
+    if (el) labelVals[idx] = el.value;
+  });
+
+  const existing = _findExistingCompany(suggestion.full_name);
+  Object.assign(c, {
+    name: suggestion.full_name,
+    tax_id: suggestion.tax_id || null,
+    not_found: false,
+    is_new: !existing,
+    existing_id: existing?.id ?? null,
+    existing_labels: existing?.labels ?? [],
+    suggestions: [],
+  });
+
+  openConfirmDialog(state.pendingCandidates, state.pendingUncertain, state.pendingExcluded, state.pendingLabel);
+
+  // Restore labels for rows that had user input
+  setTimeout(() => {
+    Object.entries(labelVals).forEach(([idx, val]) => {
+      const el = document.getElementById(`label-v${idx}`);
+      if (el) el.value = val;
+    });
+  }, 0);
+}
 
 /* ── Confirm Dialog ── */
 function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
@@ -2901,9 +3283,34 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
   const validHtml = valid.length ? `
     <div class="confirm-section-title">✅ 股份有限公司</div>
     ${valid.map((c, i) => {
+      if (c.rejected) {
+        return `
+          <div class="confirm-row dissolved-row">
+            <div class="company-name-col">${escHtml(c.name)}<span class="dissolved-badge">廢止</span></div>
+            <div style="font-size:11px;color:#991b1b;grid-column:2/-1;">已於主管機關登記廢止，不予儲存</div>
+          </div>`;
+      }
+      if (c.not_found) {
+        const suggestHtml = (c.suggestions || []).length
+          ? `<div class="nf-suggest-wrap">
+               <span class="nf-suggest-label">可能已更名：</span>
+               ${c.suggestions.map(s => `<button class="nf-suggest-btn" onclick="selectNotFoundSuggestion(${i}, ${escAttr(JSON.stringify(s))})">${escHtml(s.full_name)}</button>`).join("")}
+             </div>`
+          : "";
+        return `
+          <div class="confirm-row dissolved-row" id="nf-row-${i}">
+            <div class="company-name-col" style="grid-column:1/-1">${escHtml(c.name)}<span class="not-found-badge">查無登記</span>
+              <span style="font-size:11px;color:#92400e;margin-left:8px;">登記資料查無此公司，不予儲存</span>
+              ${suggestHtml}
+            </div>
+          </div>`;
+      }
       const badge = c.is_new
         ? `<span class="new-badge">新增</span>`
         : `<span class="update-badge">既有</span>`;
+      const unverifiedBadge = c.is_unverified
+        ? `<span class="unverified-badge" title="Ronny 顯示核准，但政府網站驗證失敗，請確認此公司是否仍為現役">⚠ 待確認</span>`
+        : "";
       const existingLabels = c.existing_labels?.length
         ? `<div class="existing-labels">現有標籤：${c.existing_labels.join("、")}</div>`
         : "";
@@ -2912,7 +3319,7 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
       const enrichHint = hasData ? `<span class="enrich-has-data" title="已有摘要，預設不重新生成">已生成</span>` : "";
       return `
         <div class="confirm-row">
-          <div class="company-name-col">${escHtml(c.name)}${badge}${existingLabels}</div>
+          <div class="company-name-col">${escHtml(c.name)}${badge}${unverifiedBadge}${existingLabels}</div>
           <input type="text" id="label-v${i}" value="${escHtml(c.suggested_label)}" placeholder="標籤名稱" />
           <label class="enrich-check-label" title="是否生成 AI 摘要"><input type="checkbox" id="enrich-v${i}" ${checked} />生成${enrichHint}</label>
         </div>`;
@@ -2920,12 +3327,12 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
 
   // ── Section 2: uncertain (neither suffix) ──
   const uncertainHtml = uncertain.length ? `
-    <div class="confirm-section-title uncertain-title">❓ 不含標準公司結尾，是否視為股份有限公司？</div>
+    <div class="confirm-section-title uncertain-title">❓ 不含標準公司結尾，搜尋登記資料後決定是否納入</div>
     ${uncertain.map((c, i) => `
       <div class="confirm-row uncertain-row" id="uncertain-row-${i}">
         <div class="company-name-col uncertain-name">${escHtml(c.name)}</div>
         <div class="uncertain-actions">
-          <button class="unc-btn unc-yes" onclick="toggleUncertain(${i}, true)">✔ 是，納入</button>
+          <button class="unc-btn unc-yes" onclick="toggleUncertain(${i}, true)">✔ 搜尋並納入</button>
           <button class="unc-btn unc-no active" onclick="toggleUncertain(${i}, false)">✘ 否，略過</button>
         </div>
         <div class="uncertain-fields" id="uncertain-fields-${i}" style="display:none; grid-column:1/-1;">
@@ -2936,15 +3343,16 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
         </div>
       </div>`).join("")}` : "";
 
-  // ── Section 3: excluded (有限公司 only) — allow rescue if OCR misread ──
+  // ── Section 3: excluded (有限公司 only) — three options ──
   const excludedHtml = excluded.length ? `
-    <div class="confirm-section-title excluded-title">⚠️ 僅含「有限公司」（可能是 OCR 誤讀，確認是否為股份有限公司？）</div>
+    <div class="confirm-section-title excluded-title">⚠️ 僅含「有限公司」，請選擇處理方式</div>
     ${excluded.map((c, i) => `
       <div class="confirm-row excluded-row" id="excluded-row-${i}">
         <div class="company-name-col excluded-name">${escHtml(c.name)}</div>
         <div class="uncertain-actions">
-          <button class="unc-btn unc-yes" onclick="toggleExcluded(${i}, true)">✔ 是股份有限公司，納入</button>
-          <button class="unc-btn unc-no active" onclick="toggleExcluded(${i}, false)">✘ 確實排除</button>
+          <button class="unc-btn unc-upgrade" onclick="toggleExcluded(${i}, true)">↑ 升格搜尋</button>
+          <button class="unc-btn unc-direct" onclick="acceptExcludedDirect(${i})">✔ 直接納入</button>
+          <button class="unc-btn unc-no active" onclick="toggleExcluded(${i}, false)">✘ 排除</button>
         </div>
         <div class="uncertain-fields" id="excluded-fields-${i}" style="display:none; grid-column:1/-1;">
           <div class="confirm-row" style="border:none;padding:4px 0;">
@@ -2966,82 +3374,261 @@ function applyBulkEdit() {
   });
 }
 
-function toggleUncertain(i, accept) {
+async function toggleUncertain(i, accept) {
   const row = document.getElementById(`uncertain-row-${i}`);
   const fields = document.getElementById(`uncertain-fields-${i}`);
   row.querySelectorAll(".unc-btn").forEach(b => b.classList.remove("active"));
-  if (accept) {
-    row.querySelector(".unc-yes").classList.add("active");
-    fields.style.display = "";
-  } else {
+
+  if (!accept) {
     row.querySelector(".unc-no").classList.add("active");
     fields.style.display = "none";
+    row.dataset.accepted = "0";
+    const cu = (state.pendingUncertain || [])[i];
+    if (cu?._origName) {
+      cu.name = cu._origName;
+      const nameEl = row.querySelector(".uncertain-name");
+      if (nameEl) nameEl.textContent = cu._origName;
+    }
+    return;
   }
-  row.dataset.accepted = accept ? "1" : "0";
+
+  const c = (state.pendingUncertain || [])[i];
+  if (c) {
+    const coreSearch = c.name.replace(/股份有限公司$/, "").replace(/有限公司$/, "").trim() || c.name;
+    row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = true; });
+    let lr = null;
+    try {
+      const res = await api("POST", "/api/companies/name-lookup", { names: [coreSearch] });
+      lr = res?.[0] ?? null;
+    } catch (_) { /* network error → allow through */ }
+    row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = false; });
+
+    if (lr?.rejected) {
+      row.querySelector(".unc-no").classList.add("active");
+      row.dataset.accepted = "0";
+      toast(`「${c.name}」在主管機關登記已廢止，無法納入`, true);
+      return;
+    }
+    if (lr?.not_found) {
+      toast(`「${c.name}」查無相似公司名稱，依您判斷納入`, true);
+      // Allow through — uncertain companies may use non-standard names (e.g. associations)
+    }
+    if (lr?.matches?.length === 1) {
+      _applyUncertainMatch(i, lr.matches[0]);   // single match → auto-fill name
+    } else if (lr?.matches?.length > 1) {
+      // Multiple matches → let user disambiguate, then mark accepted in callback
+      openDisambigDialog([{ input: c.name, matches: lr.matches }], (selections) => {
+        const sel = selections[0];
+        if (sel.skipped) {
+          row.querySelector(".unc-no").classList.add("active");
+          fields.style.display = "none";
+          row.dataset.accepted = "0";
+          return;
+        }
+        _applyUncertainMatch(i, sel.match);
+        row.querySelector(".unc-yes").classList.add("active");
+        fields.style.display = "";
+        row.dataset.accepted = "1";
+      });
+      return;   // wait for disambig callback before marking accepted
+    }
+  }
+
+  row.querySelector(".unc-yes").classList.add("active");
+  fields.style.display = "";
+  row.dataset.accepted = "1";
 }
 
-function toggleExcluded(i, accept) {
+function _applyUncertainMatch(i, match) {
+  const c = (state.pendingUncertain || [])[i];
+  if (!c) return;
+  c._origName = c._origName ?? c.name;
+  c.name   = match.full_name;
+  c.tax_id = match.tax_id || null;
+  const nameEl = document.getElementById(`uncertain-row-${i}`)?.querySelector(".uncertain-name");
+  if (nameEl) nameEl.textContent = match.full_name;
+}
+
+
+async function toggleExcluded(i, accept) {
   const row = document.getElementById(`excluded-row-${i}`);
   const fields = document.getElementById(`excluded-fields-${i}`);
   row.querySelectorAll(".unc-btn").forEach(b => b.classList.remove("active"));
-  if (accept) {
-    row.querySelector(".unc-yes").classList.add("active");
-    fields.style.display = "";
-  } else {
+
+  if (!accept) {
     row.querySelector(".unc-no").classList.add("active");
     fields.style.display = "none";
+    row.dataset.accepted = "0";
+    const ce = (state.pendingExcluded || [])[i];
+    if (ce?._origName) {
+      ce.name = ce._origName;
+      const nameEl = row.querySelector(".excluded-name");
+      if (nameEl) nameEl.textContent = ce._origName;
+    }
+    return;
   }
-  row.dataset.accepted = accept ? "1" : "0";
+
+  const c = (state.pendingExcluded || [])[i];
+  if (c) {
+    // 用核心名稱（去掉有限公司後綴）搜尋，Ronny 模糊比對效果更好
+    const coreSearch = c.name.replace(/股份有限公司$/, "").replace(/有限公司$/, "").trim() || c.name;
+    const displayName = c.name.endsWith("股份有限公司") ? c.name : c.name.replace(/有限公司$/, "股份有限公司");
+    row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = true; });
+    let lr = null;
+    try {
+      const res = await api("POST", "/api/companies/name-lookup", { names: [coreSearch] });
+      lr = res?.[0] ?? null;
+    } catch (_) { /* network error → allow through */ }
+    row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = false; });
+
+    if (lr?.rejected) {
+      row.querySelector(".unc-no").classList.add("active");
+      row.dataset.accepted = "0";
+      toast(`「${displayName}」在主管機關登記已廢止，無法納入`, true);
+      return;
+    }
+
+    // Only accept 股份有限公司 matches; filter out plain 有限公司 results
+    let corpMatches = (lr?.matches || []).filter(m => m.is_corp);
+
+    // If primary search found nothing useful, retry with 3-char prefix
+    // (handles renamed companies: 林三益筆墨→林三益股份有限公司)
+    if (corpMatches.length === 0 && coreSearch.length > 3) {
+      const shortKey = coreSearch.slice(0, 3);
+      try {
+        row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = true; });
+        const kr = await api("POST", "/api/companies/name-lookup", { names: [shortKey] });
+        row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = false; });
+        const km = (kr?.[0]?.matches || []).filter(m => m.is_corp && m.full_name !== displayName);
+        if (km.length > 0) corpMatches = km;
+      } catch (_) {
+        row.querySelectorAll(".unc-btn").forEach(b => { b.disabled = false; });
+      }
+    }
+
+    if (corpMatches.length === 0) {
+      // No 股份有限公司 version found — warn but allow force-upgrade
+      const reason = lr?.not_found
+        ? "查無此公司"
+        : "查無對應的股份有限公司版本（僅找到有限公司）";
+      toast(`⚠️ ${reason}，若確認升格將以「${displayName}」儲存（名稱未經驗證）`, true);
+    } else if (corpMatches.length === 1) {
+      _applyExcludedMatch(i, corpMatches[0]);
+    } else {
+      openDisambigDialog([{ input: coreSearch, matches: corpMatches }], (selections) => {
+        const sel = selections[0];
+        if (sel.skipped) {
+          row.querySelector(".unc-no").classList.add("active");
+          fields.style.display = "none";
+          row.dataset.accepted = "0";
+          return;
+        }
+        _applyExcludedMatch(i, sel.match);
+        row.querySelector(".unc-upgrade").classList.add("active");
+        fields.style.display = "";
+        row.dataset.accepted = "1";
+        delete row.dataset.direct;
+      });
+      return;
+    }
+  }
+
+  row.querySelector(".unc-upgrade").classList.add("active");
+  fields.style.display = "";
+  row.dataset.accepted = "1";
+  delete row.dataset.direct;
+}
+
+function acceptExcludedDirect(i) {
+  const row = document.getElementById(`excluded-row-${i}`);
+  const fields = document.getElementById(`excluded-fields-${i}`);
+  if (!row) return;
+  row.querySelectorAll(".unc-btn").forEach(b => b.classList.remove("active"));
+  row.querySelector(".unc-direct").classList.add("active");
+  fields.style.display = "";
+  row.dataset.accepted = "1";
+  row.dataset.direct = "1";
+}
+
+function _applyExcludedMatch(i, match) {
+  const c = (state.pendingExcluded || [])[i];
+  if (!c) return;
+  c._origName = c._origName ?? c.name;
+  c.name   = match.full_name;
+  c.tax_id = match.tax_id || null;
+  const nameEl = document.getElementById(`excluded-row-${i}`)?.querySelector(".excluded-name");
+  if (nameEl) nameEl.textContent = match.full_name;
 }
 
 document.getElementById("confirm-cancel").addEventListener("click", () =>
   document.getElementById("confirm-overlay").classList.remove("open"));
 
 document.getElementById("confirm-ok").addEventListener("click", async () => {
-  // Collect valid candidates; track which ones user wants enriched
-  const enrichFlags_v = [];
-  const companies = state.pendingCandidates.map((c, i) => {
-    enrichFlags_v.push(document.getElementById(`enrich-v${i}`)?.checked !== false);
-    return {
+  // toSave: companies to persist; enrichFlags: aligned bool array (same indices)
+  const toSave = [];
+  const enrichFlags = [];
+
+  // Valid (股份有限公司) candidates:
+  //   - is_new + unchecked → skip entirely (user doesn't want to add)
+  //   - is_new + checked   → save + enrich
+  //   - existing + unchecked → save (update label) but no re-enrich
+  //   - existing + checked   → save + enrich
+  state.pendingCandidates.forEach((c, i) => {
+    if (c.rejected || c.not_found) return;         // 廢止 or 查無登記 → never save
+    const wantEnrich = document.getElementById(`enrich-v${i}`)?.checked !== false;
+    if (c.is_new && !wantEnrich) return;
+    toSave.push({
       name: c.name,
       tax_id: c.tax_id ?? null,
       label: document.getElementById(`label-v${i}`)?.value.trim() ?? state.pendingLabel,
       is_new: c.is_new,
       existing_id: c.existing_id ?? null,
-    };
+    });
+    enrichFlags.push(wantEnrich);
   });
 
-  // Collect accepted uncertain candidates (always enrich — they're always new)
+  // Accepted uncertain candidates (always new → always enrich)
   (state.pendingUncertain || []).forEach((c, i) => {
     const row = document.getElementById(`uncertain-row-${i}`);
     if (row?.dataset.accepted === "1") {
-      companies.push({
+      toSave.push({
         name: c.name,
         tax_id: c.tax_id ?? null,
         label: document.getElementById(`label-u${i}`)?.value.trim() ?? state.pendingLabel,
         is_new: true,
         existing_id: null,
       });
+      enrichFlags.push(true);
     }
   });
 
-  // Collect rescued excluded candidates (always enrich — they're always new)
+  // Rescued excluded candidates (always new → always enrich)
+  // dataset.direct === "1": user chose "直接納入" — keep 有限公司 name as-is
+  // dataset.direct unset: user chose "升格搜尋" — _applyExcludedMatch may have updated name;
+  //   if not matched, fall back to suffix conversion (有限公司 → 股份有限公司)
   (state.pendingExcluded || []).forEach((c, i) => {
     const row = document.getElementById(`excluded-row-${i}`);
     if (row?.dataset.accepted === "1") {
-      companies.push({
-        name: c.name,
+      const isDirect = row.dataset.direct === "1";
+      const finalName = isDirect
+        ? c.name
+        : c.name.endsWith("股份有限公司")
+          ? c.name
+          : c.name.replace(/有限公司$/, "股份有限公司");
+      toSave.push({
+        name: finalName,
         tax_id: c.tax_id ?? null,
         label: document.getElementById(`label-e${i}`)?.value.trim() ?? state.pendingLabel,
         is_new: true,
         existing_id: null,
       });
+      enrichFlags.push(true);
     }
   });
 
   document.getElementById("confirm-overlay").classList.remove("open");
 
-  if (companies.length === 0) {
+  if (toSave.length === 0) {
     toast("未選擇任何公司，已取消");
     return;
   }
@@ -3049,7 +3636,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   // Save first (no enrichment yet) so we control batching from the client side
   let saved_ids;
   try {
-    const result = await api("POST", "/api/companies/confirm", { companies, enrich: false });
+    const result = await api("POST", "/api/companies/confirm", { companies: toSave, enrich: false });
     saved_ids = result.saved_ids || [];
     toast(`已儲存 ${result.saved} 筆公司資料`);
     await loadCompanies();
@@ -3063,19 +3650,8 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
 
   if (saved_ids.length === 0) return;
 
-  // Filter to only the IDs user checked for enrichment
-  // saved_ids aligns with companies[] order (server preserves insertion order)
-  const enrichSet = new Set(
-    companies
-      .map((_, idx) => {
-        const wantEnrich = idx < enrichFlags_v.length
-          ? enrichFlags_v[idx]
-          : true; // uncertain/excluded rows always enrich
-        return wantEnrich ? saved_ids[idx] : null;
-      })
-      .filter(Boolean)
-  );
-  const enrich_ids = saved_ids.filter(id => enrichSet.has(id));
+  // enrichFlags is aligned with toSave[] (and thus saved_ids[])
+  const enrich_ids = saved_ids.filter((_, idx) => enrichFlags[idx]);
 
   if (enrich_ids.length === 0) {
     toast(`已儲存，所有公司均已略過生成`);
@@ -3279,7 +3855,7 @@ function openBulkEnrichDialog() {
   reenrichBtn.onclick = () => {
     overlay.classList.remove("open");
     if (companies.length > 5 && !confirm(
-      `將對範圍內 ${companies.length} 間公司全部重新生成（覆蓋現有簡介與 GCIS 資料）。\n` +
+      `將對範圍內 ${companies.length} 間公司全部重新生成（覆蓋現有簡介與登記資料）。\n` +
       `範圍：${scopeLabel}\n\n` +
       `確定繼續？`
     )) return;
@@ -3447,39 +4023,59 @@ let _cy = null;                  // active Cytoscape instance
 let _cyResizeObserver = null;    // observes the canvas to keep the graph fitted
 let _relBuildingId = null;       // company id whose relationship is being built
 let _relGraphCompanyId = null;   // company currently shown in the relationship modal
+let _relActiveTab = "ownership"; // currently active tab
 
 function _disposeCy() {
   if (_cyResizeObserver) { _cyResizeObserver.disconnect(); _cyResizeObserver = null; }
   if (_cy) { try { _cy.destroy(); } catch (_) {} _cy = null; }
 }
 
+function switchRelTab(tab) {
+  _relActiveTab = tab;
+  document.querySelectorAll(".rel-tab").forEach(btn =>
+    btn.classList.toggle("active", btn.dataset.tab === tab));
+
+  const ownerLegend = document.getElementById("rel-graph-legend");
+  const compLegend  = document.getElementById("rel-graph-legend-competitor");
+  if (ownerLegend) ownerLegend.style.display = tab === "ownership" ? "" : "none";
+  if (compLegend)  compLegend.style.display  = tab === "competitor" ? "" : "none";
+
+  const c = state.companies.find(x => x.id === _relGraphCompanyId);
+  const titleLabel = tab === "ownership" ? "股權關係" : "競業版圖";
+  document.getElementById("rel-graph-title").textContent =
+    `${c ? shortName(c.name) : "公司"} — ${titleLabel}`;
+
+  const sub = document.getElementById("rel-graph-subtitle");
+  if (sub) {
+    if (tab === "ownership") {
+      const parent = c?.relationship_graph?.parent;
+      sub.textContent = parent
+        ? `當前錨點：${parent.name}（${parent.kind === "person" ? "自然人" : "法人"}）`
+        : "尚未分析。點右上「🔗 重新分析」開始，或在公司詳情中於董監事表格點 ⊕ 指定錨點。";
+    } else {
+      const cnt = (c?.competitors || []).length;
+      sub.textContent = cnt ? `共 ${cnt} 家已記錄競業（含雙向關聯）` : "尚無競業資料，請先生成公司簡介";
+    }
+  }
+
+  const rebuildBtn = document.getElementById("rel-graph-rebuild-btn");
+  if (rebuildBtn) rebuildBtn.style.display = tab === "ownership" ? "" : "none";
+
+  if (!_relGraphCompanyId) return;
+  if (tab === "ownership") renderOwnershipGraph(_relGraphCompanyId);
+  else                     renderCompetitorGraph(_relGraphCompanyId);
+}
+
 function openRelationshipGraph(companyId) {
   const id = companyId || _modalCompanyId;
   if (!id) return;
   _relGraphCompanyId = id;
-  const c = state.companies.find(x => x.id === id);
-  document.getElementById("rel-graph-title").textContent =
-    `${c ? shortName(c.name) : "公司"} — 母子公司關係圖`;
-  const sub = document.getElementById("rel-graph-subtitle");
-  if (sub) {
-    const parent = c?.relationship_graph?.parent;
-    if (parent) {
-      const kindLbl = parent.kind === "person" ? "自然人" : "法人";
-      sub.textContent = `當前錨點：${parent.name}（${kindLbl}）`;
-    } else {
-      sub.textContent = "尚未分析。點右上「🔗 重新分析」開始，或在公司詳情中於董監事表格點 ⊕ 指定錨點。";
-    }
-  }
-  const btn = document.getElementById("rel-graph-rebuild-btn");
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = c?.relationship_graph ? "🔗 重新分析" : "🔗 開始分析";
-  }
+  _relActiveTab = "ownership";
   document.getElementById("rel-graph-overlay").classList.add("open");
   document.body.classList.add("rel-open");
   _expandParentRows();
   // Cytoscape needs a layout pass after the container resizes (side-by-side mode shrinks it)
-  setTimeout(() => renderOwnershipGraph(id), 50);
+  setTimeout(() => switchRelTab("ownership"), 50);
 }
 
 function closeRelationshipGraph() {
@@ -3635,6 +4231,118 @@ async function renderOwnershipGraph(companyId) {
       tax_id: d.tax_id || "",
       role: d.role,
     });
+  });
+}
+
+async function renderCompetitorGraph(companyId) {
+  const wrap     = document.getElementById("rel-graph-canvas");
+  const statusEl = document.getElementById("rel-graph-status");
+  if (!wrap) return;
+
+  _disposeCy();
+  wrap.innerHTML = "";
+  if (statusEl) statusEl.textContent = "";
+
+  let graph;
+  try {
+    graph = await api("GET", `/api/companies/${companyId}/competitor-graph`);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `載入競業圖失敗：${err.message}`;
+    return;
+  }
+
+  if (!graph.nodes || graph.nodes.length <= 1) {
+    if (statusEl) statusEl.innerHTML =
+      `<div class="rel-empty">尚無競業資料。請先生成公司簡介，系統會自動解析競業分析表格。</div>`;
+    return;
+  }
+
+  if (typeof cytoscape === "undefined") {
+    if (statusEl) statusEl.textContent = "圖表元件尚未載入，請稍候再試";
+    return;
+  }
+
+  _cy = cytoscape({
+    container: wrap,
+    elements: { nodes: graph.nodes, edges: graph.edges },
+    layout: {
+      name: "concentric",
+      concentric: node => node.data("role") === "self" ? 10 : 1,
+      levelWidth: () => 1,
+      spacingFactor: 1.6,
+      padding: 36,
+    },
+    style: [
+      {
+        selector: "node",
+        style: {
+          "label": "data(label)",
+          "text-valign": "center", "text-halign": "center",
+          "text-wrap": "wrap", "text-max-width": 100,
+          "font-size": 12,
+          "font-family": "-apple-system, 'Microsoft JhengHei', sans-serif",
+          "color": "#fff",
+          "background-color": "#94a3b8",
+          "border-width": 2, "border-color": "#fff",
+          "width": 96, "height": 48,
+          "shape": "round-rectangle",
+        },
+      },
+      {
+        selector: 'node[role = "self"]',
+        style: {
+          "background-color": "#1d4ed8",
+          "border-color": "#fbbf24", "border-width": 4,
+          "width": 120, "height": 56, "font-size": 13,
+        },
+      },
+      {
+        selector: 'node[role = "competitor"][in_db = true]',
+        style: {
+          "background-color": "#d97706",
+          "shape": "hexagon",
+          "width": 104, "height": 58,
+        },
+      },
+      {
+        selector: 'node[role = "competitor"][in_db = false]',
+        style: {
+          "background-color": "#fffbeb",
+          "color": "#92400e",
+          "border-color": "#d97706", "border-style": "dashed", "border-width": 2,
+          "shape": "hexagon",
+          "width": 104, "height": 58,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          "curve-style": "bezier",
+          "line-color": "#d97706",
+          "line-style": "dashed",
+          "line-dash-pattern": [6, 3],
+          "width": 2,
+          "target-arrow-shape": "none",
+        },
+      },
+    ],
+  });
+
+  _cyResizeObserver = new ResizeObserver(() => {
+    if (!_cy) return;
+    _cy.resize();
+    _cy.fit(undefined, 36);
+  });
+  _cyResizeObserver.observe(wrap);
+
+  _cy.on("tap", "node", evt => {
+    const d = evt.target.data();
+    if (d.role === "self") return;
+    if (d.in_db && d.company_id) {
+      openModal(d.company_id);
+      return;
+    }
+    _openFromGraphDialog({ name: d.name, tax_id: "", role: "competitor" });
   });
 }
 
@@ -3842,12 +4550,27 @@ function renderSummary(raw) {
     if (!tableRows.length) return;
     // first row = header, second row = separator (skip), rest = body
     const [header, , ...body] = tableRows;
-    const ths = (header || "").split("|").filter((_,i,a) => i>0 && i<a.length-1)
-      .map(c => `<th>${inlineMarkdown(c.trim())}</th>`).join("");
-    const trs = body.map(row =>
-      "<tr>" + row.split("|").filter((_,i,a) => i>0 && i<a.length-1)
-        .map(c => `<td>${inlineMarkdown(c.trim())}</td>`).join("") + "</tr>"
-    ).join("");
+    const headerCells = (header || "").split("|").filter((_,i,a) => i>0 && i<a.length-1).map(c => c.trim());
+    const isCompetitorTable = headerCells[0] === "公司名稱";
+    const ths = headerCells.map(c => `<th>${inlineMarkdown(c)}</th>`).join("");
+    const trs = body.map(row => {
+      const cells = row.split("|").filter((_,i,a) => i>0 && i<a.length-1);
+      const tds = cells.map((c, ci) => {
+        const content = c.trim();
+        if (isCompetitorTable && ci === 0 && !content.includes("（本案）")) {
+          const rawName = content.replace(/（[^）]*）/g, "").trim();
+          const alreadyAdded = state.companies.some(
+            co => co.name === rawName || co.name === rawName + "股份有限公司" || co.name === rawName + "有限公司"
+          );
+          const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
+          const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
+          const safeN = escHtml(rawName);
+          return `<td><span class="${cls}" data-cname="${safeN}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(content)}</span></td>`;
+        }
+        return `<td>${inlineMarkdown(content)}</td>`;
+      }).join("");
+      return `<tr>${tds}</tr>`;
+    }).join("");
     out.push(`<table class="summary-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
     tableRows = [];
     inTable = false;

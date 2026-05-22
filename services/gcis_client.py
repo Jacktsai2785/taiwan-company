@@ -118,6 +118,27 @@ def _resolve_listing_status(tax_id: str, name: str) -> str:
     return "非公發"
 
 
+def _annotate_directors_listing(directors: list[dict]) -> None:
+    """In-place: add representative_of_listing / name_listing to each director.
+
+    Must be called after _ensure_listing_cache so the module-level dicts are populated.
+    Only sets the field when the resolved status is not 非公發, keeping JSON lean.
+    """
+    for d in directors:
+        rep_name   = (d.get("representative_of") or "").strip()
+        rep_tax_id = (d.get("representative_of_tax_id") or "").strip()
+        if rep_name or rep_tax_id:
+            ls = _resolve_listing_status(rep_tax_id, rep_name)
+            if ls != "非公發":
+                d["representative_of_listing"] = ls
+        else:
+            dir_name = (d.get("name") or "").strip()
+            if any(sfx in dir_name for sfx in _NAME_SUFFIXES):
+                ls = _resolve_listing_status("", dir_name)
+                if ls != "非公發":
+                    d["name_listing"] = ls
+
+
 def pick_largest_legal_director(directors: list[dict]) -> dict | None:
     """Pick the director with the highest ratio whose representative_of (法人) is set.
 
@@ -318,6 +339,8 @@ async def fetch_company_name_by_tax_id(tax_id: str) -> str:
         data = await _fetch_ronny_show(client, tax_id)
         if data:
             name = data.get("公司名稱", "")
+            if isinstance(name, list):
+                name = name[0] if name else ""
             if name:
                 return name
         # Fallback: GCIS App1
@@ -340,9 +363,56 @@ async def fetch_company_name_by_tax_id(tax_id: str) -> str:
     return ""
 
 
-_ACTIVE_STATUSES = {"核准設立", "登記"}
-_DISSOLVED_STATUSES = {"解散", "廢止", "撤銷", "命令解散"}
-_DISSOLVED_KEYWORDS = ("解散", "撤銷", "廢止", "命令解散", "歇業")
+_ACTIVE_STATUSES = {"核准設立", "登記", "認許"}          # 認許 = foreign branch recognition
+_DISSOLVED_STATUSES = {"解散", "廢止", "撤銷", "命令解散", "廢止認許", "撤回認許"}
+_DISSOLVED_KEYWORDS = ("解散", "撤銷", "廢止", "命令解散", "歇業", "廢止認許", "撤回認許")
+
+
+async def is_company_active(name: str) -> bool | None:
+    """Quick check: is this company active?
+    Returns True (active), False (dissolved), or None (unknown / not found in Ronny).
+    Only returns False when we have positive evidence of dissolution.
+    """
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        try:
+            resp = await client.get(RONNY_SEARCH, params={"q": name}, timeout=10.0)
+            resp.raise_for_status()
+            hits = resp.json().get("data", [])
+        except Exception:
+            return None
+
+    for h in hits:
+        h_name = h.get("公司名稱", "")
+        if isinstance(h_name, list):
+            h_name = h_name[0] if h_name else ""
+        if h_name != name:
+            continue
+        status = h.get("公司狀況", "")
+        if status in _ACTIVE_STATUSES:
+            return True
+        if status in _DISSOLVED_STATUSES:
+            return False
+        # Unknown status in Ronny → ask GCIS App1
+        tax_id = h.get("統一編號", "")
+        if tax_id:
+            try:
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as gc:
+                    resp2 = await gc.get(
+                        GCIS_APP1,
+                        params={"$format": "json",
+                                "$filter": f"Business_Accounting_NO eq '{tax_id}'",
+                                "$skip": "0", "$top": "1"},
+                    )
+                    resp2.raise_for_status()
+                    rows = resp2.json()
+                    gcis_st = rows[0].get("Company_Status_Desc", "") if rows else ""
+                    if gcis_st and any(kw in gcis_st for kw in _DISSOLVED_KEYWORDS):
+                        return False
+            except Exception:
+                pass
+        return True  # found in Ronny, status doesn't say dissolved
+
+    return None  # not found — can't confirm dissolved, pass through
 
 
 async def search_company_matches(name: str) -> list[dict]:
@@ -409,13 +479,17 @@ async def search_company_matches(name: str) -> list[dict]:
             seen_tax.add(tid)
             all_hits.append(h)
 
-    # Step 1: Filter Ronny-known dissolved companies; keep active and unknown-status
+    # Step 1: Separate active/unknown from Ronny-known dissolved
     status_key = "公司狀況"
-    candidates = [h for h in all_hits if h.get(status_key) in _ACTIVE_STATUSES or h.get(status_key) is None]
+    candidates       = [h for h in all_hits if h.get(status_key) in _ACTIVE_STATUSES or h.get(status_key) is None]
+    ronny_dissolved  = [h for h in all_hits if h.get(status_key) in _DISSOLVED_STATUSES or
+                        any(kw in (h.get(status_key) or "") for kw in _DISSOLVED_KEYWORDS)]
 
-    # Step 2: For unknown-status companies, verify against GCIS App1
-    unknown = [h for h in candidates if not h.get(status_key)]
-    if unknown:
+    # Step 2: Verify ALL candidates against GCIS App1.
+    # Ronny data can be stale — a company shown as 核准設立 in Ronny may already be
+    # 廢止 in GCIS. Verify every candidate so stale Ronny records don't slip through.
+    to_verify = [h for h in candidates if h.get("統一編號")]
+    if to_verify:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as gc:
             sem = asyncio.Semaphore(5)
 
@@ -436,22 +510,32 @@ async def search_company_matches(name: str) -> list[dict]:
                     except Exception:
                         return ""
 
-            tax_ids = [h.get("統一編號", "") for h in unknown]
+            tax_ids = [h.get("統一編號", "") for h in to_verify]
             gcis_statuses = await asyncio.gather(*[_gcis_status(tid) for tid in tax_ids])
 
         gcis_map = dict(zip(tax_ids, gcis_statuses))
-        for h in unknown:
+        for h in to_verify:
             gcis_st = gcis_map.get(h.get("統一編號", ""), "")
             if gcis_st:
                 h["_gcis_status"] = gcis_st
 
-    # Step 3: Remove GCIS-confirmed dissolved companies
-    verified = []
+    # Step 3: Separate GCIS-confirmed dissolved from active
+    # If GCIS returned "" (API failure / not found), mark as unverified — do NOT treat as active.
+    # Unverified Ronny-"核准" companies get is_unverified=True so the frontend shows a warning.
+    verified  = []
+    gcis_dissolved = []
     for h in candidates:
         gcis_st = h.get("_gcis_status", "")
         if gcis_st and any(kw in gcis_st for kw in _DISSOLVED_KEYWORDS):
-            continue
-        verified.append(h)
+            gcis_dissolved.append(h)
+        else:
+            if not gcis_st:
+                h = dict(h)
+                h["_unverified"] = True
+            verified.append(h)
+    # Combine all known-dissolved for reference display (Ronny-filtered + GCIS-confirmed)
+    all_dissolved = gcis_dissolved + [h for h in ronny_dissolved if h.get("統一編號") not in
+                                      {x.get("統一編號") for x in gcis_dissolved}]
 
     # Step 4: Sort — 股份有限公司 first; known-active before unknown; shorter names first
     # (shorter name = query covers a larger fraction = closer match)
@@ -471,8 +555,7 @@ async def search_company_matches(name: str) -> list[dict]:
 
     verified.sort(key=_sort_key)
 
-    result = []
-    for h in verified[:50]:
+    def _to_match(h: dict, is_dissolved: bool = False) -> dict:
         full_name = h.get("公司名稱", "")
         short_name = full_name
         for sfx in _NAME_SUFFIXES:
@@ -481,15 +564,165 @@ async def search_company_matches(name: str) -> list[dict]:
                 break
         ronny_st = h.get(status_key) or ""
         gcis_st  = h.get("_gcis_status", "")
-        status = ronny_st or gcis_st
+        status = gcis_st or ronny_st
         is_corp = full_name.endswith("股份有限公司")
-        result.append({
+        d = {
             "full_name": full_name,
             "short_name": short_name,
             "tax_id": h.get("統一編號", ""),
             "status": status,
             "is_corp": is_corp,
-        })
+        }
+        if is_dissolved:
+            d["is_dissolved"] = True
+        if h.get("_unverified"):
+            d["is_unverified"] = True
+        return d
+
+    result = [_to_match(h) for h in verified[:50]]
+    # Append dissolved entries (up to 5) so dialog can show them as non-selectable reference
+    for h in all_dissolved[:5]:
+        result.append(_to_match(h, is_dissolved=True))
+
+    # rejected=True means Ronny found the name but every candidate was dissolved in GCIS.
+    # not_found=True means neither Ronny nor GCIS has any record of this name.
+    rejected = bool(all_hits) and len(verified) == 0
+    not_found = False
+
+    if not all_hits:
+        # Ronny has no record → fall back to GCIS substringof search.
+        gcis_hits = await _gcis_search_by_keyword(name)
+        active_gcis = [h for h in gcis_hits if not any(kw in h["status"] for kw in _DISSOLVED_KEYWORDS)]
+        dissolved_gcis = [h for h in gcis_hits if any(kw in h["status"] for kw in _DISSOLVED_KEYWORDS)]
+        if active_gcis:
+            for h in active_gcis[:10]:
+                full = h["full_name"]
+                short = full
+                for sfx in _NAME_SUFFIXES:
+                    if short.endswith(sfx):
+                        short = short[: -len(sfx)]
+                        break
+                result.append({
+                    "full_name": full,
+                    "short_name": short,
+                    "tax_id": h["tax_id"],
+                    "status": h["status"],
+                    "is_corp": full.endswith("股份有限公司"),
+                })
+        elif dissolved_gcis:
+            rejected = True
+        else:
+            not_found = True
+
+    # When not_found, search Ronny with a 2-char keyword to surface possible renamed companies
+    suggestions: list[dict] = []
+    if not_found and len(name) >= 3:
+        keyword = name[:3]
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                resp = await client.get(RONNY_SEARCH, params={"q": keyword, "page": 1})
+                resp.raise_for_status()
+                kw_hits = resp.json().get("data", [])
+            for h in kw_hits:
+                raw_name = h.get("公司名稱", "")
+                if isinstance(raw_name, list):
+                    raw_name = raw_name[0] if raw_name else ""
+                if not raw_name:
+                    continue
+                status = h.get("公司狀況", "") or ""
+                if status in _DISSOLVED_STATUSES or any(kw in status for kw in _DISSOLVED_KEYWORDS):
+                    continue
+                if raw_name == name or raw_name == name + "股份有限公司":
+                    continue
+                suggestions.append({
+                    "full_name": raw_name,
+                    "tax_id": h.get("統一編號", ""),
+                    "status": status,
+                    "is_corp": raw_name.endswith("股份有限公司"),
+                })
+                if len(suggestions) >= 5:
+                    break
+        except Exception:
+            pass
+
+    return {"matches": result, "rejected": rejected, "not_found": not_found, "suggestions": suggestions}
+
+
+async def fetch_company_data_by_tax_id(tax_id: str) -> dict[str, Any]:
+    """Fetch enrichment data using tax_id directly — no name-based search, no ambiguity."""
+    result: dict[str, Any] = {
+        "tax_id": tax_id,
+        "representative": "",
+        "capital": 0,
+        "authorized_capital": 0,
+        "address": "",
+        "listing_status": "非公發",
+        "par_value": 0,
+        "total_shares": 0,
+        "directors": [],
+        "setup_date": "",
+        "last_change_date": "",
+        "register_org": "",
+    }
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+        await _ensure_listing_cache(client)
+        matched_name = ""
+        show_data = await _fetch_ronny_show(client, tax_id)
+        if show_data:
+            raw_name = show_data.get("公司名稱", "")
+            if isinstance(raw_name, list):
+                raw_name = raw_name[0] if raw_name else ""
+            matched_name = raw_name
+            total_shares = _parse_int(show_data.get("已發行股份總數(股)") or "0")
+            par_raw = (show_data.get("每股金額(元)") or "").strip()
+            if par_raw == "無票面金額":
+                result["no_par_value"] = True
+            else:
+                par = _parse_int(par_raw or "0")
+                if par:
+                    result["par_value"] = par
+            result.update({
+                "representative": show_data.get("代表人姓名", ""),
+                "address": show_data.get("公司所在地", ""),
+                "capital": _parse_int(show_data.get("實收資本額(元)") or "0"),
+                "total_shares": total_shares,
+                "directors": [
+                    {
+                        "name": d.get("姓名", ""),
+                        "title": d.get("職稱", ""),
+                        "representative_of": _parse_representative_of_name(d.get("所代表法人", "")),
+                        "representative_of_tax_id": _parse_representative_of_tax_id(d.get("所代表法人", "")),
+                        "shares": _parse_int(d.get("出資額", "0")),
+                        "ratio": round(_parse_int(d.get("出資額", "0")) / total_shares, 6)
+                        if total_shares > 0 else None,
+                    }
+                    for d in show_data.get("董監事名單", [])
+                ],
+            })
+        gcis = await _fetch_gcis_by_tax_id(client, tax_id)
+        for k in ("authorized_capital", "capital", "setup_date", "last_change_date",
+                  "register_org", "representative", "address"):
+            v = gcis.get(k)
+            if v:
+                result[k] = v
+        if (not result.get("total_shares") and result.get("par_value")
+                and gcis.get("capital") and not result.get("no_par_value")):
+            derived = gcis["capital"] // result["par_value"]
+            if derived > 0:
+                result["total_shares"] = derived
+                for d in result["directors"]:
+                    d["ratio"] = round((d.get("shares") or 0) / derived, 6)
+        result["listing_status"] = _resolve_listing_status(tax_id, matched_name)
+        is_corp = matched_name.endswith("股份有限公司")
+        result["is_corp"] = is_corp
+        if result.get("total_shares", 0) == 0 and not is_corp:
+            base = result.get("capital", 0) or result.get("authorized_capital", 0)
+            if base > 0:
+                for d in result["directors"]:
+                    d["ratio"] = round((d.get("shares") or 0) / base, 6)
+        if matched_name:
+            result["matched_name"] = matched_name
+        _annotate_directors_listing(result.get("directors", []))
     return result
 
 
@@ -580,6 +813,8 @@ async def fetch_company_data(name: str) -> dict[str, Any]:
                         shares = d.get("shares") or 0
                         d["ratio"] = round(shares / base, 6)
 
+        _annotate_directors_listing(result.get("directors", []))
+
     return result
 
 
@@ -602,9 +837,12 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
                     return n[:-len(sfx)]
             return n
 
+        def _row_name(h: dict) -> str:
+            n = h.get("公司名稱", "")
+            return n[0] if isinstance(n, list) else n
+
         row = next(
-            (h for h in hits
-             if h.get("公司名稱") == name or _short(h.get("公司名稱", "")) == name),
+            (h for h in hits if _row_name(h) == name or _short(_row_name(h)) == name),
             hits[0],
         )
 
@@ -631,7 +869,7 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
         ]
 
         return {
-            "matched_name": row.get("公司名稱", ""),
+            "matched_name": _row_name(row),
             "tax_id": tax_id,
             "representative": representative,
             "capital": capital,
@@ -676,6 +914,43 @@ async def _fetch_gcis_by_tax_id(client: httpx.AsyncClient, tax_id: str) -> dict[
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _gcis_search_by_keyword(name: str) -> list[dict]:
+    """GCIS substring search — used when Ronny returns nothing.
+
+    Uses OData substringof() to find all companies whose name contains
+    the keyword. Returns list of {full_name, tax_id, status} dicts.
+    Falls back to exact-name match when substringof is not supported.
+    """
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for flt in (
+            f"substringof('{name}', Company_Name) eq true",
+            f"Company_Name eq '{name}'",
+        ):
+            try:
+                resp = await client.get(
+                    GCIS_APP1,
+                    params={"$format": "json", "$filter": flt, "$skip": "0", "$top": "10"},
+                )
+                resp.raise_for_status()
+                rows = resp.json()
+                if not isinstance(rows, list):
+                    continue
+                hits = [
+                    {
+                        "full_name": r.get("Company_Name", ""),
+                        "tax_id": r.get("Business_Accounting_NO", ""),
+                        "status": r.get("Company_Status_Desc", ""),
+                    }
+                    for r in rows
+                    if r.get("Company_Name")
+                ]
+                if hits:
+                    return hits
+            except Exception:
+                continue
+    return []
+
 
 def _parse_representative_of_name(val: Any) -> str:
     """所代表法人 is either ['統編', '公司名稱'] or an empty string."""
