@@ -1,7 +1,7 @@
 import os
 import httpx
 
-MOPS_BASE = os.getenv("MOPS_INVESTEE_URL", "http://localhost:8080").rstrip("/")
+MOPS_BASE = os.getenv("MOPS_INVESTEE_URL", "http://localhost:8085").rstrip("/")
 MOPS_KEY  = os.getenv("MOPS_INVESTEE_API_KEY", "")
 
 

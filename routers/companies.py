@@ -282,8 +282,17 @@ async def get_investee_holders(company_id: str, fuzzy: bool = False):
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
+
+    # 每個 (holder_id, category) 只保留最新一期
+    latest: dict = {}
+    for r in results:
+        key = (r.get("holder_id"), r.get("category"))
+        if key not in latest or r.get("as_of_date", "") > latest[key].get("as_of_date", ""):
+            latest[key] = r
+    deduped = sorted(latest.values(), key=lambda r: r.get("as_of_date", ""), reverse=True)
+
     total_shares = company.get("total_shares") or 0
-    return {"query": company["name"], "count": len(results), "total_shares": total_shares, "results": results}
+    return {"query": company["name"], "count": len(deduped), "total_shares": total_shares, "results": deduped}
 
 
 @router.post("/confirm")

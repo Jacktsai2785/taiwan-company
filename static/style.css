@@ -1393,7 +1393,7 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 }
 .parent-lookup-btn:hover:not(:disabled) { border-color: #10b981; color: #10b981; }
 .parent-lookup-btn:disabled { opacity: .5; cursor: not-allowed; }
-.director-parent-row td {
+.director-table tr.director-parent-row td {
   padding: 5px 10px 6px 24px;
   background: #f0fdf4;
   border-bottom: 1px solid #d1fae5;
