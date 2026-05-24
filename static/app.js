@@ -20,6 +20,10 @@ const state = {
   enrichingIds: new Set(),
   doneIds: new Set(),
   pinnedItems: new Set(JSON.parse(localStorage.getItem("pinnedItems") || "[]")),
+  labelGroups: {},               // {AAMA: ["AAMA-1", ...]} persisted in config
+  expandedLabelGroups: new Set(),
+  activeLabelGroup: null,        // parent group filter (union of all child labels)
+  dismissedGroupSuggestions: new Set(), // session-only
   sidePanelTab: "industry",
   sidePanelSearch: "",
   sidePanelSort: "alpha",
@@ -132,7 +136,7 @@ async function boot() {
     document.querySelectorAll(".badge-local-only").forEach(el => el.hidden = false);
   }
 
-  await Promise.all([loadIndustries(), loadCompanies(), loadLabels()]);
+  await Promise.all([loadIndustries(), loadCompanies(), loadLabels(), loadLabelGroups()]);
   computeGroups();
   renderSidebar();
   renderGrid();
@@ -192,6 +196,10 @@ async function loadLabels() {
   state.labels = await api("GET", "/api/config/labels");
 }
 
+async function loadLabelGroups() {
+  state.labelGroups = await api("GET", "/api/config/label-groups");
+}
+
 async function loadCompanies() {
   state.companies = await api("GET", "/api/companies");
   updateWatchCount();
@@ -219,7 +227,7 @@ function computeGroups() {
 function renderSidebar() {
   // 全部公司 / 面板入口
   const mainBtn = document.getElementById("sb-main-btn");
-  const isAll = state.activeIndustry === null && state.activeLabel === null;
+  const isAll = state.activeIndustry === null && state.activeLabel === null && state.activeLabelGroup === null;
   mainBtn.className = "sb-row" + (isAll ? " active" : "");
   document.getElementById("sb-all-count").textContent = state.companies.length;
 
@@ -252,30 +260,154 @@ function renderSidebar() {
   if (pinnedIndustries.length === 0 && pinnedLabels.length === 0) {
     pinnedEl.innerHTML = `<div style="padding:6px 14px;font-size:12px;color:var(--sb-muted);font-style:italic">點面板中的 ☆ 釘選常用項目</div>`;
   } else {
-    const makeRows = (items, isLabel) => items.map(name => {
-      const count = isLabel
-        ? state.companies.filter(c => (c.labels || []).includes(name)).length
-        : state.companies.filter(c => c.industry === name).length;
-      const isActive = isLabel
-        ? state.activeLabel === name
-        : state.activeIndustry === name && state.activeGroup === null;
-      return `<div class="sb-row ${isActive ? (isLabel ? "active-label" : "active") : ""}" data-pinned="${escHtml(name)}" data-is-label="${isLabel}">
-        <span class="sb-label">${escHtml(name)}</span>
-        <span class="sb-count">${count}</span>
+    // Build label → group reverse map
+    const labelToGroup = {};
+    for (const [gName, gLabels] of Object.entries(state.labelGroups)) {
+      for (const l of gLabels) labelToGroup[l] = gName;
+    }
+
+    // Partition pinned labels: grouped vs standalone
+    // A group only shows its parent row when ≥2 of its members are currently pinned;
+    // a lone pinned member falls back to the standalone list.
+    const groupedPinned = {};  // {groupName: [child labels that are pinned]}
+    const standalonePinned = [];
+    for (const label of pinnedLabels) {
+      const g = labelToGroup[label];
+      if (g) {
+        if (!groupedPinned[g]) groupedPinned[g] = [];
+        groupedPinned[g].push(label);
+      } else {
+        standalonePinned.push(label);
+      }
+    }
+    // Demote single-member groups to standalone
+    for (const [gName, gLabels] of Object.entries(groupedPinned)) {
+      if (gLabels.length < 2) {
+        standalonePinned.push(...gLabels);
+        delete groupedPinned[gName];
+      }
+    }
+
+    // Detect group suggestions from all pinned labels
+    const suggestions = _detectLabelGroupSuggestions(pinnedLabels);
+
+    let html = "";
+
+    // Suggestion banners (non-blocking, inline)
+    for (const { prefix, labels } of suggestions) {
+      const sorted = [...labels].sort(nat);
+      const first = sorted[0].replace(/^.+?[-_]/, "");
+      const last  = sorted[sorted.length - 1].replace(/^.+?[-_]/, "");
+      html += `<div class="lgs-banner" data-prefix="${escHtml(prefix)}">
+        💡 <b>${escHtml(prefix)}-${escHtml(first)}~${escHtml(last)}</b> 可歸攏
+        <button class="lgs-accept" data-prefix="${escHtml(prefix)}">歸攏</button>
+        <button class="lgs-dismiss" data-prefix="${escHtml(prefix)}">略過</button>
       </div>`;
-    }).join("");
+    }
 
-    pinnedEl.innerHTML = `
-      ${pinnedIndustries.length > 0 ? `<div class="sb-section-label">產業別</div>${makeRows(pinnedIndustries, false)}` : ""}
-      ${pinnedLabels.length > 0 ? `<div class="sb-section-label">標籤</div>${makeRows(pinnedLabels, true)}` : ""}
-    `;
+    // Industry pinned rows
+    if (pinnedIndustries.length > 0) {
+      html += `<div class="sb-section-label">產業別</div>`;
+      for (const name of pinnedIndustries) {
+        const count = state.companies.filter(c => c.industry === name).length;
+        const isActive = state.activeIndustry === name && state.activeGroup === null;
+        html += `<div class="sb-row ${isActive ? "active" : ""}" data-pinned="${escHtml(name)}" data-is-label="false">
+          <span class="sb-label">${escHtml(name)}</span>
+          <span class="sb-count">${count}</span>
+        </div>`;
+      }
+    }
 
+    // Label pinned rows (grouped + standalone)
+    if (pinnedLabels.length > 0) {
+      html += `<div class="sb-section-label">標籤</div>`;
+
+      // Grouped parent rows (sorted naturally by group name)
+      for (const gName of Object.keys(groupedPinned).sort(nat)) {
+        const gChildLabels = groupedPinned[gName].sort(nat);
+        const expanded = state.expandedLabelGroups.has(gName);
+        const totalCount = state.companies.filter(c =>
+          (c.labels || []).some(l => gChildLabels.includes(l))
+        ).length;
+        const isGroupActive = state.activeLabelGroup === gName;
+        html += `<div class="sb-row sb-lg-parent ${isGroupActive ? "active-label" : ""}" data-label-group="${escHtml(gName)}">
+          <span class="sb-label">${escHtml(gName)}<span class="sb-lg-arrow">${expanded ? "▴" : "▾"}</span></span>
+          <span class="sb-count">${totalCount}</span>
+        </div>`;
+        if (expanded) {
+          for (const child of gChildLabels) {
+            const childCount = state.companies.filter(c => (c.labels || []).includes(child)).length;
+            const isChildActive = state.activeLabel === child;
+            html += `<div class="sb-row sb-lg-child ${isChildActive ? "active-label" : ""}" data-pinned="${escHtml(child)}" data-is-label="true">
+              <span class="sb-label">${escHtml(child)}</span>
+              <span class="sb-count">${childCount}</span>
+            </div>`;
+          }
+        }
+      }
+
+      // Standalone pinned labels
+      for (const name of standalonePinned) {
+        const count = state.companies.filter(c => (c.labels || []).includes(name)).length;
+        const isActive = state.activeLabel === name;
+        html += `<div class="sb-row ${isActive ? "active-label" : ""}" data-pinned="${escHtml(name)}" data-is-label="true">
+          <span class="sb-label">${escHtml(name)}</span>
+          <span class="sb-count">${count}</span>
+        </div>`;
+      }
+    }
+
+    pinnedEl.innerHTML = html;
+
+    // Suggestion banner buttons
+    pinnedEl.querySelectorAll(".lgs-accept").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const prefix = btn.dataset.prefix;
+        const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
+        const members = allLabels.filter(l => state.pinnedItems.has(l) && /^(.+?)[-_]\d+$/.exec(l)?.[1] === prefix).sort(nat);
+        await api("POST", "/api/config/label-groups", { name: prefix, labels: members });
+        state.labelGroups[prefix] = members;
+        renderSidebar();
+        renderGrid();
+      });
+    });
+    pinnedEl.querySelectorAll(".lgs-dismiss").forEach(btn => {
+      btn.addEventListener("click", () => {
+        state.dismissedGroupSuggestions.add(btn.dataset.prefix);
+        renderSidebar();
+      });
+    });
+
+    // Parent group row click: toggle expand + set activeLabelGroup
+    pinnedEl.querySelectorAll(".sb-lg-parent").forEach(row => {
+      row.addEventListener("click", () => {
+        const gName = row.dataset.labelGroup;
+        if (state.expandedLabelGroups.has(gName)) {
+          state.expandedLabelGroups.delete(gName);
+        } else {
+          state.expandedLabelGroups.add(gName);
+        }
+        state.activeLabelGroup = state.activeLabelGroup === gName ? null : gName;
+        state.activeLabel = null;
+        state.activeLabelIndustry = null;
+        state.activeIndustry = null;
+        state.activeGroup = null;
+        state.activeTab = "all";
+        document.querySelectorAll(".tab-btn").forEach(b =>
+          b.classList.toggle("active", b.dataset.tab === "all"));
+        renderSidebar();
+        renderGrid();
+      });
+    });
+
+    // Individual label rows (standalone + children)
     pinnedEl.querySelectorAll(".sb-row[data-pinned]").forEach(row => {
       row.addEventListener("click", () => {
         const name = row.dataset.pinned;
         const isLabel = row.dataset.isLabel === "true";
         if (isLabel) {
           state.activeLabel = state.activeLabel === name ? null : name;
+          state.activeLabelGroup = null;
           state.activeLabelIndustry = null;
           state.activeIndustry = null;
           state.activeGroup = null;
@@ -286,6 +418,7 @@ function renderSidebar() {
           state.activeIndustry = state.activeIndustry === name ? null : name;
           state.activeGroup = null;
           state.activeLabel = null;
+          state.activeLabelGroup = null;
           state.activeLabelIndustry = null;
         }
         renderSidebar();
@@ -295,12 +428,32 @@ function renderSidebar() {
   }
 }
 
+function _detectLabelGroupSuggestions(pinnedLabels) {
+  const re = /^(.+?)[-_](\d+)$/;
+  const prefixMap = {};
+  for (const label of pinnedLabels) {
+    const m = label.match(re);
+    if (!m) continue;
+    const prefix = m[1];
+    if (!prefixMap[prefix]) prefixMap[prefix] = [];
+    prefixMap[prefix].push(label);
+  }
+  return Object.entries(prefixMap)
+    .filter(([prefix, labels]) =>
+      labels.length >= 2 &&
+      !state.labelGroups[prefix] &&
+      !state.dismissedGroupSuggestions.has(prefix)
+    )
+    .map(([prefix, labels]) => ({ prefix, labels }));
+}
+
 /* ── Side Panel ── */
 function _clearFilter() {
   state.activeIndustry = null;
   state.activeGroup = null;
   state.activeLabel = null;
   state.activeLabelIndustry = null;
+  state.activeLabelGroup = null;
   renderSidebar();
   renderSidePanel();
   renderGrid();
@@ -696,16 +849,17 @@ async function runClassify() {
 
     overlay.classList.remove("open");
     if (updates.length === 0) {
-      toast("未套用任何分類");
+      const unchecked = rows.querySelectorAll("input[type=checkbox]").length;
+      if (unchecked > 0)
+        toast(`Claude 未能為 ${unchecked} 間公司找到適合的產業別，請在對話框中手動選擇後再確認`, true);
+      else
+        toast("未套用任何分類");
       return;
     }
 
     try {
       await api("PUT", "/api/companies/batch-industry", { updates });
-      updates.forEach(u => {
-        const idx = state.companies.findIndex(c => c.id === u.id);
-        if (idx !== -1) state.companies[idx].industry = u.industry;
-      });
+      await loadCompanies();
       computeGroups();
       renderSidebar();
       renderGrid();
@@ -1053,6 +1207,10 @@ function renderGrid() {
   if (state.activeTab === "watched") {
     companies = companies.filter(c => c.watched === true);
     title.textContent = "";
+  } else if (state.activeLabelGroup) {
+    const gLabels = (state.labelGroups[state.activeLabelGroup] || []).filter(l => state.pinnedItems.has(l));
+    companies = companies.filter(c => (c.labels || []).some(l => gLabels.includes(l)));
+    title.textContent = `標籤群組：${state.activeLabelGroup}`;
   } else if (state.activeLabel) {
     companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
@@ -1514,6 +1672,7 @@ document.getElementById("tab-group").addEventListener("click", e => {
   state.activeTab = btn.dataset.tab;
   state.activeLabel = null;
   state.activeLabelIndustry = null;
+  state.activeLabelGroup = null;
   document.querySelectorAll(".tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.tab === state.activeTab)
   );
@@ -2098,6 +2257,110 @@ function confirmCloudflare() {
 function closeFindBizDialog() {
   document.getElementById("findbiz-overlay").classList.remove("open");
   _findBizSessionId = null;
+}
+
+/* ── 自動抓取每股金額（生成完後靜默執行）── */
+let _autoFetchQueue    = [];   // 待抓取的 company IDs
+let _autoFetchRunning  = false;
+let _autoFetchSessionId = null;
+let _autoFetchCfSettle  = null;
+
+function _needsAutoFetch(c) {
+  if (!c || !c.tax_id) return false;
+  if (c.par_value || c.no_par_value) return false;
+  return true;
+}
+
+function _enqueueAutoFetch(companyId) {
+  if (_autoFetchQueue.includes(companyId)) return;
+  _autoFetchQueue.push(companyId);
+  _processAutoFetchQueue();
+}
+
+async function _processAutoFetchQueue() {
+  if (_autoFetchRunning || _autoFetchQueue.length === 0) return;
+  _autoFetchRunning = true;
+  while (_autoFetchQueue.length > 0) {
+    const id = _autoFetchQueue.shift();
+    const c  = state.companies.find(x => x.id === id);
+    if (c && _needsAutoFetch(c)) await _runAutoFetch(c);
+  }
+  _autoFetchRunning = false;
+}
+
+async function _runAutoFetch(c) {
+  try {
+    const res = await fetch(`/api/findbiz/scrape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: c.id, tax_id: c.tax_id }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const { session_id } = await res.json();
+    _autoFetchSessionId = session_id;
+    await _listenAutoFetchStream(session_id, c.id, c.name);
+  } catch (err) {
+    toast(`⚠️ ${c.name} 自動抓取失敗：${err.message}`, true);
+  } finally {
+    _autoFetchSessionId = null;
+  }
+}
+
+function _listenAutoFetchStream(sessionId, companyId, companyName) {
+  return new Promise(resolve => {
+    const es = new EventSource(`/api/findbiz/stream/${sessionId}`);
+    let settled = false;
+    const settle = () => {
+      if (!settled) {
+        settled = true;
+        _hideAutoFetchBanner();
+        es.close();
+        resolve();
+      }
+    };
+
+    es.onmessage = async e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "heartbeat") return;
+
+      if (msg.type === "browser_ready") {
+        _showAutoFetchBanner(companyName, settle);
+      } else if (msg.type === "done") {
+        settle();
+        toast(`✅ 已自動抓取 ${companyName} 的每股金額`);
+        try { await loadCompanies(); renderGrid(); } catch (_) {}
+      } else if (msg.type === "error") {
+        settle();
+        toast(`⚠️ ${companyName} 自動抓取失敗：${msg.message}`, true);
+      }
+    };
+
+    es.onerror = () => settle();
+  });
+}
+
+function _showAutoFetchBanner(companyName, onSkip) {
+  const banner = document.getElementById("auto-fetch-cf-banner");
+  const msg    = document.getElementById("auto-fetch-cf-msg");
+  if (!banner || !msg) return;
+  msg.textContent = `🔍 自動抓取中：${companyName} — 請在已開啟的瀏覽器中完成 Cloudflare 驗證後點擊確認`;
+  _autoFetchCfSettle = onSkip;
+  banner.classList.remove("hidden");
+}
+
+function _hideAutoFetchBanner() {
+  const banner = document.getElementById("auto-fetch-cf-banner");
+  if (banner) banner.classList.add("hidden");
+  _autoFetchCfSettle = null;
+}
+
+function confirmAutoFetchCloudflare() {
+  if (!_autoFetchSessionId) return;
+  fetch(`/api/findbiz/confirm/${_autoFetchSessionId}`, { method: "POST" }).catch(() => {});
+}
+
+function skipAutoFetchCloudflare() {
+  if (_autoFetchCfSettle) _autoFetchCfSettle();
 }
 
 function refreshGcis() {
@@ -2991,6 +3254,7 @@ document.getElementById("manual-ok").addEventListener("click", async () => {
         existing_id: existing ? existing.id : null,
         existing_labels: existing ? (existing.labels || []) : [],
         is_unverified: match?.is_unverified || false,
+        is_api_error: match?.is_api_error || false,
       };
       if (match || displayName.endsWith("股份有限公司") || displayName.endsWith("有限公司")) {
         valid.push(candidate);
@@ -3023,13 +3287,12 @@ function openDisambigDialog(items, onConfirm) {
         const _DISSOLVED = new Set(["解散","廢止","撤銷","命令解散","廢止認許","撤回認許"]);
         const st = m.status || "";
         const isMDissolved = m.is_dissolved || _DISSOLVED.has(st) || ["解散","撤銷","廢止","命令解散"].some(k => st.includes(k));
-        const statusBadge = isMDissolved
-          ? `<span class="disambig-status dissolved" title="${escHtml(st || '已解散')}">解散</span>`
-          : m.is_unverified
-            ? `<span class="disambig-status unverified" title="Ronny 顯示核准，但政府網站驗證失敗，請謹慎確認">待確認</span>`
-            : _ACTIVE.has(st)
-              ? `<span class="disambig-status active"   title="${escHtml(st)}">核准</span>`
-              : `<span class="disambig-status unknown"  title="${escHtml(st || '狀態不明')}">?</span>`;
+        let statusBadge;
+        if (isMDissolved)        statusBadge = `<span class="disambig-status dissolved" title="${escHtml(st || '已解散')}">解散</span>`;
+        else if (m.is_unverified) statusBadge = `<span class="disambig-status unverified" title="Ronny 顯示核准，但政府資料庫查無此公司，請謹慎確認">待確認</span>`;
+        else if (m.is_api_error)  statusBadge = `<span class="disambig-status api-error"  title="GCIS API 驗證逾時，Ronny 顯示核准，建議稍後重新查詢">驗證逾時</span>`;
+        else if (_ACTIVE.has(st)) statusBadge = `<span class="disambig-status active"     title="${escHtml(st)}">核准</span>`;
+        else                      statusBadge = `<span class="disambig-status unknown"    title="${escHtml(st || '狀態不明')}">?</span>`;
         const corpBadge = m.is_corp
           ? `<span class="disambig-corp-badge">股份有限公司</span>`
           : `<span class="disambig-corp-badge limited">有限公司</span>`;
@@ -3214,6 +3477,7 @@ document.getElementById("name-review-ok").addEventListener("click", async () => 
         not_found: notFoundNames.has(name),
         suggestions: notFoundSuggestions[name] || [],
         is_unverified: match?.is_unverified || false,
+        is_api_error: match?.is_api_error || false,
       });
     }
     openConfirmDialog(valid, uncertainCandidates, newExcluded, suggestedLabel);
@@ -3309,8 +3573,10 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
         ? `<span class="new-badge">新增</span>`
         : `<span class="update-badge">既有</span>`;
       const unverifiedBadge = c.is_unverified
-        ? `<span class="unverified-badge" title="Ronny 顯示核准，但政府網站驗證失敗，請確認此公司是否仍為現役">⚠ 待確認</span>`
-        : "";
+        ? `<span class="unverified-badge" title="Ronny 顯示核准，但政府資料庫查無此公司，請確認是否仍為現役">⚠ 待確認</span>`
+        : c.is_api_error
+          ? `<span class="unverified-badge api-error" title="GCIS API 驗證逾時（網路不穩），Ronny 顯示核准，建議稍後重新查詢">⏱ 驗證逾時</span>`
+          : "";
       const existingLabels = c.existing_labels?.length
         ? `<div class="existing-labels">現有標籤：${c.existing_labels.join("、")}</div>`
         : "";
@@ -3766,6 +4032,10 @@ function getScopedCompanies() {
   if (state.activeTab === "watched") {
     companies = companies.filter(c => c.watched === true);
     scopeLabel = "⭐ 追蹤";
+  } else if (state.activeLabelGroup) {
+    const gLabels = (state.labelGroups[state.activeLabelGroup] || []).filter(l => state.pinnedItems.has(l));
+    companies = companies.filter(c => (c.labels || []).some(l => gLabels.includes(l)));
+    scopeLabel = `標籤群組：${state.activeLabelGroup}`;
   } else if (state.activeLabel) {
     companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
@@ -3999,6 +4269,9 @@ function subscribeEnrichment(companyId) {
           renderSidebar();
           renderGrid();
           if (_modalCompanyId === companyId) openModal(companyId);
+          // 生成完成後自動補抓每股金額（有 persistent cookie 時完全無需人工）
+          const fresh = state.companies.find(x => x.id === companyId);
+          if (fresh && _needsAutoFetch(fresh)) _enqueueAutoFetch(companyId);
         } catch (err) {
           console.error("post-enrichment refresh failed:", err);
         }

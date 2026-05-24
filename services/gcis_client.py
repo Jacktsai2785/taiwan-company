@@ -493,35 +493,46 @@ async def search_company_matches(name: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as gc:
             sem = asyncio.Semaphore(5)
 
-            async def _gcis_status(tax_id: str) -> str:
+            async def _gcis_status(tax_id: str) -> str | None:
+                # Returns: status string | "" (not found) | None (API error after retries)
                 async with sem:
-                    try:
-                        resp = await gc.get(
-                            GCIS_APP1,
-                            params={
-                                "$format": "json",
-                                "$filter": f"Business_Accounting_NO eq '{tax_id}'",
-                                "$skip": "0", "$top": "1",
-                            },
-                        )
-                        resp.raise_for_status()
-                        rows = resp.json()
-                        return rows[0].get("Company_Status_Desc", "") if rows else ""
-                    except Exception:
-                        return ""
+                    for attempt in range(3):
+                        try:
+                            resp = await gc.get(
+                                GCIS_APP1,
+                                params={
+                                    "$format": "json",
+                                    "$filter": f"Business_Accounting_NO eq '{tax_id}'",
+                                    "$skip": "0", "$top": "1",
+                                },
+                            )
+                            resp.raise_for_status()
+                            rows = resp.json()
+                            return rows[0].get("Company_Status_Desc", "") if rows else ""
+                        except (httpx.TimeoutException, httpx.NetworkError):
+                            pass  # retryable
+                        except httpx.HTTPStatusError as e:
+                            if e.response.status_code < 500:
+                                return None  # 4xx — not retryable
+                        except Exception:
+                            return None
+                        if attempt < 2:
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                    return None  # all retries exhausted
 
             tax_ids = [h.get("統一編號", "") for h in to_verify]
             gcis_statuses = await asyncio.gather(*[_gcis_status(tid) for tid in tax_ids])
 
         gcis_map = dict(zip(tax_ids, gcis_statuses))
         for h in to_verify:
-            gcis_st = gcis_map.get(h.get("統一編號", ""), "")
-            if gcis_st:
+            gcis_st = gcis_map.get(h.get("統一編號", ""))
+            if gcis_st is None:
+                h["_api_error"] = True
+            elif gcis_st:
                 h["_gcis_status"] = gcis_st
 
     # Step 3: Separate GCIS-confirmed dissolved from active
-    # If GCIS returned "" (API failure / not found), mark as unverified — do NOT treat as active.
-    # Unverified Ronny-"核准" companies get is_unverified=True so the frontend shows a warning.
+    # "" (empty, not found) → _unverified; None (API error after retries) → _api_error
     verified  = []
     gcis_dissolved = []
     for h in candidates:
@@ -529,7 +540,9 @@ async def search_company_matches(name: str) -> list[dict]:
         if gcis_st and any(kw in gcis_st for kw in _DISSOLVED_KEYWORDS):
             gcis_dissolved.append(h)
         else:
-            if not gcis_st:
+            if h.get("_api_error"):
+                pass  # keep _api_error flag; do NOT set _unverified
+            elif not gcis_st:
                 h = dict(h)
                 h["_unverified"] = True
             verified.append(h)
@@ -577,6 +590,8 @@ async def search_company_matches(name: str) -> list[dict]:
             d["is_dissolved"] = True
         if h.get("_unverified"):
             d["is_unverified"] = True
+        if h.get("_api_error"):
+            d["is_api_error"] = True
         return d
 
     result = [_to_match(h) for h in verified[:50]]

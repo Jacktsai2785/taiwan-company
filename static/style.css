@@ -115,6 +115,28 @@ body {
 
 .sb-divider { height: 1px; background: var(--sb-border); margin: 6px 14px; }
 
+/* Label group: parent row */
+.sb-lg-parent { font-weight: 600; }
+.sb-lg-arrow { font-size: 9px; margin-left: 5px; opacity: .65; vertical-align: middle; }
+
+/* Label group: child rows (indented) */
+.sb-lg-child { padding-left: 30px; font-size: 12px; opacity: .92; }
+
+/* Suggestion banner */
+.lgs-banner {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 12px; font-size: 11px;
+  background: rgba(16,185,129,.08); border-left: 3px solid #10b981;
+  color: #a7f3d0;
+}
+.lgs-banner b { color: #fff; }
+.lgs-accept, .lgs-dismiss {
+  padding: 1px 8px; border-radius: 4px; font-size: 10px;
+  cursor: pointer; border: none; font-weight: 600;
+}
+.lgs-accept  { background: #10b981; color: #fff; }
+.lgs-dismiss { background: transparent; color: var(--sb-muted); }
+
 .sb-section-label {
   padding: 8px 14px 2px;
   font-size: 10px;
@@ -947,6 +969,26 @@ body {
 .fetch-par-btn:hover { background: var(--accent-light); border-color: var(--accent); }
 
 /* ── FindBiz dialog ── */
+/* ── 自動抓取 Cloudflare 確認橫幅 ── */
+#auto-fetch-cf-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 9999;
+  background: #1d4ed8;
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+#auto-fetch-cf-banner.hidden { display: none; }
+#auto-fetch-cf-msg { flex: 1; }
+.auto-fetch-cf-actions { display: flex; gap: 8px; }
+.auto-fetch-cf-actions .btn-ghost { color: rgba(255,255,255,.8); border-color: rgba(255,255,255,.4); }
+.auto-fetch-cf-actions .btn-ghost:hover { background: rgba(255,255,255,.15); }
+
 #findbiz-overlay {
   display: none;
   position: fixed; inset: 0;
@@ -1736,6 +1778,9 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   display: inline-block; font-size: 10px;
   background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;
   padding: 1px 6px; border-radius: 99px; margin-left: 4px; font-weight: 600;
+}
+.confirm-row .unverified-badge.api-error {
+  background: #eff6ff; color: #2563eb; border-color: #bfdbfe;
 }
 .confirm-row.dissolved-row {
   opacity: 0.7;
@@ -3058,6 +3103,7 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .disambig-status.active     { background: #dcfce7; color: #15803d; }
 .disambig-status.dissolved  { background: #fee2e2; color: #dc2626; }
 .disambig-status.unverified { background: #fff7ed; color: #c2410c; }
+.disambig-status.api-error  { background: #eff6ff; color: #2563eb; }
 .disambig-status.unknown    { background: #f1f5f9; color: #94a3b8; }
 .disambig-corp-badge {
   font-size: 10px; padding: 1px 5px; border-radius: 3px;

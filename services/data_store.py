@@ -197,6 +197,30 @@ def add_label(label: str) -> None:
         _write(CONFIG_FILE, config)
 
 
+# --- Label groups ---
+
+def get_label_groups() -> dict[str, list[str]]:
+    return get_config().get("label_groups", {})
+
+
+def save_label_group(name: str, labels: list[str]) -> dict[str, list[str]]:
+    config = get_config()
+    groups = config.get("label_groups", {})
+    groups[name] = labels
+    config["label_groups"] = groups
+    _write(CONFIG_FILE, config)
+    return groups
+
+
+def delete_label_group(name: str) -> dict[str, list[str]]:
+    config = get_config()
+    groups = config.get("label_groups", {})
+    groups.pop(name, None)
+    config["label_groups"] = groups
+    _write(CONFIG_FILE, config)
+    return groups
+
+
 # --- Industry keywords (for daily news synonym expansion) ---
 
 def get_all_industry_keywords() -> dict[str, list[str]]:

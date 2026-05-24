@@ -100,3 +100,28 @@ def rename_industry(req: IndustryRename):
 def delete_industry(name: str):
     industries = data_store.delete_industry(name)
     return {"industries": industries}
+
+
+# --- Label groups ---
+
+class LabelGroupSave(BaseModel):
+    name: str
+    labels: list[str]
+
+
+@router.get("/label-groups")
+def get_label_groups():
+    return data_store.get_label_groups()
+
+
+@router.post("/label-groups")
+def save_label_group(req: LabelGroupSave):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="群組名稱不可為空")
+    return data_store.save_label_group(name, req.labels)
+
+
+@router.delete("/label-groups/{name}")
+def delete_label_group(name: str):
+    return data_store.delete_label_group(name)

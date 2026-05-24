@@ -464,6 +464,15 @@
   </div>
 </div>
 
+<!-- ── 自動抓取 Cloudflare 確認橫幅 ── -->
+<div id="auto-fetch-cf-banner" class="hidden">
+  <span id="auto-fetch-cf-msg"></span>
+  <div class="auto-fetch-cf-actions">
+    <button class="btn btn-sm btn-primary" onclick="confirmAutoFetchCloudflare()">✅ 已完成驗證，繼續</button>
+    <button class="btn btn-sm btn-ghost" onclick="skipAutoFetchCloudflare()">跳過此公司</button>
+  </div>
+</div>
+
 <!-- ── FindBiz 每股金額抓取 Dialog ── -->
 <div id="findbiz-overlay">
   <div id="findbiz-dialog">
