@@ -202,10 +202,14 @@ def _parse_subsections(body: str) -> list[dict]:
     return subs
 
 
-def _normalize_to_umbrella(sections: list[dict]) -> list[dict]:
+def _normalize_to_umbrella(sections: list[dict], valid_subs: set[str] | None = None) -> list[dict]:
     """Reshape a flat section list so public DD sections stay top-level and every
     other (deck) section is collected as a `### sub-section` under the UMBRELLA.
-    Idempotent: an existing UMBRELLA is unpacked and rebuilt."""
+    Idempotent: an existing UMBRELLA is unpacked and rebuilt.
+
+    If `valid_subs` is given, umbrella sub-sections whose heading isn't in it are
+    dropped — used on apply to purge stale subs the latest deck no longer produces
+    (e.g. a renamed section)."""
     public: list[dict] = []
     subs: list[dict] = []
     for s in sections:
@@ -220,6 +224,8 @@ def _normalize_to_umbrella(sections: list[dict]) -> list[dict]:
     by_sub: dict[str, dict] = {}
     for s in subs:
         by_sub[s["heading"]] = s
+    if valid_subs is not None:
+        by_sub = {h: s for h, s in by_sub.items() if h in valid_subs}
     ordered_subs = sorted(
         by_sub.values(),
         key=lambda s: (_SUB_ORDER.index(s["heading"]) if s["heading"] in _SUB_ORDER else len(_SUB_ORDER)),
@@ -291,7 +297,10 @@ def apply_materials(company_id: str, req: ApplyRequest):
         else:
             base_sections.append({"heading": h, "body": ms["body"]})  # 暫置頂層，下面收進綜覽
 
-    final_sections = _normalize_to_umbrella(base_sections)
+    # Purge stale umbrella subs the latest generation no longer produces (e.g. a
+    # renamed section): keep only sub-headings present in the current deck output.
+    current_deck_subs = {s["heading"] for s in _parse_sections(mat_summary)} - set(PUBLIC_SECTIONS)
+    final_sections = _normalize_to_umbrella(base_sections, valid_subs=current_deck_subs)
 
     # Top-level sections carrying deck content get the「簡報」chip: the umbrella,
     # plus any public section whose body the deck replaced. Keep prior marks too.
