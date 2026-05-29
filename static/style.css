@@ -2803,6 +2803,15 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   margin-left: 6px;
   vertical-align: middle;
 }
+/* Inline「（簡報補充…）」annotations — deck-sourced additions inside public text */
+.mat-supplement {
+  color: #0b6e5f;
+  background: rgba(13,143,122,.12);
+  border-radius: 4px;
+  padding: 0 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
 
 #memo-transcript-box { border-top: 1px solid var(--border); }
 #memo-transcript-header {

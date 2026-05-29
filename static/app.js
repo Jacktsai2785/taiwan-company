@@ -5622,9 +5622,31 @@ function renderSummary(raw, matHeadings) {
 }
 
 function inlineMarkdown(str) {
-  return escHtml(str)
+  const html = escHtml(str)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>");
+  return _wrapSupplements(html);
+}
+
+// Wrap each「（簡報補充…）」annotation in a styled span so deck-sourced additions
+// stand out from the public-research text. Uses balanced full-width-paren scanning
+// so nested （…） inside the note don't cut it short.
+function _wrapSupplements(html) {
+  const MARK = "（簡報補充";
+  let out = "", i = 0;
+  for (;;) {
+    const idx = html.indexOf(MARK, i);
+    if (idx === -1) { out += html.slice(i); break; }
+    out += html.slice(i, idx);
+    let depth = 0, j = idx;
+    for (; j < html.length; j++) {
+      if (html[j] === "（") depth++;
+      else if (html[j] === "）") { depth--; if (depth === 0) { j++; break; } }
+    }
+    out += `<span class="mat-supplement">${html.slice(idx, j)}</span>`;
+    i = j;
+  }
+  return out;
 }
 
 /* ── Util ── */
