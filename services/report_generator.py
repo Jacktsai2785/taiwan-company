@@ -297,6 +297,21 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
         if materials_text.strip() else ""
     )
 
+    existing_biz = _extract_section(company.get("summary", ""), "業務概況")
+    biz_block = (
+        f"\n【目前公司簡介既有的「業務概況」（來自公開資料研究）】\n{existing_biz}\n"
+        if existing_biz else ""
+    )
+    if existing_biz:
+        biz_instruction = (
+            "以上方「既有業務概況」為基礎，**完整保留**既有敘述；再融入你讀完簡報後發現、"
+            "既有敘述沒有的額外資訊（產品、技術、客戶、市場）。簡報新增或更具體的內容，"
+            "請以「（簡報補充：…）」附在相關敘述之後，或另起一句以「（簡報補充）」開頭；"
+            "不要刪除既有內容、不要原文重複既有敘述。"
+        )
+    else:
+        biz_instruction = "公司在做什麼：主要產品或服務、核心技術、解決的問題"
+
     existing_risks = _extract_section(company.get("summary", ""), "主要風險")
     risk_block = (
         f"\n【目前公司簡介既有的「主要風險」（來自公開資料研究）】\n{existing_risks}\n"
@@ -325,12 +340,12 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 實收資本額：{capital_str}
 所在地：{address}
 上市狀態：{listing}
-{text_block}{risk_block}
+{text_block}{biz_block}{risk_block}
 【任務】
 用繁體中文撰寫以下格式的公司簡介（純 Markdown，不加開頭標題行）：
 
 ## 業務概況
-（公司在做什麼：主要產品或服務、核心技術、解決的問題）
+（{biz_instruction}）
 
 ## 產品與服務
 （具體產品線、服務項目、應用場景；可條列）
@@ -351,7 +366,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 （{risk_instruction}）
 
 嚴格規則：
-- 各段落**只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測（唯一例外：「主要風險」需依上方指示整合既有風險）。
+- 各段落**只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測（例外：「業務概況」與「主要風險」需依上方指示整合既有內容）。
 - 具體數字（營收、募資、估值、客戶數）務必依簡報原文，**禁止杜撰、湊整或推估**。
 - 某段落在檔案中查無資訊時，直接標「——（簡報未提供）」，不要用模糊語氣填充。
 - 禁止描述自己的閱讀過程或檔案結構。
