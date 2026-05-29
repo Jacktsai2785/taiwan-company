@@ -265,6 +265,22 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
             raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
+def _extract_section(summary: str, heading: str) -> str:
+    """Return the body text of a `## heading` section from a markdown summary, or ''."""
+    out: list[str] = []
+    capturing = False
+    for line in (summary or "").split("\n"):
+        s = line.strip()
+        if re.match(r"^##\s+", s):
+            if capturing:
+                break
+            capturing = (re.sub(r"^##\s+", "", s).strip() == heading)
+            continue
+        if capturing:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
 def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
     name     = company.get("name", "")
     industry = company.get("industry", "") or "不詳"
@@ -281,6 +297,22 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
         if materials_text.strip() else ""
     )
 
+    existing_risks = _extract_section(company.get("summary", ""), "主要風險")
+    risk_block = (
+        f"\n【目前公司簡介既有的「主要風險」（來自公開資料研究）】\n{existing_risks}\n"
+        if existing_risks else ""
+    )
+    if existing_risks:
+        risk_instruction = (
+            "請先**完整保留**上方「既有主要風險」的每一條（可微調文字但不可刪除其指出的風險），"
+            "再**補充**你讀完簡報後發現、既有清單尚未涵蓋的額外風險。整合成一份去重後的完整清單："
+            "既有風險在前、簡報新增的風險在後並於條目開頭標「（簡報補充）」。每條需具體指向本公司業務，禁止空泛語句。"
+        )
+    else:
+        risk_instruction = (
+            "以 PE 視角列 3-5 點具體風險，需具體指向本公司業務或產業，禁止「市場競爭激烈」「法規風險」等空泛語句。"
+        )
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
 以下是「{full_name}」提供的簡報、公司介紹或相關資料（可能是 PDF、簡報或照片），以及系統登記的基本資料。
 請**完整閱讀所有已提供的檔案內容**，僅根據這些檔案與基本資料撰寫一份公司簡介。
@@ -293,7 +325,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 實收資本額：{capital_str}
 所在地：{address}
 上市狀態：{listing}
-{text_block}
+{text_block}{risk_block}
 【任務】
 用繁體中文撰寫以下格式的公司簡介（純 Markdown，不加開頭標題行）：
 
@@ -312,11 +344,14 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 ## 財務與募資亮點
 （營收、成長、募資金額、估值、訂單或客戶數等**具體數字**；簡報未提供則標「——（簡報未提供）」）
 
-## 重點與風險觀察
-（以 PE 視角，列 2-4 點從簡報內容讀到的亮點與需留意之處）
+## 投資亮點
+（以 PE 視角，列 2-4 點從簡報內容讀到的投資亮點 / 重點；**只寫亮點，不要寫風險**，風險一律放到下面的「主要風險」）
+
+## 主要風險
+（{risk_instruction}）
 
 嚴格規則：
-- **只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測。
+- 各段落**只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測（唯一例外：「主要風險」需依上方指示整合既有風險）。
 - 具體數字（營收、募資、估值、客戶數）務必依簡報原文，**禁止杜撰、湊整或推估**。
 - 某段落在檔案中查無資訊時，直接標「——（簡報未提供）」，不要用模糊語氣填充。
 - 禁止描述自己的閱讀過程或檔案結構。

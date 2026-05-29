@@ -181,7 +181,7 @@ UMBRELLA = "營運綜覽"
 # Top-level reading order: the deck umbrella sits right under 業務概況.
 _TOP_ORDER = ["業務概況", UMBRELLA, "競業分析", "主要風險"]
 # Order of deck topics inside the umbrella; unknown headings keep their order at end.
-_SUB_ORDER = ["產品與服務", "商業模式與市場", "團隊與股東", "財務與募資亮點", "重點與風險觀察"]
+_SUB_ORDER = ["產品與服務", "商業模式與市場", "團隊與股東", "財務與募資亮點", "投資亮點"]
 
 _SUBHEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 

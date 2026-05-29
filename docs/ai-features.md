@@ -53,6 +53,7 @@ source_repo: ~/taiwan-company
 - 公司簡介**所有 `##` 段落一律可摺疊**（前端 `applyCollapsible` 不再用 hardcoded 白名單），不論簡報產出什麼標題都不必改 code
 - 一旦走「重新生成 / 深度生成」整份重建 `summary`，`_save_summary_result` 會清空 `materials_applied_headings`（標記不再適用）
 - prompt 嚴格限定「只寫檔案明確出現的資訊、禁杜撰數字、查無則標『——（簡報未提供）』」
+- **風險整合**：生成簡報簡介時會把現有公開的「主要風險」一併餵給 Opus，要求**完整保留既有風險 + 補充簡報讀到的額外風險**（新增條目標「（簡報補充）」），輸出單一整合後的「## 主要風險」；簡報的亮點則獨立成「## 投資亮點」收進營運綜覽。風險因此只有一處（套用時走「修改」取代公開的主要風險）
 
 ### 3. Call memo 抽取（`memo_extractor.py`）
 - `extract_from_transcript(company_name, transcript)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）
