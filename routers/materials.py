@@ -174,6 +174,64 @@ async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_he
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 
+# Public DD sections (from registry/web) live at the top level. Deck-only topics
+# are grouped under one collapsible umbrella so they read as "公司概況 的延伸".
+PUBLIC_SECTIONS = ["業務概況", "競業分析", "主要風險"]
+UMBRELLA = "營運綜覽"
+# Top-level reading order: the deck umbrella sits right under 業務概況.
+_TOP_ORDER = ["業務概況", UMBRELLA, "競業分析", "主要風險"]
+# Order of deck topics inside the umbrella; unknown headings keep their order at end.
+_SUB_ORDER = ["產品與服務", "商業模式與市場", "團隊與股東", "財務與募資亮點", "重點與風險觀察"]
+
+_SUBHEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
+
+
+def _parse_subsections(body: str) -> list[dict]:
+    """Split umbrella body into `### heading` sub-sections."""
+    subs: list[dict] = []
+    cur: dict | None = None
+    for line in (body or "").split("\n"):
+        m = _SUBHEADING_RE.match(line.strip())
+        if m:
+            cur = {"heading": m.group(1).strip(), "body": []}
+            subs.append(cur)
+        elif cur is not None:
+            cur["body"].append(line)
+    for s in subs:
+        s["body"] = "\n".join(s["body"]).strip("\n")
+    return subs
+
+
+def _normalize_to_umbrella(sections: list[dict]) -> list[dict]:
+    """Reshape a flat section list so public DD sections stay top-level and every
+    other (deck) section is collected as a `### sub-section` under the UMBRELLA.
+    Idempotent: an existing UMBRELLA is unpacked and rebuilt."""
+    public: list[dict] = []
+    subs: list[dict] = []
+    for s in sections:
+        if s["heading"] in PUBLIC_SECTIONS:
+            public.append(s)
+        elif s["heading"] == UMBRELLA:
+            subs.extend(_parse_subsections(s["body"]))
+        else:
+            subs.append(s)  # stray top-level deck section → fold into umbrella
+
+    # de-dup sub-sections by heading (last write wins), then order
+    by_sub: dict[str, dict] = {}
+    for s in subs:
+        by_sub[s["heading"]] = s
+    ordered_subs = sorted(
+        by_sub.values(),
+        key=lambda s: (_SUB_ORDER.index(s["heading"]) if s["heading"] in _SUB_ORDER else len(_SUB_ORDER)),
+    )
+    result = list(public)
+    if ordered_subs:
+        umb_body = "\n\n".join(f"### {s['heading']}\n{s['body']}".rstrip() for s in ordered_subs)
+        result.append({"heading": UMBRELLA, "body": umb_body})
+    # Order top-level sections so 營運綜覽 sits right under 業務概況.
+    result.sort(key=lambda s: _TOP_ORDER.index(s["heading"]) if s["heading"] in _TOP_ORDER else len(_TOP_ORDER))
+    return result
+
 
 def _parse_sections(md: str) -> list[dict]:
     """Split a Markdown summary into ordered sections by `## heading`.
@@ -207,9 +265,12 @@ class ApplyRequest(BaseModel):
 @router.post("/{company_id}/materials/apply")
 def apply_materials(company_id: str, req: ApplyRequest):
     """Merge selected sections of `materials_summary` into the public `summary`.
-    Same-named section → replace body (修改); new heading → append (新增).
-    Records applied headings in `materials_applied_headings` so the modal can
-    colour-mark which sections came from the deck."""
+
+    A deck section whose heading matches a public DD section (業務概況/競業分析/
+    主要風險) replaces that section's body in place (修改); every other deck topic
+    is grouped as a `### sub-section` under the「營運綜覽」umbrella (歸入綜覽).
+    `materials_applied_headings` records the top-level sections carrying deck
+    content so the modal can colour-mark them with a「簡報」chip."""
     company = _require_company(company_id)
     mat_summary = company.get("materials_summary") or ""
     if not mat_summary.strip():
@@ -223,19 +284,25 @@ def apply_materials(company_id: str, req: ApplyRequest):
     base_sections = _parse_sections(company.get("summary") or "")
     by_heading = {s["heading"]: s for s in base_sections}
 
-    applied = set(company.get("materials_applied_headings") or [])
-    # Drop stale marks whose heading no longer exists in the current summary
-    applied &= {s["heading"] for s in base_sections}
-
     for ms in mat_sections:
         h = ms["heading"]
         if h in by_heading:
-            by_heading[h]["body"] = ms["body"]          # 修改：取代現有段落內容
+            by_heading[h]["body"] = ms["body"]          # 取代現有段落（含 public 業務概況）
         else:
-            base_sections.append({"heading": h, "body": ms["body"]})  # 新增
-        applied.add(h)
+            base_sections.append({"heading": h, "body": ms["body"]})  # 暫置頂層，下面收進綜覽
 
-    merged = _serialize_sections(base_sections) if base_sections else ""
+    final_sections = _normalize_to_umbrella(base_sections)
+
+    # Top-level sections carrying deck content get the「簡報」chip: the umbrella,
+    # plus any public section whose body the deck replaced. Keep prior marks too.
+    mat_headings = {s["heading"] for s in mat_sections}
+    applied = set(company.get("materials_applied_headings") or [])
+    applied |= {h for h in mat_headings if h in PUBLIC_SECTIONS}
+    if any(s["heading"] == UMBRELLA for s in final_sections):
+        applied.add(UMBRELLA)
+    applied &= {s["heading"] for s in final_sections}  # only keep marks that still exist
+
+    merged = _serialize_sections(final_sections) if final_sections else ""
     fields = {
         "summary": merged,
         "materials_applied_headings": sorted(applied),

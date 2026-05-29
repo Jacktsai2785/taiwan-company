@@ -2653,6 +2653,16 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 }
 #materials-gen-btn:hover { background: #0b7d6b; }
 #materials-gen-btn:disabled { opacity: .55; cursor: not-allowed; }
+/* Stale: files changed after a summary was generated → nudge to regenerate */
+#materials-gen-btn.is-stale {
+  background: #c47d0a;
+  animation: mat-glow 1.6s ease-in-out infinite;
+}
+#materials-gen-btn.is-stale:hover { background: #ad6e09; }
+@keyframes mat-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(196,125,10,.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(196,125,10,0); }
+}
 #materials-gen-status {
   font-size: 12px;
   padding: 8px 2px 0;
@@ -2776,6 +2786,13 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   border-radius: 0 6px 6px 0;
 }
 .summary-mat-section h3 { color: #0b6e5f; }
+/* 「營運綜覽」umbrella sub-headings (### → h4) */
+.summary-mat-section h4 {
+  color: #0d8f7a;
+  margin: 10px 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
 .summary-mat-chip {
   font-size: 10px;
   font-weight: 700;

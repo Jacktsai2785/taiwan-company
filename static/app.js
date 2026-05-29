@@ -1776,8 +1776,20 @@ function openMaterialsPanel() {
   const panel = document.getElementById("materials-panel");
   document.getElementById("materials-upload-status").textContent = "";
   document.getElementById("materials-gen-status").textContent = "";
+  _setMatRegenStale(false);
   panel.classList.add("open");
   loadMaterials(id);
+}
+
+// Mark the generate button as「需要重新生成」(stale) after files change while a
+// summary already exists — the generated summary no longer reflects all files.
+function _setMatRegenStale(stale) {
+  const btn = document.getElementById("materials-gen-btn");
+  if (!btn || btn.disabled) return;  // don't fight the running state
+  btn.classList.toggle("is-stale", stale);
+  btn.textContent = stale
+    ? "✦ 用 Opus 4.7 重新生成（納入新檔案）"
+    : "✦ 用 Opus 4.7 生成公司簡介";
 }
 
 function closeMaterialsPanel() {
@@ -1849,9 +1861,16 @@ async function deleteMaterial(storedNameEnc) {
   const id = _modalCompanyId;
   if (!id) return;
   if (!confirm("確定刪除這個檔案？")) return;
+  const hadSummary = !!_matLastSummary;
   try {
     const data = await api("DELETE", `/api/companies/${id}/materials/${storedNameEnc}`);
     _renderMaterialsList(data.materials || []);
+    if (hadSummary && (data.materials || []).length) {
+      _setMatRegenStale(true);
+      const us = document.getElementById("materials-upload-status");
+      us.textContent = "✅ 已移除檔案。內容已變動，建議按「✦ 用 Opus 4.7 重新生成」更新簡介。";
+      us.className = "memo-status-ok";
+    }
   } catch (err) {
     toast(`刪除失敗：${err.message}`, true);
   }
@@ -1877,12 +1896,13 @@ async function generateFromMaterials() {
       `<span class="mat-spinner"></span>` +
       `<span>Opus 4.7 正在閱讀所有上傳檔案並生成簡介` +
       `<span class="mat-dots"><i>.</i><i>.</i><i>.</i></span></span>` +
-      `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–3 分鐘）</span>`;
+      `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–4 分鐘）</span>`;
   };
   status.className = "memo-status-info mat-gen-running";
   renderProgress();
   clearInterval(_matGenTimer);
   _matGenTimer = setInterval(() => { elapsed += 1; renderProgress(); }, 1000);
+  btn.classList.remove("is-stale");  // acting on the stale state now
   btn.disabled = true;
   btn.classList.add("is-running");
 
@@ -1901,6 +1921,7 @@ async function generateFromMaterials() {
     clearInterval(_matGenTimer);
     btn.disabled = false;
     btn.classList.remove("is-running");
+    _setMatRegenStale(false);  // reset label back to「生成公司簡介」
   }
 }
 
@@ -1921,16 +1942,15 @@ function openMatReview(materialsSummary) {
     toast("尚未生成簡報簡介", true);
     return;
   }
-  const c = state.companies.find(x => x.id === _modalCompanyId);
-  const existingHeadings = new Set(_parseMdSections(c?.summary || "").map(s => s.heading));
   const sections = _parseMdSections(materialsSummary);
 
+  const PUBLIC_SECTIONS = new Set(["業務概況", "競業分析", "主要風險"]);
   const body = document.getElementById("mat-review-body");
   body.innerHTML = sections.map((s, i) => {
-    const isMod = existingHeadings.has(s.heading);
-    const tag = isMod
+    // Public DD section → replaces it in place (修改); otherwise grouped under 營運綜覽
+    const tag = PUBLIC_SECTIONS.has(s.heading)
       ? `<span class="mat-tag mat-tag-mod">修改</span>`
-      : `<span class="mat-tag mat-tag-new">新增</span>`;
+      : `<span class="mat-tag mat-tag-new">歸入營運綜覽</span>`;
     return `<label class="mat-review-row">
       <input type="checkbox" class="mat-sec-cb" data-heading="${escHtml(s.heading)}" checked />
       <div class="mat-review-sec">
@@ -1993,8 +2013,15 @@ document.getElementById("materials-file-input").addEventListener("change", async
   files.forEach(f => fd.append("files", f));
   try {
     const data = await api("POST", `/api/companies/${id}/materials`, fd);
+    const hadSummary = !!_matLastSummary;
     _renderMaterialsList(data.materials || []);
-    status.textContent = `✅ 已上傳 ${data.saved.length} 個檔案，可點下方按鈕生成簡介`;
+    if (hadSummary) {
+      // A summary already exists → it doesn't cover the just-added file(s) yet.
+      status.textContent = `✅ 已新增 ${data.saved.length} 個檔案。內容已變動，請按下方「✦ 用 Opus 4.7 重新生成」以納入新檔案（只按「重新審核」不會讀到新檔）。`;
+      _setMatRegenStale(true);
+    } else {
+      status.textContent = `✅ 已上傳 ${data.saved.length} 個檔案，可點下方按鈕生成簡介`;
+    }
     status.className = "memo-status-ok";
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
@@ -2971,7 +2998,7 @@ async function regenSummary() {
   }
 
   const summaryEl = document.getElementById("modal-summary");
-  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 2–4 分鐘）…</p>";
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 3–7 分鐘）…</p>";
   _expandSummarySection();
   _subscribeSummarize(id);
 }
@@ -2980,7 +3007,7 @@ function deepEnrich() {
   const id = _modalCompanyId;
   if (!id) return;
   const summaryEl = document.getElementById("modal-summary");
-  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 3–5 分鐘）…</p>";
+  if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 4–8 分鐘）…</p>";
   _expandSummarySection();
   const btn = document.getElementById("modal-gen-btn");
   if (btn) btn.disabled = true;
@@ -5401,16 +5428,17 @@ function toast(message, isError = false) {
 }
 
 /* ── Collapsible summary sections ── */
-const COLLAPSIBLE_SECTIONS = new Set(["業務概況", "競業分析", "主要風險"]);
-
 function applyCollapsible(container) {
+  // Every top-level section (## → h3) is collapsible — no hard-coded whitelist,
+  // so it doesn't matter what headings a particular deck produces.
   for (const h3 of [...container.querySelectorAll("h3")]) {
-    if (!COLLAPSIBLE_SECTIONS.has(h3.textContent.trim())) continue;
-
     const body = document.createElement("div");
     body.className = "collapsible-body";
     let next = h3.nextElementSibling;
-    while (next && next.tagName !== "H3") {
+    // Stop at the next section boundary: another H3, or a「簡報」section wrapper
+    // (.summary-mat-section) — otherwise a wrapped section like 營運綜覽 would be
+    // swallowed into the previous section's collapsed body and vanish.
+    while (next && next.tagName !== "H3" && !(next.classList && next.classList.contains("summary-mat-section"))) {
       const tmp = next.nextElementSibling;
       body.appendChild(next);
       next = tmp;

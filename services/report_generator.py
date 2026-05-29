@@ -251,7 +251,7 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
-                claude_client.ask, prompt, 300, _WEB_TOOLS, api_key, provider, 15, model
+                claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider, 15, model
             )
             summary, blurb = _split_blurb(raw)
             if not blurb and len(summary.strip()) > 100:
@@ -371,7 +371,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
             try:
                 log.info("Generating DD memo for %s (attempt %d)", name, attempt + 1)
                 raw = await asyncio.to_thread(
-                    claude_client.ask, prompt, 240, _WEB_TOOLS, api_key, provider, 12, model
+                    claude_client.ask, prompt, 420, _WEB_TOOLS, api_key, provider, 12, model
                 )
                 summary, blurb = _split_blurb(raw)
 

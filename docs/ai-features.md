@@ -48,8 +48,9 @@ source_repo: ~/taiwan-company
 ### 2b. 簡報摘要（materials，`routers/materials.py` + `report_generator.generate_summary_from_materials`）
 - 使用者從公司 modal 的「🖼 簡報摘要」側欄上傳簡報 / 公司介紹 / 照片（PDF / PPTX / DOCX / XLSX / 圖片），檔案落地到 `data/uploads/{company_id}/`，由 `/uploads` static mount serve，可點擊看原檔
 - 點「✦ 用 Opus 4.7 生成」後（前端有 spinner + 已過秒數動畫，避免誤判當機），後端把 PDF / 圖片交給 `ask_with_files`、office/txt 先抽文字內嵌，用 `claude-opus-4-7`（`_DEEP_MODEL`）掃過全部內容生成一份簡報版簡介，存 `materials_summary` / `materials_blurb`
-- 生成完跳出**逐段審核框**：把簡報版按 `##` 拆段，每段標「修改（取代現有同名段落）/ 新增」，使用者勾選後 `POST /materials/apply` 合併進公開的 `summary`
-- 被套用的段落標題記在 `materials_applied_headings`，前端 `renderSummary` 據此把那些段落以 teal 色條 + 「簡報」chip 標示，讓使用者一眼看出公司簡介裡哪些來自簡報
+- 生成完跳出**逐段審核框**：把簡報版按 `##` 拆段，使用者勾選後 `POST /materials/apply` 合併進公開的 `summary`。合併規則：deck 段落若同名於公開 DD 段落（業務概況/競業分析/主要風險）→ 就地取代該段（標「修改」）；其餘 deck 主題（產品與服務、商業模式、團隊、財務、觀察…）→ 一律收進單一上層 `## 營運綜覽`，各為 `### 子段`（標「歸入營運綜覽」）
+- 被套用的頂層段落（營運綜覽、被取代的業務概況）記在 `materials_applied_headings`，前端 `renderSummary` 據此以 teal 色條 + 「簡報」chip 標示來源
+- 公司簡介**所有 `##` 段落一律可摺疊**（前端 `applyCollapsible` 不再用 hardcoded 白名單），不論簡報產出什麼標題都不必改 code
 - 一旦走「重新生成 / 深度生成」整份重建 `summary`，`_save_summary_result` 會清空 `materials_applied_headings`（標記不再適用）
 - prompt 嚴格限定「只寫檔案明確出現的資訊、禁杜撰數字、查無則標『——（簡報未提供）』」
 
