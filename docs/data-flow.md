@@ -1,7 +1,7 @@
 ---
 title: 資料流
 status: living
-last_updated: 2026-05-13
+last_updated: 2026-05-29
 source_repo: ~/taiwan-company
 ---
 
@@ -89,6 +89,11 @@ summary: AI 產的長段 Markdown 分析（業務概況 / 競業分析 / ...）
 watched: bool（追蹤旗標）
 call_memo: { ...Memo 欄位 }
 patents: [...]（deep-enrich 後有）
+materials: [ { filename, stored_name, url, mime_type, size, uploaded_at } ]（上傳的簡報/介紹/照片，落地在 data/uploads/{id}/，由 /uploads 提供存取）
+materials_summary: 由上傳簡報用 opus-4.7 生成的簡報版簡介（暫存，供逐段審核用）
+materials_blurb: 簡報簡介的一句話
+materials_generated_at: 簡報簡介生成時間 ISO timestamp
+materials_applied_headings: [段落標題]（從簡報版套用進 summary 的段落，前端據此標示「簡報」來源；整份重新生成 summary 時會清空）
 last_updated: ISO timestamp
 ```
 

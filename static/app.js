@@ -121,6 +121,35 @@ async function api(method, path, body) {
   return res.json();
 }
 
+/* ── News blacklist / dismiss ── */
+const _dismissedUrls = new Set();
+
+function _showAiHint(msg) {
+  let el = document.getElementById("ai-hint-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "ai-hint-toast";
+    el.style.cssText = "position:fixed;bottom:20px;right:20px;z-index:9999;background:#1d4ed8;color:#fff;padding:10px 16px;border-radius:8px;font-size:12px;display:flex;align-items:center;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);transition:opacity .3s;max-width:360px;";
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<span>🤖</span><span>${msg}</span>`;
+  el.style.opacity = "1";
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.opacity = "0"; }, 6000);
+}
+
+async function dismissArticle(url, title, source, btn) {
+  _dismissedUrls.add(url);
+  const item = btn.closest(".daily-news-item");
+  if (item) { item.style.opacity = "0"; item.style.height = "0"; item.style.overflow = "hidden"; item.style.transition = "opacity .2s, height .3s"; }
+  try {
+    const data = await api("POST", "/api/news/dismiss", { url, title, source });
+    if (data.dismissed_count % 5 === 0 && data.rules?.ai_summary) {
+      _showAiHint("AI 已更新過濾規則：" + data.rules.ai_summary);
+    }
+  } catch { /* article already hidden */ }
+}
+
 /* ── Boot ── */
 async function boot() {
   // Detect deploy mode FIRST so getAiProvider() default + UI reflect it.
@@ -206,7 +235,27 @@ async function loadCompanies() {
 }
 
 function updateWatchCount() {
-  const n = state.companies.filter(c => c.watched).length;
+  // 算「當前 sidebar scope 內」的追蹤數，讓 tab 上的 (N) 等於點下去看到的數量
+  let pool = state.companies;
+  if (state.activeLabelGroup) {
+    const gLabels = (state.labelGroups[state.activeLabelGroup] || []).filter(l => state.pinnedItems.has(l));
+    pool = pool.filter(c => (c.labels || []).some(l => gLabels.includes(l)));
+  } else if (state.activeLabel) {
+    pool = pool.filter(c => (c.labels || []).includes(state.activeLabel));
+    if (state.activeLabelIndustry === "__none__") {
+      pool = pool.filter(c => !c.industry);
+    } else if (state.activeLabelIndustry) {
+      pool = pool.filter(c => c.industry === state.activeLabelIndustry);
+    }
+  } else if (state.activeIndustry) {
+    pool = pool.filter(c => c.industry === state.activeIndustry);
+    if (state.activeGroup === "__ungrouped__") {
+      pool = pool.filter(c => !c.labels || c.labels.length === 0);
+    } else if (state.activeGroup) {
+      pool = pool.filter(c => (c.labels || []).includes(state.activeGroup));
+    }
+  }
+  const n = pool.filter(c => c.watched).length;
   const el = document.getElementById("watch-count");
   if (el) el.textContent = n > 0 ? ` (${n})` : "";
 }
@@ -294,14 +343,23 @@ function renderSidebar() {
     let html = "";
 
     // Suggestion banners (non-blocking, inline)
-    for (const { prefix, labels } of suggestions) {
+    for (const { prefix, labels, mode } of suggestions) {
       const sorted = [...labels].sort(nat);
-      const first = sorted[0].replace(/^.+?[-_]/, "");
-      const last  = sorted[sorted.length - 1].replace(/^.+?[-_]/, "");
-      html += `<div class="lgs-banner" data-prefix="${escHtml(prefix)}">
-        💡 <b>${escHtml(prefix)}-${escHtml(first)}~${escHtml(last)}</b> 可歸攏
-        <button class="lgs-accept" data-prefix="${escHtml(prefix)}">歸攏</button>
-        <button class="lgs-dismiss" data-prefix="${escHtml(prefix)}">略過</button>
+      const dismissKey = mode === "extend" ? prefix + ":" + sorted.join(",") : prefix;
+      let msg;
+      if (mode === "extend") {
+        const tails = sorted.map(l => l.replace(/^.+?[-_]/, "")).join("、");
+        msg = `💡 <b>${escHtml(prefix)}-${escHtml(tails)}</b> 可加入既有 <b>${escHtml(prefix)}</b> 群組`;
+      } else {
+        const first = sorted[0].replace(/^.+?[-_]/, "");
+        const last  = sorted[sorted.length - 1].replace(/^.+?[-_]/, "");
+        msg = `💡 <b>${escHtml(prefix)}-${escHtml(first)}~${escHtml(last)}</b> 可歸攏`;
+      }
+      const acceptLabel = mode === "extend" ? "加入" : "歸攏";
+      html += `<div class="lgs-banner" data-prefix="${escHtml(prefix)}" data-mode="${mode}">
+        ${msg}
+        <button class="lgs-accept" data-prefix="${escHtml(prefix)}" data-mode="${mode}" data-dismiss-key="${escHtml(dismissKey)}">${acceptLabel}</button>
+        <button class="lgs-dismiss" data-prefix="${escHtml(prefix)}" data-dismiss-key="${escHtml(dismissKey)}">略過</button>
       </div>`;
     }
 
@@ -363,8 +421,20 @@ function renderSidebar() {
     pinnedEl.querySelectorAll(".lgs-accept").forEach(btn => {
       btn.addEventListener("click", async () => {
         const prefix = btn.dataset.prefix;
+        const mode = btn.dataset.mode;
         const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
-        const members = allLabels.filter(l => state.pinnedItems.has(l) && /^(.+?)[-_]\d+$/.exec(l)?.[1] === prefix).sort(nat);
+        let members;
+        if (mode === "extend") {
+          const existing = state.labelGroups[prefix] || [];
+          const pinnedMatching = allLabels.filter(l =>
+            state.pinnedItems.has(l) && /^(.+?)[-_]\d+$/.exec(l)?.[1] === prefix
+          );
+          members = [...new Set([...existing, ...pinnedMatching])].sort(nat);
+        } else {
+          members = allLabels.filter(l =>
+            state.pinnedItems.has(l) && /^(.+?)[-_]\d+$/.exec(l)?.[1] === prefix
+          ).sort(nat);
+        }
         await api("POST", "/api/config/label-groups", { name: prefix, labels: members });
         state.labelGroups[prefix] = members;
         renderSidebar();
@@ -373,7 +443,7 @@ function renderSidebar() {
     });
     pinnedEl.querySelectorAll(".lgs-dismiss").forEach(btn => {
       btn.addEventListener("click", () => {
-        state.dismissedGroupSuggestions.add(btn.dataset.prefix);
+        state.dismissedGroupSuggestions.add(btn.dataset.dismissKey || btn.dataset.prefix);
         renderSidebar();
       });
     });
@@ -438,13 +508,24 @@ function _detectLabelGroupSuggestions(pinnedLabels) {
     if (!prefixMap[prefix]) prefixMap[prefix] = [];
     prefixMap[prefix].push(label);
   }
-  return Object.entries(prefixMap)
-    .filter(([prefix, labels]) =>
-      labels.length >= 2 &&
-      !state.labelGroups[prefix] &&
-      !state.dismissedGroupSuggestions.has(prefix)
-    )
-    .map(([prefix, labels]) => ({ prefix, labels }));
+  const out = [];
+  for (const [prefix, labels] of Object.entries(prefixMap)) {
+    const existing = state.labelGroups[prefix];
+    if (existing) {
+      // 既有 group：找出 pinned 中還沒納入的成員
+      const missing = labels.filter(l => !existing.includes(l));
+      if (missing.length === 0) continue;
+      const sortedMissing = missing.slice().sort((a, b) => a.localeCompare(b, "zh-TW", { numeric: true }));
+      if (state.dismissedGroupSuggestions.has(prefix + ":" + sortedMissing.join(","))) continue;
+      out.push({ prefix, labels: sortedMissing, mode: "extend", existing });
+    } else {
+      // 新 group：維持既有規則（≥2 個成員）
+      if (labels.length < 2) continue;
+      if (state.dismissedGroupSuggestions.has(prefix)) continue;
+      out.push({ prefix, labels, mode: "create" });
+    }
+  }
+  return out;
 }
 
 /* ── Side Panel ── */
@@ -929,6 +1010,18 @@ function _viewTabsHtml(industry, activeView) {
   </div>`;
 }
 
+function _updateIndustryMapToolbarBtn() {
+  const btn = document.getElementById("industry-map-toolbar-btn");
+  if (!btn) return;
+  // 只要在某個產業視角下就顯示（含「追蹤」tab 仍是該產業的子集）
+  const show = !!state.activeIndustry && !state.activeLabel && !state.activeLabelGroup;
+  btn.style.display = show ? "" : "none";
+  if (show) {
+    btn.onclick = () => openIndustryMap(state.activeIndustry);
+    btn.title = `開啟「${state.activeIndustry}」的產業地圖`;
+  }
+}
+
 async function _fetchDigest(industry, forceRefresh) {
   // News digests need AI to summarise. On cloud without a key, surface a
   // friendly message instead of leaving the loading spinner forever.
@@ -1042,7 +1135,10 @@ function _renderDigestContent(panel, data, industry) {
         <a class="daily-news-title" href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
         <span class="daily-news-source">${escHtml(a.source)}</span>
         <a class="daily-news-ext" href="${escHtml(a.url)}" target="_blank" rel="noopener">↗</a>
+        <button class="daily-news-dismiss" title="不想看這篇" onclick="dismissArticle(${JSON.stringify(a.url)},${JSON.stringify(a.title)},${JSON.stringify(a.source)},this)">×</button>
       </div>`;
+  // Filter out already-dismissed articles (in-session)
+  articles = articles.filter(a => !_dismissedUrls.has(a.url));
   const visible = articles.slice(0, MAX_NEWS);
   const hidden = articles.slice(MAX_NEWS);
   let newsHtml;
@@ -1199,46 +1295,49 @@ async function refreshPanel() {
 function renderGrid() {
   renderIndustryPanel();
   updateBulkEnrichButtonVisibility();
+  _updateIndustryMapToolbarBtn();
+  updateWatchCount();
   const grid = document.getElementById("company-grid");
   const title = document.getElementById("toolbar-title");
 
+  // 1. 先套用 sidebar scope 過濾（產業 / 標籤 / 標籤群組）
   let companies = [...state.companies];
+  let scopeTitle = "";
 
-  if (state.activeTab === "watched") {
-    companies = companies.filter(c => c.watched === true);
-    title.textContent = "";
-  } else if (state.activeLabelGroup) {
+  if (state.activeLabelGroup) {
     const gLabels = (state.labelGroups[state.activeLabelGroup] || []).filter(l => state.pinnedItems.has(l));
     companies = companies.filter(c => (c.labels || []).some(l => gLabels.includes(l)));
-    title.textContent = `標籤群組：${state.activeLabelGroup}`;
+    scopeTitle = `標籤群組：${state.activeLabelGroup}`;
   } else if (state.activeLabel) {
     companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
       companies = companies.filter(c => !c.industry);
-      title.textContent = `${state.activeLabel} — 未分類`;
+      scopeTitle = `${state.activeLabel} — 未分類`;
     } else if (state.activeLabelIndustry) {
       companies = companies.filter(c => c.industry === state.activeLabelIndustry);
-      title.textContent = `${state.activeLabel} — ${state.activeLabelIndustry}`;
+      scopeTitle = `${state.activeLabel} — ${state.activeLabelIndustry}`;
     } else {
-      title.textContent = `標籤：${state.activeLabel}`;
+      scopeTitle = `標籤：${state.activeLabel}`;
     }
+  } else if (state.activeIndustry) {
+    companies = companies.filter(c => c.industry === state.activeIndustry);
+    if (state.activeGroup === "__ungrouped__") {
+      companies = companies.filter(c => !c.labels || c.labels.length === 0);
+      scopeTitle = `${state.activeIndustry} — 未分組`;
+    } else if (state.activeGroup) {
+      companies = companies.filter(c => (c.labels || []).includes(state.activeGroup));
+      scopeTitle = `${state.activeIndustry} — ${state.activeGroup}`;
+    } else {
+      scopeTitle = state.activeIndustry;
+    }
+  }
+
+  // 2. 再套用「追蹤」tab 子集過濾
+  if (state.activeTab === "watched") {
+    companies = companies.filter(c => c.watched === true);
+    title.textContent = scopeTitle ? `${scopeTitle} — ⭐ 追蹤` : "";
   } else {
-    if (state.activeIndustry) {
-      companies = companies.filter(c => c.industry === state.activeIndustry);
-      if (state.activeGroup) {
-        if (state.activeGroup === "__ungrouped__") {
-          companies = companies.filter(c => !c.labels || c.labels.length === 0);
-          title.textContent = `${state.activeIndustry} — 未分組`;
-        } else {
-          companies = companies.filter(c => (c.labels || []).includes(state.activeGroup));
-          title.textContent = `${state.activeIndustry} — ${state.activeGroup}`;
-        }
-      } else {
-        title.textContent = state.activeIndustry;
-      }
-    } else {
-      title.textContent = "";
-    }
+    title.textContent = scopeTitle;
   }
 
   if (state.searchQuery) {
@@ -1257,9 +1356,13 @@ function renderGrid() {
   }
 
   if (companies.length === 0) {
-    const emptyMsg = state.activeTab === "watched"
-      ? `<div class="empty-icon">⭐</div><div>尚無追蹤公司<br><small>將滑鼠移至公司卡片，點擊「+ 追蹤」即可收藏</small></div>`
-      : `<div class="empty-icon">🏢</div><div>尚無公司資料<br><small>請上傳檔案以開始辨識</small></div>`;
+    let emptyMsg;
+    if (state.activeTab === "watched") {
+      const scopeHint = scopeTitle ? `「${escHtml(scopeTitle)}」範圍內` : "";
+      emptyMsg = `<div class="empty-icon">⭐</div><div>${scopeHint}尚無追蹤公司<br><small>將滑鼠移至公司卡片，點擊「+ 追蹤」即可收藏</small></div>`;
+    } else {
+      emptyMsg = `<div class="empty-icon">🏢</div><div>尚無公司資料<br><small>請上傳檔案以開始辨識</small></div>`;
+    }
     grid.innerHTML = `<div id="empty-state">${emptyMsg}</div>`;
     return;
   }
@@ -1480,8 +1583,9 @@ async function toggleModalWatch() {
     const memoBtnHtml = c.watched
       ? `<button id="memo-open-btn" onclick="openMemoPanel()">📋 訪談備忘錄</button>`
       : "";
+    const materialsBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">🖼 簡報摘要</button>`;
     document.getElementById("modal-name").innerHTML =
-      escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml;
+      escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml + materialsBtnHtml;
     _updateModalWatchBtn(c);
   } catch (err) {
     toast(`操作失敗：${err.message}`, true);
@@ -1665,14 +1769,246 @@ function toggleTranscript() {
   toggle.textContent = collapsed ? "▲" : "▼";
 }
 
+/* ── Materials (簡報摘要) ── */
+function openMaterialsPanel() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const panel = document.getElementById("materials-panel");
+  document.getElementById("materials-upload-status").textContent = "";
+  document.getElementById("materials-gen-status").textContent = "";
+  panel.classList.add("open");
+  loadMaterials(id);
+}
+
+function closeMaterialsPanel() {
+  document.getElementById("materials-panel").classList.remove("open");
+}
+
+async function loadMaterials(id) {
+  try {
+    const data = await api("GET", `/api/companies/${id}/materials`);
+    _renderMaterialsList(data.materials || []);
+    _renderMaterialsResult(data.materials_summary || "", data.materials_generated_at || "");
+  } catch (err) {
+    document.getElementById("materials-file-list").innerHTML =
+      `<div class="materials-empty">載入失敗：${escHtml(err.message)}</div>`;
+  }
+}
+
+const _MATERIALS_ICONS = { pdf: "📕", pptx: "📊", docx: "📘", xlsx: "📗", xls: "📗", txt: "📄" };
+function _materialsIcon(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (["jpg","jpeg","png","gif","webp","tiff","tif","bmp"].includes(ext)) return "image";
+  return _MATERIALS_ICONS[ext] || "📎";
+}
+
+function _renderMaterialsList(materials) {
+  const wrap = document.getElementById("materials-file-list");
+  if (!materials.length) {
+    wrap.innerHTML = `<div class="materials-empty">尚未上傳任何檔案</div>`;
+    return;
+  }
+  wrap.innerHTML = materials.map(m => {
+    const icon = _materialsIcon(m.filename);
+    const thumb = icon === "image"
+      ? `<img class="materials-thumb" src="${m.url}" alt="${escHtml(m.filename)}" />`
+      : `<span class="materials-thumb materials-thumb-icon">${icon}</span>`;
+    const kb = m.size ? `${(m.size / 1024).toFixed(0)} KB` : "";
+    return `<div class="materials-file-item">
+      <a class="materials-file-link" href="${m.url}" target="_blank" rel="noopener" title="點擊開啟">
+        ${thumb}
+        <span class="materials-file-name">${escHtml(m.filename)}</span>
+        <span class="materials-file-size">${kb}</span>
+      </a>
+      <button class="materials-del-btn" onclick="deleteMaterial('${encodeURIComponent(m.stored_name)}')" title="刪除">✕</button>
+    </div>`;
+  }).join("");
+}
+
+// Store the last-generated materials summary so it can be re-reviewed
+let _matLastSummary = "";
+
+function _renderMaterialsResult(summary, generatedAt) {
+  const wrap = document.getElementById("materials-result-wrap");
+  const el = document.getElementById("materials-result");
+  _matLastSummary = summary || "";
+  if (!summary) {
+    wrap.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  const when = generatedAt ? new Date(generatedAt).toLocaleString("zh-TW", { hour12: false }) : "";
+  el.innerHTML =
+    `<div class="materials-redo-note">已生成簡報簡介${when ? `（${escHtml(when)}）` : ""}，` +
+    `尚未套用到公司簡介的段落可重新審核。</div>` +
+    `<button class="materials-redo-btn" onclick="openMatReview(_matLastSummary)">📝 重新審核並套用</button>`;
+  wrap.style.display = "";
+}
+
+async function deleteMaterial(storedNameEnc) {
+  const id = _modalCompanyId;
+  if (!id) return;
+  if (!confirm("確定刪除這個檔案？")) return;
+  try {
+    const data = await api("DELETE", `/api/companies/${id}/materials/${storedNameEnc}`);
+    _renderMaterialsList(data.materials || []);
+  } catch (err) {
+    toast(`刪除失敗：${err.message}`, true);
+  }
+}
+
+let _matGenTimer = null;
+
+async function generateFromMaterials() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  if (isCloudDeploy() && !getAiKey()) {
+    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
+    openSettings();
+    return;
+  }
+  const status = document.getElementById("materials-gen-status");
+  const btn = document.getElementById("materials-gen-btn");
+
+  // Animated, reassuring "still working" indicator with an elapsed-time counter
+  let elapsed = 0;
+  const renderProgress = () => {
+    status.innerHTML =
+      `<span class="mat-spinner"></span>` +
+      `<span>Opus 4.7 正在閱讀所有上傳檔案並生成簡介` +
+      `<span class="mat-dots"><i>.</i><i>.</i><i>.</i></span></span>` +
+      `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–3 分鐘）</span>`;
+  };
+  status.className = "memo-status-info mat-gen-running";
+  renderProgress();
+  clearInterval(_matGenTimer);
+  _matGenTimer = setInterval(() => { elapsed += 1; renderProgress(); }, 1000);
+  btn.disabled = true;
+  btn.classList.add("is-running");
+
+  try {
+    const fields = await api("POST", `/api/companies/${id}/materials/generate`);
+    const c = state.companies.find(x => x.id === id);
+    if (c) Object.assign(c, fields);
+    _renderMaterialsResult(fields.materials_summary || "", fields.materials_generated_at || "");
+    status.textContent = "✅ 已生成，請於審核框選取要套用的段落";
+    status.className = "memo-status-ok";
+    openMatReview(fields.materials_summary || "");
+  } catch (err) {
+    status.textContent = `❌ ${err.message}`;
+    status.className = "memo-status-error";
+  } finally {
+    clearInterval(_matGenTimer);
+    btn.disabled = false;
+    btn.classList.remove("is-running");
+  }
+}
+
+/* ── 逐段審核：把簡報生成的段落套用進公司簡介 ── */
+function _parseMdSections(md) {
+  const sections = [];
+  let cur = null;
+  (md || "").split("\n").forEach(line => {
+    const m = line.trim().match(/^##\s+(.+?)\s*$/);
+    if (m) { cur = { heading: m[1].trim(), bodyLines: [] }; sections.push(cur); }
+    else if (cur) cur.bodyLines.push(line);
+  });
+  return sections.map(s => ({ heading: s.heading, body: s.bodyLines.join("\n").trim() }));
+}
+
+function openMatReview(materialsSummary) {
+  if (!materialsSummary || !materialsSummary.trim()) {
+    toast("尚未生成簡報簡介", true);
+    return;
+  }
+  const c = state.companies.find(x => x.id === _modalCompanyId);
+  const existingHeadings = new Set(_parseMdSections(c?.summary || "").map(s => s.heading));
+  const sections = _parseMdSections(materialsSummary);
+
+  const body = document.getElementById("mat-review-body");
+  body.innerHTML = sections.map((s, i) => {
+    const isMod = existingHeadings.has(s.heading);
+    const tag = isMod
+      ? `<span class="mat-tag mat-tag-mod">修改</span>`
+      : `<span class="mat-tag mat-tag-new">新增</span>`;
+    return `<label class="mat-review-row">
+      <input type="checkbox" class="mat-sec-cb" data-heading="${escHtml(s.heading)}" checked />
+      <div class="mat-review-sec">
+        <div class="mat-review-sec-head">${tag}<strong>${escHtml(s.heading)}</strong></div>
+        <div class="mat-review-sec-body">${renderSummary("## " + s.heading + "\n" + s.body).replace(/^<h3>[\s\S]*?<\/h3>/, "")}</div>
+      </div>
+    </label>`;
+  }).join("");
+
+  document.getElementById("mat-review-all").checked = true;
+  document.getElementById("mat-review-overlay").classList.add("open");
+}
+
+function closeMatReview() {
+  document.getElementById("mat-review-overlay").classList.remove("open");
+}
+
+function toggleMatReviewAll(cb) {
+  document.querySelectorAll("#mat-review-body .mat-sec-cb").forEach(x => { x.checked = cb.checked; });
+}
+
+async function applyMatReview() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const headings = Array.from(document.querySelectorAll("#mat-review-body .mat-sec-cb"))
+    .filter(cb => cb.checked)
+    .map(cb => cb.dataset.heading);
+  if (!headings.length) { toast("請至少選取一個段落", true); return; }
+
+  const applyBtn = document.getElementById("mat-review-apply");
+  applyBtn.disabled = true;
+  try {
+    const fields = await api("POST", `/api/companies/${id}/materials/apply`, { headings });
+    const c = state.companies.find(x => x.id === id);
+    if (c) Object.assign(c, fields);
+    _updateSummaryInModal(c);
+    _expandSummarySection();
+    closeMatReview();
+    closeMaterialsPanel();
+    toast(`已套用 ${headings.length} 個段落到公司簡介`);
+  } catch (err) {
+    toast(`套用失敗：${err.message}`, true);
+  } finally {
+    applyBtn.disabled = false;
+  }
+}
+
+document.getElementById("materials-file-input").addEventListener("change", async function() {
+  const files = Array.from(this.files || []);
+  this.value = "";
+  if (!files.length) return;
+  const id = _modalCompanyId;
+  if (!id) return;
+
+  const status = document.getElementById("materials-upload-status");
+  status.textContent = `⏳ 上傳中（${files.length} 個檔案）…`;
+  status.className = "memo-status-info";
+
+  const fd = new FormData();
+  files.forEach(f => fd.append("files", f));
+  try {
+    const data = await api("POST", `/api/companies/${id}/materials`, fd);
+    _renderMaterialsList(data.materials || []);
+    status.textContent = `✅ 已上傳 ${data.saved.length} 個檔案，可點下方按鈕生成簡介`;
+    status.className = "memo-status-ok";
+  } catch (err) {
+    status.textContent = `❌ ${err.message}`;
+    status.className = "memo-status-error";
+  }
+});
+
 /* ── Tabs ── */
 document.getElementById("tab-group").addEventListener("click", e => {
   const btn = e.target.closest(".tab-btn");
   if (!btn) return;
+  // 切 tab 只改 activeTab，保留 sidebar 的 scope（產業 / 標籤 / 群組）
+  // 「追蹤」是當前 scope 下的子集過濾，不是跨產業視圖
   state.activeTab = btn.dataset.tab;
-  state.activeLabel = null;
-  state.activeLabelIndustry = null;
-  state.activeLabelGroup = null;
   document.querySelectorAll(".tab-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.tab === state.activeTab)
   );
@@ -1745,8 +2081,9 @@ function openModal(id) {
   const memoBtnHtml = c.watched
     ? `<button id="memo-open-btn" onclick="openMemoPanel()">📋 訪談備忘錄</button>`
     : "";
+  const materialsBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">🖼 簡報摘要</button>`;
   document.getElementById("modal-name").innerHTML =
-    escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml;
+    escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml + materialsBtnHtml;
 
   _updateModalWatchBtn(c);
 
@@ -1859,7 +2196,7 @@ function openModal(id) {
 
   const summaryEl = document.getElementById("modal-summary");
   summaryEl.innerHTML =
-    c.summary ? renderSummary(c.summary) : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
+    c.summary ? renderSummary(c.summary, c.materials_applied_headings) : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
   summaryEl.style.display = "none";
   const summaryH4 = summaryEl.closest(".modal-section")?.querySelector(".collapsible-h4");
   if (summaryH4) summaryH4.classList.remove("is-open");
@@ -2878,7 +3215,7 @@ function _updateSummaryInModal(company) {
   const summaryEl = document.getElementById("modal-summary");
   if (!summaryEl) return;
   summaryEl.innerHTML = company.summary
-    ? renderSummary(company.summary)
+    ? renderSummary(company.summary, company.materials_applied_headings)
     : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
   _expandSummarySection();
 }
@@ -3182,17 +3519,31 @@ function _getManualLabel() {
 async function openManualDialog(suggestedLabel = "") {
   try { await loadLabels(); } catch (_) { /* 標籤 API 失敗時用快取的 state.labels */ }
   document.getElementById("manual-names").value = "";
+  document.getElementById("manual-hint").style.display = "none";
   _buildLabelOptions(suggestedLabel);
   document.getElementById("manual-overlay").classList.add("open");
   setTimeout(() => document.getElementById("manual-names").focus(), 50);
 }
 
-async function openManualDialogWithName(name) {
+// 正式登記名稱通常含「公司」等法人實體標記；品牌／商標（如「超木 GREENuWood」）多半沒有
+function _looksLikeCompanyName(name) {
+  return /(公司|銀行|商行|商號|企業社|合作社|事務所|工作室|股份)/.test(name || "");
+}
+
+async function openManualDialogWithName(name, warn = false) {
   try { await loadLabels(); } catch (_) {}
   document.getElementById("manual-names").value = name;
   _buildLabelOptions("");
+  const hint = document.getElementById("manual-hint");
+  if (warn) {
+    hint.innerHTML = `「${escHtml(name)}」看起來是<b>品牌或商標</b>，不是正式公司登記名稱。<br>請改填正式登記名稱（如「○○股份有限公司」）再按「下一步」，否則查不到公司登記資料、無法生成簡介。`;
+    hint.style.display = "";
+  } else {
+    hint.style.display = "none";
+  }
   document.getElementById("manual-overlay").classList.add("open");
-  setTimeout(() => document.getElementById("manual-names").focus(), 50);
+  const ta = document.getElementById("manual-names");
+  setTimeout(() => { ta.focus(); if (warn) ta.select(); }, 50);
 }
 
 function openCompanyByName(name) {
@@ -3205,8 +3556,9 @@ function openCompanyByName(name) {
 function handleCompetitorChip(el) {
   const name  = el.dataset.cname;
   const added = el.dataset.added === "true";
-  if (added) openCompanyByName(name);
-  else       openManualDialogWithName(name);
+  if (added) { openCompanyByName(name); return; }
+  // 保險：不像正式公司名（多半是品牌／商標）時，提示使用者改填登記名稱，避免建出查無登記的假公司
+  openManualDialogWithName(name, !_looksLikeCompanyName(name));
 }
 
 document.getElementById("manual-ok").addEventListener("click", async () => {
@@ -4026,13 +4378,11 @@ function isIncompleteCompany(c) {
 
 function getScopedCompanies() {
   // 與 renderGrid 同步的篩選邏輯（但不含 search box 與排序）
+  // 1. 先套 sidebar scope；2. 再套 watched tab
   let companies = [...state.companies];
   let scopeLabel = "全部公司";
 
-  if (state.activeTab === "watched") {
-    companies = companies.filter(c => c.watched === true);
-    scopeLabel = "⭐ 追蹤";
-  } else if (state.activeLabelGroup) {
+  if (state.activeLabelGroup) {
     const gLabels = (state.labelGroups[state.activeLabelGroup] || []).filter(l => state.pinnedItems.has(l));
     companies = companies.filter(c => (c.labels || []).some(l => gLabels.includes(l)));
     scopeLabel = `標籤群組：${state.activeLabelGroup}`;
@@ -4058,6 +4408,11 @@ function getScopedCompanies() {
     } else {
       scopeLabel = `產業：${state.activeIndustry}`;
     }
+  }
+
+  if (state.activeTab === "watched") {
+    companies = companies.filter(c => c.watched === true);
+    scopeLabel = scopeLabel === "全部公司" ? "⭐ 追蹤" : `${scopeLabel} — ⭐ 追蹤`;
   }
 
   return { companies, scopeLabel };
@@ -4442,10 +4797,10 @@ async function renderOwnershipGraph(companyId) {
       { selector: 'node[role = "parent"][kind = "person"]',
         style: { "background-color": "#ea580c", "shape": "ellipse", "width": 110, "height": 60, "font-size": 13 }
       },
-      { selector: 'node[role = "sibling"][in_db = true]',
+      { selector: 'node[role = "sibling"][?in_db]',
         style: { "background-color": "#059669" }
       },
-      { selector: 'node[role = "sibling"][in_db = false]',
+      { selector: 'node[role = "sibling"][!in_db]',
         style: { "background-color": "#fff", "color": "#475569", "border-color": "#94a3b8", "border-style": "dashed", "border-width": 2 }
       },
       {
@@ -4483,7 +4838,10 @@ async function renderOwnershipGraph(companyId) {
 
   _cy.on("tap", "node", evt => {
     const d = evt.target.data();
-    if (d.role === "self") return;
+    if (d.role === "self") {
+      if (d.company_id) openModal(d.company_id);   // 點本案節點＝開回自己的 modal
+      return;
+    }
     // Person anchor cannot be added as a company
     if (d.role === "parent" && d.kind === "person") {
       toast(`「${d.label}」是自然人，無法加入公司列表`);
@@ -4505,6 +4863,10 @@ async function renderOwnershipGraph(companyId) {
       role: d.role,
     });
   });
+
+  // 滑過節點時游標變小手，提示可點擊
+  _cy.on("mouseover", "node", () => { wrap.style.cursor = "pointer"; });
+  _cy.on("mouseout",  "node", () => { wrap.style.cursor = ""; });
 }
 
 async function renderCompetitorGraph(companyId) {
@@ -4570,7 +4932,7 @@ async function renderCompetitorGraph(companyId) {
         },
       },
       {
-        selector: 'node[role = "competitor"][in_db = true]',
+        selector: 'node[role = "competitor"][?in_db]',
         style: {
           "background-color": "#d97706",
           "shape": "hexagon",
@@ -4578,7 +4940,7 @@ async function renderCompetitorGraph(companyId) {
         },
       },
       {
-        selector: 'node[role = "competitor"][in_db = false]',
+        selector: 'node[role = "competitor"][!in_db]',
         style: {
           "background-color": "#fffbeb",
           "color": "#92400e",
@@ -4610,13 +4972,19 @@ async function renderCompetitorGraph(companyId) {
 
   _cy.on("tap", "node", evt => {
     const d = evt.target.data();
-    if (d.role === "self") return;
+    // 已收錄者（含中心「本案」節點）都開對應 modal；點中心節點即可返回本案，
+    // 點已收錄競業則切到該公司——modal 可在 graph 不變的情況下來回切換。
     if (d.in_db && d.company_id) {
       openModal(d.company_id);
       return;
     }
+    if (d.role === "self") return;
     _openFromGraphDialog({ name: d.name, tax_id: "", role: "competitor" });
   });
+
+  // 滑過節點時游標變小手，提示可點擊
+  _cy.on("mouseover", "node", () => { wrap.style.cursor = "pointer"; });
+  _cy.on("mouseout",  "node", () => { wrap.style.cursor = ""; });
 }
 
 async function setAnchorDirector(idx) {
@@ -4716,7 +5084,9 @@ async function _openFromGraphDialog(node) {
   indSel.innerHTML =
     `<option value="">— 未指定 —</option>` +
     state.industries.map(i => `<option value="${escAttr(i)}">${escHtml(i)}</option>`).join("");
-  if (sourceCompany?.industry) indSel.value = sourceCompany.industry;
+  // 預設順序：node.defaultIndustry（產業地圖傳入）→ 來源公司的產業
+  if (node.defaultIndustry) indSel.value = node.defaultIndustry;
+  else if (sourceCompany?.industry) indSel.value = sourceCompany.industry;
 
   document.getElementById("from-graph-overlay").classList.add("open");
 }
@@ -4762,9 +5132,260 @@ document.getElementById("from-graph-ok").addEventListener("click", async () => {
       if (sourceId && _relGraphCompanyId === sourceId) {
         await renderOwnershipGraph(sourceId);
       }
+      // 若產業地圖開著，且加入的公司屬於該產業，把節點狀態翻成已收錄
+      if (_imState.industry && document.getElementById("industry-map-overlay").classList.contains("open")) {
+        _imMarkNodeInDb(_fromGraphPayload?.name || payload.name, res.company_id);
+      }
     });
   } catch (err) {
     toast(`加入失敗：${err.message}`, true);
+  }
+});
+
+/* ── Industry Map ── */
+const _imState = {
+  industry: null,
+  breadth: "medium",
+  data: null,
+  generating: false,
+  evtSrc: null,
+};
+
+async function openIndustryMap(industry) {
+  if (!industry) return;
+  _imState.industry = industry;
+  _imState.data = null;
+  document.getElementById("industry-map-title").textContent = `${industry} — 產業地圖`;
+  document.getElementById("industry-map-subtitle").textContent = "";
+  document.getElementById("industry-map-status").innerHTML = "";
+  document.getElementById("industry-map-canvas").innerHTML = "";
+  document.getElementById("industry-map-meta").innerHTML = "";
+  _imSetBreadthActive(_imState.breadth);
+  document.getElementById("industry-map-overlay").classList.add("open");
+
+  // Try cached first
+  try {
+    const cached = await api("GET", `/api/industry-map/${encodeURIComponent(industry)}`);
+    _imState.data = cached;
+    if (cached.breadth) {
+      _imState.breadth = cached.breadth;
+      _imSetBreadthActive(cached.breadth);
+    }
+    _renderIndustryMap(cached);
+  } catch (err) {
+    // 404 → 顯示空狀態，提示按生成
+    document.getElementById("industry-map-canvas").innerHTML = `
+      <div class="im-empty">
+        <div class="im-empty-icon">🗺️</div>
+        <div class="im-empty-title">尚未生成「${escHtml(industry)}」的產業地圖</div>
+        <div class="im-empty-hint">選擇廣度後按右上方「生成地圖」</div>
+      </div>`;
+  }
+}
+
+function closeIndustryMap() {
+  if (_imState.evtSrc) {
+    try { _imState.evtSrc.close(); } catch (_) {}
+    _imState.evtSrc = null;
+  }
+  _imState.generating = false;
+  document.getElementById("industry-map-overlay").classList.remove("open");
+}
+
+function setIndustryMapBreadth(b) {
+  if (!["narrow", "medium", "broad"].includes(b)) return;
+  _imState.breadth = b;
+  _imSetBreadthActive(b);
+}
+
+function _imSetBreadthActive(b) {
+  document.querySelectorAll("#industry-map-controls .im-breadth-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.breadth === b);
+  });
+}
+
+async function generateIndustryMap() {
+  if (_imState.generating) return;
+  const industry = _imState.industry;
+  if (!industry) return;
+
+  _imState.generating = true;
+  const btn = document.getElementById("industry-map-generate-btn");
+  btn.disabled = true;
+  btn.textContent = "⏳ 生成中…";
+  const statusEl = document.getElementById("industry-map-status");
+  statusEl.innerHTML = `<div class="im-progress">準備中…</div>`;
+  document.getElementById("industry-map-canvas").innerHTML = "";
+
+  const params = new URLSearchParams({ breadth: _imState.breadth });
+  if (typeof getAiKey === "function") {
+    const k = getAiKey();
+    if (k) params.set("api_key", k);
+  }
+  if (typeof getAiProvider === "function") {
+    const p = getAiProvider();
+    if (p) params.set("provider", p);
+  }
+  const url = `/api/industry-map/${encodeURIComponent(industry)}/generate?${params.toString()}`;
+
+  await new Promise(resolve => {
+    const es = new EventSource(url);
+    _imState.evtSrc = es;
+    es.onmessage = async e => {
+      let event;
+      try { event = JSON.parse(e.data); } catch (_) { return; }
+      if (event.type === "progress") {
+        statusEl.innerHTML = `<div class="im-progress">${escHtml(event.message)}</div>`;
+      } else if (event.type === "done") {
+        es.close();
+        _imState.evtSrc = null;
+        _imState.data = event.data;
+        if (event.data?.breadth) {
+          _imState.breadth = event.data.breadth;
+          _imSetBreadthActive(event.data.breadth);
+        }
+        statusEl.innerHTML = "";
+        _renderIndustryMap(event.data);
+        resolve();
+      } else if (event.type === "error") {
+        es.close();
+        _imState.evtSrc = null;
+        statusEl.innerHTML = `<div class="im-error">生成失敗：${escHtml(event.message)}</div>`;
+        resolve();
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      _imState.evtSrc = null;
+      statusEl.innerHTML = `<div class="im-error">連線中斷，請重試</div>`;
+      resolve();
+    };
+  });
+
+  _imState.generating = false;
+  btn.disabled = false;
+  btn.textContent = "🗺️ 重新生成";
+}
+
+function _renderIndustryMap(data) {
+  const canvas = document.getElementById("industry-map-canvas");
+  const meta = document.getElementById("industry-map-meta");
+  if (!data || !data.sections || data.sections.length === 0) {
+    canvas.innerHTML = `<div class="im-empty"><div class="im-empty-title">空白地圖</div></div>`;
+    return;
+  }
+
+  const layout = data.layout_type === "layered" ? "layered" : "matrix";
+  const sections = [...data.sections].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const stats = data.stats || {};
+  const ts = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-TW", { hour12: false }) : "";
+  meta.innerHTML = `
+    <div class="im-meta">
+      <span class="im-meta-pill">${layout === "layered" ? "🪜 上下分層" : "🔲 矩陣並列"}</span>
+      <span class="im-meta-pill">共 ${sections.length} 個主分類 / ${stats.rendered_nodes ?? 0} 家公司</span>
+      <span class="im-meta-pill">已收錄 ${stats.in_db_count ?? "?"} 家 · 擴充候選 ${stats.expansion_pool_count ?? "?"} 家</span>
+      ${ts ? `<span class="im-meta-time">生成於 ${escHtml(ts)}</span>` : ""}
+      ${data.rationale ? `<div class="im-rationale">${escHtml(data.rationale)}</div>` : ""}
+    </div>`;
+
+  canvas.className = `im-canvas im-${layout}`;
+  canvas.innerHTML = sections.map(s => _imSectionHtml(s, layout)).join("");
+
+  // Wire clicks (delegate on canvas)
+  canvas.onclick = ev => {
+    const card = ev.target.closest(".im-card");
+    if (!card) return;
+    const inDb = card.dataset.inDb === "true";
+    const cid = card.dataset.companyId || "";
+    const name = card.dataset.name || "";
+    const taxId = card.dataset.taxId || "";
+    if (inDb && cid) {
+      openModal(cid);
+    } else {
+      _openFromGraphDialog({
+        name,
+        tax_id: taxId,
+        role: "competitor",
+        defaultIndustry: _imState.industry,
+      });
+    }
+  };
+}
+
+function _imSectionHtml(section, layout) {
+  const subs = (section.subgroups || []).map(_imSubgroupHtml).join("");
+  return `<div class="im-section">
+    <div class="im-section-head"><span class="im-section-title">${escHtml(section.title || "")}</span></div>
+    <div class="im-subgroups">${subs}</div>
+  </div>`;
+}
+
+function _imSubgroupHtml(sub) {
+  const cos = (sub.companies || []).map(_imCardHtml).join("");
+  return `<div class="im-subgroup">
+    <div class="im-subgroup-title">${escHtml(sub.title || "")}</div>
+    <div class="im-cards">${cos || `<div class="im-empty-sub">—</div>`}</div>
+  </div>`;
+}
+
+function _imCardHtml(co) {
+  const inDb = !!co.in_db;
+  const cls = `im-card${inDb ? " im-card-in" : " im-card-out"}`;
+  const note = co.note || co.core_biz || "";
+  const noteHtml = note ? `<div class="im-card-note">${escHtml(note)}</div>` : "";
+  const badge = inDb
+    ? `<span class="im-badge im-badge-in">✓</span>`
+    : `<span class="im-badge im-badge-out">+</span>`;
+  return `<button class="${cls}"
+    data-in-db="${inDb}"
+    data-company-id="${escAttr(co.company_id || "")}"
+    data-name="${escAttr(co.name || "")}"
+    data-tax-id="${escAttr(co.tax_id || "")}"
+    title="${inDb ? "點擊開啟詳情" : "點擊加入公司列表"}">
+    ${badge}<span class="im-card-name">${escHtml(co.name || "")}</span>
+    ${noteHtml}
+  </button>`;
+}
+
+function _imMarkNodeInDb(name, companyId) {
+  // 把畫面上同名節點翻面（不重新生成地圖）
+  if (!name || !companyId) return;
+  const canvas = document.getElementById("industry-map-canvas");
+  if (!canvas) return;
+  canvas.querySelectorAll(`.im-card[data-name="${escAttr(name)}"]`).forEach(el => {
+    el.dataset.inDb = "true";
+    el.dataset.companyId = companyId;
+    el.classList.remove("im-card-out");
+    el.classList.add("im-card-in");
+    const badge = el.querySelector(".im-badge");
+    if (badge) {
+      badge.className = "im-badge im-badge-in";
+      badge.textContent = "✓";
+    }
+    el.title = "點擊開啟詳情";
+  });
+  // 同步更新 _imState.data
+  if (_imState.data?.sections) {
+    for (const s of _imState.data.sections) {
+      for (const sub of (s.subgroups || [])) {
+        for (const co of (sub.companies || [])) {
+          if (co.name === name) {
+            co.in_db = true;
+            co.company_id = companyId;
+          }
+        }
+      }
+    }
+  }
+}
+
+// Click backdrop / Esc to close
+document.getElementById("industry-map-overlay").addEventListener("click", e => {
+  if (e.target.id === "industry-map-overlay") closeIndustryMap();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && document.getElementById("industry-map-overlay").classList.contains("open")) {
+    closeIndustryMap();
   }
 });
 
@@ -4804,7 +5425,7 @@ function applyCollapsible(container) {
 }
 
 /* ── Markdown summary renderer ── */
-function renderSummary(raw) {
+function renderSummary(raw, matHeadings) {
   // Drop any preamble before the first ## heading (e.g. Claude status messages)
   // Also drop "## 公司名稱 公司簡介" opening title if present
   let text = raw.replace(/^##\s+.+公司簡介[^\n]*\n+/, "");
@@ -4943,6 +5564,31 @@ function renderSummary(raw) {
     }
   }
   if (para.length) html.push(`<p>${para.join(" ")}</p>`);
+
+  // Mark sections that were applied from uploaded materials (簡報) with a
+  // distinct wrapper + chip so the user can see what came from the deck.
+  const matSet = new Set(Array.isArray(matHeadings) ? matHeadings : []);
+  if (matSet.size) {
+    const result = [];
+    let matOpen = false;
+    const closeMat = () => { if (matOpen) { result.push("</div>"); matOpen = false; } };
+    for (const item of html) {
+      const hm = item.match(/^<h3>([\s\S]*)<\/h3>$/);
+      if (hm) {
+        closeMat();
+        const text = hm[1].replace(/<[^>]+>/g, "").trim();
+        if (matSet.has(text)) {
+          result.push('<div class="summary-mat-section">');
+          matOpen = true;
+          result.push(`<h3>${hm[1]} <span class="summary-mat-chip">簡報</span></h3>`);
+          continue;
+        }
+      }
+      result.push(item);
+    }
+    closeMat();
+    return result.join("\n");
+  }
 
   return html.join("\n");
 }

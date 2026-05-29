@@ -1,7 +1,7 @@
 ---
 title: AI 功能清單
 status: living
-last_updated: 2026-05-13
+last_updated: 2026-05-29
 source_repo: ~/taiwan-company
 ---
 
@@ -13,10 +13,11 @@ source_repo: ~/taiwan-company
 
 ## 核心統一入口
 
-`services/claude_client.py` 提供兩個公開函式：
+`services/claude_client.py` 提供三個公開函式：
 
-- `ask(prompt, allowed_tools, api_key, provider)` — 文字 prompt
-- `ask_with_image(prompt, image_content, suffix, api_key, provider)` — 多模態（Vision）
+- `ask(prompt, allowed_tools, api_key, provider, model)` — 文字 prompt
+- `ask_with_image(prompt, image_content, suffix, api_key, provider)` — 單張圖多模態（Vision）
+- `ask_with_files(prompt, file_paths, api_key, provider, model)` — 多檔多模態（PDF + 多張圖）。本機 CLI 模式用 `--add-dir` + Read tool 原生讀取；API 模式把 PDF 當 document block、圖片當 image block 一次送出。Office/txt 文件由呼叫端先抽文字內嵌進 prompt。
 
 呼叫優先順序：
 
@@ -43,6 +44,14 @@ source_repo: ~/taiwan-company
 ### 2. 公司簡介與深度分析（enrich / deep-enrich）
 - 在 `_enrich_company` / `_deep_enrich_company` 任務中產出 `blurb`（一句話）與 `summary`（長段 Markdown，含業務概況 / 競業分析 / SWOT 之類）
 - 從實檔 sample 看到的 summary 結構：`## 業務概況` + `## 競業分析`（含表格）+ 其他段
+
+### 2b. 簡報摘要（materials，`routers/materials.py` + `report_generator.generate_summary_from_materials`）
+- 使用者從公司 modal 的「🖼 簡報摘要」側欄上傳簡報 / 公司介紹 / 照片（PDF / PPTX / DOCX / XLSX / 圖片），檔案落地到 `data/uploads/{company_id}/`，由 `/uploads` static mount serve，可點擊看原檔
+- 點「✦ 用 Opus 4.7 生成」後（前端有 spinner + 已過秒數動畫，避免誤判當機），後端把 PDF / 圖片交給 `ask_with_files`、office/txt 先抽文字內嵌，用 `claude-opus-4-7`（`_DEEP_MODEL`）掃過全部內容生成一份簡報版簡介，存 `materials_summary` / `materials_blurb`
+- 生成完跳出**逐段審核框**：把簡報版按 `##` 拆段，每段標「修改（取代現有同名段落）/ 新增」，使用者勾選後 `POST /materials/apply` 合併進公開的 `summary`
+- 被套用的段落標題記在 `materials_applied_headings`，前端 `renderSummary` 據此把那些段落以 teal 色條 + 「簡報」chip 標示，讓使用者一眼看出公司簡介裡哪些來自簡報
+- 一旦走「重新生成 / 深度生成」整份重建 `summary`，`_save_summary_result` 會清空 `materials_applied_headings`（標記不再適用）
+- prompt 嚴格限定「只寫檔案明確出現的資訊、禁杜撰數字、查無則標『——（簡報未提供）』」
 
 ### 3. Call memo 抽取（`memo_extractor.py`）
 - `extract_from_transcript(company_name, transcript)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）

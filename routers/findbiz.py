@@ -76,59 +76,53 @@ def _parse_int(s: str) -> int:
 
 def _parse_detail_html(html: str) -> dict:
     """
-    從 findbiz detail page HTML 解析 tabCmpyContent 的 key-value。
-    findbiz 是 server-side render，不需要 JS 執行。
-    用標準庫 html.parser 避免依賴 BeautifulSoup。
+    從 findbiz detail page HTML 解析「公司基本資料」表格的 key-value。
+
+    歷史：早期版本只解析 `<div id="tabCmpyContent">` 內的 table，但 findbiz
+    改版後容器 id 不再固定，且舊解析器一遇到 cell 內的巢狀 <div> 就會提早結束。
+    現在改成全頁掃 <tr>：凡是有 ≥2 個儲存格的列，就以第一格為 key、第二格為 value。
+    我們只關心 每股金額(元) / 已發行股份總數(股) / 實收資本額(元) 這幾個唯一標籤，
+    不會跟董監事名單等其他 table 的列衝突。
     """
     from html.parser import HTMLParser
 
     class _TableParser(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.in_tab = False
-            self.depth  = 0          # 從 tabCmpyContent 開始計 td 層級
             self.cells: list[str] = []
             self._cur  = ""
-            self._in_td = False
+            self._in_cell = False
             self.result: dict[str, str] = {}
 
         def handle_starttag(self, tag, attrs):
-            attr_dict = dict(attrs)
-            if tag == "div" and attr_dict.get("id") == "tabCmpyContent":
-                self.in_tab = True
-            if not self.in_tab:
-                return
-            if tag == "td":
-                self._in_td = True
-                self._cur   = ""
-            if tag == "tr":
+            if tag in ("td", "th"):
+                self._in_cell = True
+                self._cur     = ""
+            elif tag == "tr":
                 self.cells = []
 
         def handle_endtag(self, tag):
-            if not self.in_tab:
-                return
-            if tag == "td" and self._in_td:
+            if tag in ("td", "th") and self._in_cell:
                 self.cells.append(self._cur.strip())
-                self._in_td = False
-            if tag == "tr" and len(self.cells) >= 2:
+                self._in_cell = False
+            elif tag == "tr" and len(self.cells) >= 2:
                 key, val = self.cells[0], self.cells[1]
-                if key:
+                # 後出現的不覆蓋先出現的（保留主資料表的值）
+                if key and key not in self.result:
                     self.result[key] = val
-            if tag == "div" and self.in_tab:
-                self.in_tab = False   # 離開 tab div
 
         def handle_data(self, data):
-            if self._in_td:
+            if self._in_cell:
                 self._cur += data
 
         def handle_entityref(self, name):
             import html as h
-            if self._in_td:
+            if self._in_cell:
                 self._cur += h.unescape(f"&{name};")
 
         def handle_charref(self, name):
             import html as h
-            if self._in_td:
+            if self._in_cell:
                 self._cur += h.unescape(f"&#{name};")
 
     parser = _TableParser()
@@ -198,8 +192,14 @@ async def _search_and_load_detail(page, tax_id: str) -> str | None:
         log.warning("findbiz: still cloudflare after search. HTML[:200]=%s", search_html[:200])
         return None
 
-    # Step 2: 點擊第一個公司連結（讓 JS detailForm 以 POST 提交）
-    link = page.locator("a.hover[href*='queryCmpyDetail']").first
+    # Step 2: 點擊第一個公司連結
+    # findbiz 改版後，搜尋結果的公司連結改成乾淨 URL `/fts/company/<統編>`，
+    # 不再是含 `queryCmpyDetail` 的 href。優先用統編精準命中，再依序 fallback。
+    link = page.locator(f"a.hover[href$='/fts/company/{tax_id}']").first
+    if await link.count() == 0:
+        link = page.locator("a.hover[href*='/fts/company/']").first
+    if await link.count() == 0:
+        link = page.locator("a.hover[href*='queryCmpyDetail']").first  # 舊版相容
     if await link.count() == 0:
         log.warning("findbiz: no result link for %s. HTML[:1000]=\n%s", tax_id, search_html[:1000])
         return None
@@ -211,11 +211,14 @@ async def _search_and_load_detail(page, tax_id: str) -> str | None:
         log.error("findbiz detail click failed: %s", exc)
         return None
 
-    # Step 3: 等 JS 填入 tabCmpyContent table
+    # Step 3: 等詳細頁渲染出「每股金額」欄位（不再硬綁特定容器 id）
     try:
-        await page.wait_for_selector("#tabCmpyContent tr", timeout=15000)
+        await page.wait_for_function(
+            "() => document.body && document.body.innerText.includes('每股金額')",
+            timeout=15000,
+        )
     except Exception:
-        log.warning("findbiz: #tabCmpyContent tr not found for %s", tax_id)
+        log.warning("findbiz: '每股金額' not rendered for %s", tax_id)
 
     detail_html = await page.content()
     try:

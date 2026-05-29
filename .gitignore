@@ -11,6 +11,7 @@ __pycache__/
 data/companies.json
 data/config.json
 data/temp/
+data/uploads/
 
 # Keep the template file
 !data/call_memo_template.docx

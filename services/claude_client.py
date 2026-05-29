@@ -395,3 +395,119 @@ def ask_with_image(
     if provider == "gemini":
         return _ask_gemini_image(prompt, image_content, suffix, api_key)
     return _ask_anthropic_image(prompt, image_content, suffix, api_key)
+
+
+# ── Multi-file (PDF + images) multimodal ────────────────────────────────────────
+
+_IMAGE_MEDIA = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "gif": "image/gif", "webp": "image/webp"}
+
+
+def ask_with_files(
+    prompt: str,
+    file_paths: list[str],
+    timeout: int = 300,
+    api_key: str = "",
+    provider: str = "anthropic",
+    model: str = "",
+) -> str:
+    """Scan multiple binary-native files (PDF + images) alongside a text prompt.
+
+    Office/text documents should be pre-extracted by the caller and embedded in
+    `prompt`; only files Claude can read directly (PDF, images) belong in
+    `file_paths`. Local CLI mode reads each file natively via the Read tool;
+    API mode sends PDF as document blocks and images as image blocks.
+    """
+    if not api_key:
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        provider = "anthropic"
+    if not api_key:
+        return _try_local_cli(lambda: _ask_cli_files(prompt, file_paths, timeout, model))
+    if provider in ("openai", "gemini"):
+        return _ask_generic_files(prompt, file_paths, api_key, provider)
+    return _ask_anthropic_files(prompt, file_paths, api_key, model)
+
+
+def _ask_anthropic_files(prompt: str, file_paths: list[str], api_key: str, model: str = "") -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    content: list[dict[str, Any]] = []
+    for p in file_paths:
+        ext = Path(p).suffix.lstrip(".").lower()
+        try:
+            b64 = base64.standard_b64encode(Path(p).read_bytes()).decode()
+        except OSError:
+            continue
+        if ext == "pdf":
+            content.append({"type": "document", "source": {
+                "type": "base64", "media_type": "application/pdf", "data": b64}})
+        else:
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": _IMAGE_MEDIA.get(ext, "image/png"), "data": b64}})
+    content.append({"type": "text", "text": prompt})
+    _model = model or MODEL_ANTHROPIC
+    try:
+        response = client.messages.create(
+            model=_model, max_tokens=8096,
+            messages=[{"role": "user", "content": content}],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Claude API Key 無效。請點 ⚙ 重新輸入正確的 Key。")
+    except anthropic.APIError as e:
+        raise RuntimeError(f"Claude API 錯誤：{e}")
+    return _text_from_anthropic(response)
+
+
+def _ask_generic_files(prompt: str, file_paths: list[str], api_key: str, provider: str) -> str:
+    """Best-effort fallback for OpenAI/Gemini: extract text/OCR from each file and
+    inline it, then run a plain text completion (no native multi-file vision)."""
+    from . import file_parser
+    chunks: list[str] = []
+    for p in file_paths:
+        try:
+            text = file_parser.extract_text(Path(p).name, Path(p).read_bytes())
+        except OSError:
+            continue
+        if text and not text.startswith("["):
+            chunks.append(f"── 檔案：{Path(p).name} ──\n{text}")
+    combined = "\n\n".join(chunks)
+    full_prompt = f"{prompt}\n\n以下是上傳檔案的文字內容：\n\n{combined}" if combined else prompt
+    if provider == "openai":
+        return _ask_openai(full_prompt, None, api_key)
+    return _ask_gemini(full_prompt, None, api_key)
+
+
+def _ask_cli_files(prompt: str, file_paths: list[str], timeout: int = 300, model: str = "") -> str:
+    import signal
+    if not file_paths:
+        return _ask_cli(prompt, timeout, None, 12, model)
+    dirs = sorted({str(Path(p).parent) for p in file_paths})
+    file_list = "\n".join(f"- {p}" for p in file_paths)
+    full_prompt = (
+        "請先用 Read tool 逐一讀取以下檔案（PDF 與圖片皆可直接讀取），讀完全部後再依指示回答。\n\n"
+        f"檔案清單：\n{file_list}\n\n{prompt}"
+    )
+    cmd = [_cli(), "-p", full_prompt, "--output-format", "text",
+           "--allowedTools", "Read", "--max-turns", "30"]
+    if model:
+        cmd += ["--model", model]
+    for d in dirs:
+        cmd += ["--add-dir", d]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        stdout_b, stderr_b = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise RuntimeError(f"Claude CLI 執行超時（>{timeout}s），已強制終止。")
+    stdout = stdout_b.decode("utf-8", errors="replace").strip()
+    stderr = stderr_b.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Claude CLI 錯誤 (exit {proc.returncode}):\n{(stderr or stdout)[:400]}")
+    if stdout.lower().startswith("execution error") or stdout.lower() == "error":
+        raise RuntimeError(f"Claude CLI 執行錯誤：{stdout[:200]}")
+    return stdout

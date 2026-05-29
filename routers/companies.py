@@ -731,6 +731,14 @@ def get_competitor_graph(company_id: str):
     for comp in (company.get("competitors") or []):
         name = comp.get("name", "")
         cid  = comp.get("company_id")
+        # 競業條目來自備忘錄表格解析，company_id 多半為 None；使用者事後把該公司
+        # 加入清單也不會回填舊條目。這裡即時以名稱（去掉品牌附註括號）／統編比對
+        # 現有公司，讓「已收錄」狀態與點擊行為一致（避免「顯示未收錄但點得開」）。
+        if not cid:
+            lookup_name = re.sub(r"（[^）]*）", "", name).strip()
+            hit = data_store.find_company_by_name_or_tax_id(lookup_name, comp.get("tax_id") or "")
+            if hit:
+                cid = hit["id"]
         node_id = f"comp:{cid}" if cid else f"comp:name:{name}"
         in_db = bool(cid)
         add_node(node_id, _short(name), "competitor",
@@ -1213,6 +1221,9 @@ def _save_summary_result(company_id: str, result: dict) -> dict:
     fields: dict = {
         "summary": result.get("summary", ""),
         "blurb":   result.get("blurb", ""),
+        # A full public-data regen replaces the whole summary, so any
+        # previously-applied 簡報 section markers no longer apply.
+        "materials_applied_headings": [],
     }
     if "competitors" in result:
         fields["competitors"] = _resolve_competitor_ids(result["competitors"])

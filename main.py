@@ -21,7 +21,7 @@ try:
 except ImportError:
     pass
 
-from routers import companies, config, upload, call_memo, industries, findbiz
+from routers import companies, config, upload, call_memo, industries, findbiz, news_blacklist, industry_map, materials
 
 log = logging.getLogger(__name__)
 TAIWAN_TZ = timezone(timedelta(hours=8))
@@ -81,9 +81,17 @@ app.include_router(config.router)
 app.include_router(call_memo.router)
 app.include_router(industries.router)
 app.include_router(findbiz.router)
+app.include_router(news_blacklist.router)
+app.include_router(industry_map.router)
+app.include_router(materials.router)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Uploaded company materials (簡報/介紹/照片) — served so the user can click to view originals
+UPLOADS_DIR = Path(__file__).parent / "data" / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 

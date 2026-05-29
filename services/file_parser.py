@@ -37,6 +37,10 @@ def extract_text(filename: str, content: bytes) -> str:
         return _from_docx(content)
     if ext == ".doc":
         return "[不支援舊版 .doc 格式，請另存為 .docx 後重新上傳]"
+    if ext == ".pptx":
+        return _from_pptx(content)
+    if ext == ".ppt":
+        return "[不支援舊版 .ppt 格式，請另存為 .pptx 或匯出 PDF 後重新上傳]"
     if ext in (".xlsx", ".xls"):
         return _from_excel(content)
     if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"):
@@ -73,6 +77,35 @@ def _from_docx(content: bytes) -> str:
         return "\n".join(parts)
     except Exception as e:
         return f"[DOCX 解析失敗：{e}]"
+
+
+def _from_pptx(content: bytes) -> str:
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(content))
+        parts: list[str] = []
+        for idx, slide in enumerate(prs.slides, 1):
+            slide_lines: list[str] = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        text = "".join(run.text for run in para.runs).strip()
+                        if text:
+                            slide_lines.append(text)
+                if shape.has_table:
+                    for row in shape.table.rows:
+                        row_text = " | ".join(cell.text.strip() for cell in row.cells)
+                        if row_text.strip():
+                            slide_lines.append(row_text)
+            if slide.has_notes_slide:
+                notes = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if notes:
+                    slide_lines.append(f"（備註）{notes}")
+            if slide_lines:
+                parts.append(f"── 第 {idx} 頁 ──\n" + "\n".join(slide_lines))
+        return "\n\n".join(parts)
+    except Exception as e:
+        return f"[PPTX 解析失敗：{e}]"
 
 
 def _from_excel(content: bytes) -> str:

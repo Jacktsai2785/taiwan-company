@@ -143,7 +143,7 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 步驟 3：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
 
-步驟 4：根據前面搜尋所掌握的業務性質，搜尋台灣競爭者——**請涵蓋以下四種競業類型，每類至少搜尋 1 家**：
+步驟 4：根據前面搜尋所掌握的業務性質，搜尋台灣競爭者——**請涵蓋以下四種競業類型**。其中「正面競業」請盡量找滿 3 家（若確實只找得到 1-2 家，據實呈現即可，不要硬湊）；其餘三類各至少 1 家：
   - 正面競業：同產品／服務，直接搶相同客戶或標案
   - 替代路徑：客戶解決相同問題的不同技術或商業模式
   - 側翼潛入：現在不在此市場，但有能力、有誘因跨入的鄰近業者（如大型集團、跨國廠商）
@@ -161,10 +161,12 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 
 競業類型定義：正面競業／替代路徑／側翼潛入／垂直整合
 
+**「公司名稱」欄一律填寫正式登記名稱**（如 ○○股份有限公司／○○有限公司）。若你只查到品牌或產品名（例如「超木 GREENuWood」），請進一步查出其背後的法人公司全名填入，並可在括號內附註品牌，例如「○○股份有限公司（超木 GREENuWood）」；**禁止只填品牌名或英文商標**，否則後續無法連結公司登記資料。
+
 | 公司名稱 | 核心業務 | 主要差異化特點 | 上市狀態 | 競業類型 |
 |------|------|------|------|------|
 | {full_name}（本案）| （填入） | （填入） | {listing} | — |
-{known_table_rows}（四種競業類型各補充至少 1 家，合計至少 4 家）
+{known_table_rows}（正面競業列 1-3 家、其餘三類各至少 1 家；正面競業若僅找到 1-2 家，據實呈現即可，不要硬湊）
 
 （表格後以條列說明：本案在市場中的相對優勢 2-3 點、相對劣勢或挑戰 2-3 點。若有已知專利或技術壁壘請一併提及。）
 
@@ -226,7 +228,8 @@ def _build_deep_prompt(company: dict, competitor_context: dict | None = None) ->
 
 完成搜尋後，輸出修訂版完整備忘錄（格式：## 業務概況、## 競業分析、## 主要風險）。
 競業分析表格請使用五欄格式：公司名稱 ｜ 核心業務 ｜ 主要差異化特點 ｜ 上市狀態 ｜ 競業類型
-競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合
+競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合（正面競業盡量列 3 家、不足則 1-2 家；其餘三類各至少 1 家）
+「公司名稱」欄一律填正式登記名稱（○○股份有限公司／○○有限公司）；只知品牌時請查出法人公司名，可在括號附品牌，禁止只填品牌或英文商標。
 若新資料提供了原版沒有的具體資訊，更新對應段落；若無新資訊，維持原內容。
 **嚴格禁止在末尾輸出任何 Sources、References、來源清單或 URL 列表。**
 
@@ -234,6 +237,7 @@ def _build_deep_prompt(company: dict, competitor_context: dict | None = None) ->
 [blurb: 核心產品或服務描述]"""
 
 
+_NORMAL_MODEL = "claude-sonnet-4-6"
 _DEEP_MODEL = "claude-opus-4-7"
 
 
@@ -243,7 +247,7 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
     Uses claude-opus-4-7 for Anthropic/CLI to get higher-quality deep analysis."""
     name = company.get("name", "")
     prompt = _build_deep_prompt(company, competitor_context)
-    model = _DEEP_MODEL if provider == "anthropic" else ""
+    model = _DEEP_MODEL
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
@@ -261,6 +265,96 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
             raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
+def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
+    name     = company.get("name", "")
+    industry = company.get("industry", "") or "不詳"
+    rep      = company.get("representative", "") or "不詳"
+    capital  = company.get("capital", 0)
+    address  = company.get("address", "") or "不詳"
+    listing  = company.get("listing_status", "非公發")
+    tax_id   = company.get("tax_id", "")
+    short_name, full_name = _company_name_variants(name)
+    capital_str = f"NT$ {capital:,}" if capital else "不詳"
+
+    text_block = (
+        f"\n【其他檔案文字內容（簡報／文件擷取）】\n{materials_text.strip()}\n"
+        if materials_text.strip() else ""
+    )
+
+    return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
+以下是「{full_name}」提供的簡報、公司介紹或相關資料（可能是 PDF、簡報或照片），以及系統登記的基本資料。
+請**完整閱讀所有已提供的檔案內容**，僅根據這些檔案與基本資料撰寫一份公司簡介。
+
+【系統登記基本資料】
+公司名稱：{full_name}（簡稱：{short_name}）
+統一編號：{tax_id or "不詳"}
+所屬產業：{industry}
+代表人：{rep}
+實收資本額：{capital_str}
+所在地：{address}
+上市狀態：{listing}
+{text_block}
+【任務】
+用繁體中文撰寫以下格式的公司簡介（純 Markdown，不加開頭標題行）：
+
+## 業務概況
+（公司在做什麼：主要產品或服務、核心技術、解決的問題）
+
+## 產品與服務
+（具體產品線、服務項目、應用場景；可條列）
+
+## 商業模式與市場
+（如何賺錢、目標客戶、市場定位、競爭優勢；簡報有提到才寫）
+
+## 團隊與股東
+（創辦人、經營團隊、重要股東或投資人；簡報未提供則標「——（簡報未提供）」）
+
+## 財務與募資亮點
+（營收、成長、募資金額、估值、訂單或客戶數等**具體數字**；簡報未提供則標「——（簡報未提供）」）
+
+## 重點與風險觀察
+（以 PE 視角，列 2-4 點從簡報內容讀到的亮點與需留意之處）
+
+嚴格規則：
+- **只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測。
+- 具體數字（營收、募資、估值、客戶數）務必依簡報原文，**禁止杜撰、湊整或推估**。
+- 某段落在檔案中查無資訊時，直接標「——（簡報未提供）」，不要用模糊語氣填充。
+- 禁止描述自己的閱讀過程或檔案結構。
+- **嚴格禁止在末尾輸出任何 Sources、References、來源清單或 URL 列表。**
+
+最後單獨一行，格式固定如下（不超過10個繁體中文字，描述核心產品或服務，禁止出現公司名稱）：
+[blurb: 核心產品或服務描述]"""
+
+
+async def generate_summary_from_materials(
+    company: dict, file_paths: list[str], materials_text: str = "",
+    api_key: str = "", provider: str = "anthropic",
+) -> dict:
+    """Scan uploaded slides/intro/photos with opus-4.7 and produce a standalone
+    company profile (kept separate from the public-data `summary`).
+
+    `file_paths` are binary-native files (PDF + images) read directly by the
+    model; `materials_text` is pre-extracted text from office/txt files."""
+    name = company.get("name", "")
+    prompt = _build_materials_prompt(company, materials_text)
+    model = _DEEP_MODEL
+    async with _CLAUDE_LOCK:
+        try:
+            log.info("Generating materials summary for %s (%d files)", name, len(file_paths))
+            raw = await asyncio.to_thread(
+                claude_client.ask_with_files, prompt, file_paths, 420, api_key, provider, model
+            )
+            summary, blurb = _split_blurb(raw)
+            if not summary.strip():
+                raise RuntimeError("模型未回傳任何內容")
+            if not blurb and len(summary.strip()) > 100:
+                blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
+            log.info("Materials summary done for %s (%d chars, blurb=%r)", name, len(summary), blurb)
+            return {"summary": summary, "blurb": blurb}
+        except Exception as e:
+            raise RuntimeError(f"簡報生成失敗：{e}") from e
+
+
 async def generate_summary(company: dict, api_key: str = "", provider: str = "anthropic",
                            competitor_context: dict | None = None) -> dict:
     """
@@ -269,7 +363,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
     """
     name = company.get("name", "")
     prompt = _build_prompt(company, competitor_context)
-    model = _DEEP_MODEL if provider == "anthropic" else ""
+    model = _NORMAL_MODEL
 
     last_error: Exception | None = None
     async with _CLAUDE_LOCK:

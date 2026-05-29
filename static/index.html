@@ -89,6 +89,7 @@
         <button class="tab-btn" data-tab="watched">⭐ 追蹤<span id="watch-count"></span></button>
       </div>
       <h2 id="toolbar-title"></h2>
+      <button id="industry-map-toolbar-btn" class="industry-map-btn" style="display:none">🗺️ 產業地圖</button>
       <input type="search" id="search-box" placeholder="搜尋公司名稱…" autocomplete="off" />
       <button id="bulk-enrich-btn" class="sort-btn" onclick="openBulkEnrichDialog()" title="批次補齊 / 重新生成此清單的公司資料">✨ 批次生成</button>
       <div id="sort-group">
@@ -224,6 +225,41 @@
   </div>
 </div>
 
+<!-- ── Industry Map Overlay ── -->
+<div id="industry-map-overlay">
+  <div id="industry-map-dialog" role="dialog" aria-modal="true">
+    <div id="industry-map-header">
+      <button id="industry-map-close" onclick="closeIndustryMap()" aria-label="關閉">✕</button>
+      <div id="industry-map-title">產業地圖</div>
+      <div id="industry-map-subtitle"></div>
+      <div id="industry-map-controls">
+        <div class="im-breadth-group" title="控制 AI 規劃地圖的密度：主分類數 × 子類別數 × 每子類公司上限。公司多時用『廣』才不會被砍掉。">
+          <span class="im-control-label">廣度 <span class="im-info-icon">ⓘ</span></span>
+          <button class="im-breadth-btn" data-breadth="narrow"
+            onclick="setIndustryMapBreadth('narrow')"
+            title="窄｜3 個主分類 × 每分類最多 2 個子類別 × 每子類最多 6 家公司&#10;適合：快速概觀、產業重點玩家">窄</button>
+          <button class="im-breadth-btn active" data-breadth="medium"
+            onclick="setIndustryMapBreadth('medium')"
+            title="中｜5 個主分類 × 每分類最多 3 個子類別 × 每子類最多 10 家公司&#10;適合：一般用途（推薦），平衡細節與可讀性">中</button>
+          <button class="im-breadth-btn" data-breadth="broad"
+            onclick="setIndustryMapBreadth('broad')"
+            title="廣｜7 個主分類 × 每分類最多 5 個子類別 × 每子類最多 18 家公司&#10;適合：完整呈現產業全貌，公司多時用此選項">廣</button>
+        </div>
+        <button id="industry-map-generate-btn" class="btn btn-primary" onclick="generateIndustryMap()">🗺️ 生成地圖</button>
+      </div>
+    </div>
+    <div id="industry-map-body">
+      <div id="industry-map-status"></div>
+      <div id="industry-map-meta"></div>
+      <div id="industry-map-canvas"></div>
+      <div id="industry-map-legend">
+        <span class="legend-item"><span class="legend-dot legend-comp-in"></span>已收錄（點開詳情）</span>
+        <span class="legend-item"><span class="legend-dot legend-comp-out"></span>未收錄（點即加入）</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Add From Graph Confirm Dialog ── -->
 <div id="from-graph-overlay">
   <div id="from-graph-dialog">
@@ -289,6 +325,56 @@
   </div>
 </div>
 
+<!-- ── Materials (簡報摘要) Side Panel ── -->
+<div id="materials-panel">
+  <div id="materials-panel-header">
+    <div id="materials-panel-title">簡報摘要</div>
+    <div id="materials-panel-actions">
+      <button id="materials-panel-close" onclick="closeMaterialsPanel()">✕</button>
+    </div>
+  </div>
+  <div id="materials-panel-body">
+    <div id="materials-upload-area">
+      <label id="materials-drop-label" for="materials-file-input">
+        <span class="memo-upload-icon">📑</span>
+        <span>上傳簡報 / 公司介紹 / 照片</span>
+        <small>PDF / PPTX / DOCX / XLSX / 圖片，可多選</small>
+      </label>
+      <input type="file" id="materials-file-input" multiple
+             accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
+      <div id="materials-upload-status"></div>
+    </div>
+
+    <div id="materials-file-list"></div>
+
+    <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 Opus 4.7 生成公司簡介</button>
+    <div id="materials-gen-status"></div>
+
+    <div id="materials-result-wrap" style="display:none">
+      <div id="materials-result"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Materials Review Dialog (逐段審核) ── -->
+<div id="mat-review-overlay">
+  <div id="mat-review-dialog">
+    <div id="mat-review-header">
+      <h3>逐段審核：簡報生成的公司簡介</h3>
+      <p>勾選要套用到「公司簡介」的段落。
+        <span class="mat-tag mat-tag-mod">修改</span>＝取代現有同名段落，
+        <span class="mat-tag mat-tag-new">新增</span>＝加入新段落。套用後該段會在公司簡介中標示「簡報」來源。</p>
+    </div>
+    <div id="mat-review-body"></div>
+    <div id="mat-review-footer">
+      <label id="mat-review-all-label"><input type="checkbox" id="mat-review-all" checked onchange="toggleMatReviewAll(this)" /> 全選</label>
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost" onclick="closeMatReview()">取消</button>
+      <button class="btn btn-primary" id="mat-review-apply" onclick="applyMatReview()">套用選取的段落</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Upload Confirm Dialog ── -->
 <div id="confirm-overlay">
   <div id="confirm-dialog">
@@ -334,6 +420,7 @@
       <p>每行輸入一個公司名稱，系統將自動比對既有資料</p>
     </div>
     <div id="manual-body">
+      <div id="manual-hint" style="display:none"></div>
       <textarea id="manual-names" placeholder="例：&#10;台積電股份有限公司&#10;鴻海精密工業股份有限公司"></textarea>
       <div class="manual-fields">
         <div class="manual-field">

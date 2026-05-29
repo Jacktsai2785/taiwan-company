@@ -16,6 +16,23 @@ _BLOCKED_SOURCES = {
     "觀察者網", "鳳凰網", "中新社", "海峽導報", "福建日報", "大公報",
 }
 
+# Stock discussion forums and low-signal aggregators — user posts masquerading as news
+_FORUM_SOURCES = {
+    "股市爆料同學會", "Cmoney股市爆料同學會", "CMoney股市爆料同學會",
+    "PTT Stock", "Mobile01",
+}
+
+# Title substrings that indicate forum / UGC content regardless of source field
+_TITLE_NOISE_PATTERNS = (
+    "股市爆料同學會",
+    "爆料同學會",
+)
+
+# Domains whose URLs produce trading-signal / low-quality content
+_BLOCKED_DOMAINS = {
+    "cmnews.com.tw",
+}
+
 # Synonym expansion for abstract industry categories — broadens the news query
 # so vague labels like 「前瞻科技」 actually return real articles.
 _INDUSTRY_SYNONYMS: dict[str, list[str]] = {
@@ -119,15 +136,18 @@ async def fetch_company_news(company_names: list[str], max_articles: int = 15) -
 # ── Internal RSS fetch ─────────────────────────────────────────────────────────
 
 async def _fetch_rss(query: str, max_articles: int, label: str = "") -> list[dict]:
+    from services.blacklist import get_dynamic_filters
+    dyn_urls, dyn_domains, dyn_sources, dyn_title_patterns = get_dynamic_filters()
+
     start, end = news_window()
-    url = (
+    rss_url = (
         "https://news.google.com/rss/search"
         f"?q={urllib.parse.quote(query)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     )
 
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = await client.get(rss_url, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
         content = resp.text
     except Exception as exc:
@@ -153,8 +173,24 @@ async def _fetch_rss(query: str, max_articles: int, label: str = "") -> list[dic
 
         if any(b in source for b in _BLOCKED_SOURCES):
             continue
+        if any(f in source for f in _FORUM_SOURCES):
+            continue
+        if source in dyn_sources:
+            continue
+
+        url = entry.link or ""
+        if any(d in url for d in _BLOCKED_DOMAINS):
+            continue
+        if any(d in url for d in dyn_domains):
+            continue
+        if url in dyn_urls:
+            continue
 
         title = entry.title or ""
+        if any(p in title for p in _TITLE_NOISE_PATTERNS):
+            continue
+        if any(p in title for p in dyn_title_patterns):
+            continue
         if source and title.endswith(f" - {source}"):
             title = title[: -(len(source) + 3)].strip()
 
