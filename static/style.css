@@ -1776,13 +1776,17 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .summary-table tr:first-child td { background: #eef4fb; }   /* 本案 row, subtle */
 
 /* 競業表格欄寬：把空間留給文字欄，狀態/類型欄收窄不換行 */
-.competitor-table td:nth-child(1), .competitor-table th:nth-child(1) { width: 14%; }   /* 公司名稱 */
-.competitor-table td:nth-child(2), .competitor-table th:nth-child(2) { width: 26%; }   /* 核心業務 */
+.competitor-table td:nth-child(1), .competitor-table th:nth-child(1) { width: 18%; }   /* 公司名稱 */
+.competitor-table td:nth-child(2), .competitor-table th:nth-child(2) { width: 24%; }   /* 核心業務 */
 .competitor-table td:nth-child(4), .competitor-table th:nth-child(4),
 .competitor-table td:nth-child(5), .competitor-table th:nth-child(5) { white-space: nowrap; width: 1%; }  /* 上市狀態 / 競業類型 */
 
+/* 多家公司各自一個 chip，垂直堆疊、不在公司名與代號間斷行 */
+.comp-name-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
 /* ── 競業表格：可點擊公司名稱 ── */
 .competitor-chip {
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 4px;

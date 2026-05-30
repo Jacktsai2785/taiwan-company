@@ -3807,6 +3807,11 @@ function _displayCompName(s) {
   return (s || "").replace(/(股份有限公司|有限公司)(?=（|$)/, "").trim();
 }
 
+// 一格塞多家公司時用「／」「/」分隔（如「雙鴻（3324）／奇鋐（3017）」）→ 拆成單家陣列。
+function _splitCompCell(content) {
+  return (content || "").split(/[／/]/).map(s => s.trim()).filter(Boolean);
+}
+
 function openCompanyByName(name) {
   const co = state.companies.find(c => _coreName(c.name) === _coreName(name));
   if (co) openModal(co.id);
@@ -5735,17 +5740,21 @@ function renderSummary(raw, matHeadings) {
       const tds = cells.map((c, ci) => {
         const content = c.trim();
         if (isCompetitorTable && ci === 0) {
-          // 公司名稱欄顯示時去掉法定尾綴（保留（本案）/（2308）等括號）；比對仍走 _coreName
-          const disp = _displayCompName(content);
-          if (!content.includes("（本案）")) {
-            const rawName = content.replace(/（[^）]*）/g, "").trim();
+          // 本案列：不可點，去尾綴顯示
+          if (content.includes("（本案）")) {
+            return `<td>${inlineMarkdown(_displayCompName(content))}</td>`;
+          }
+          // 一格可能塞多家（如「雙鴻（3324）／奇鋐（3017）」）→ 拆成各自獨立的 chip，
+          // 每家自己一個＋、自己可點，新增流程就只會加被點的那一家。
+          const chips = _splitCompCell(content).map(tok => {
+            const disp = _displayCompName(tok);
+            const rawName = tok.replace(/（[^）]*）/g, "").trim();
             const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
             const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
             const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
-            const safeN = escHtml(rawName);
-            return `<td><span class="${cls}" data-cname="${safeN}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span></td>`;
-          }
-          return `<td>${inlineMarkdown(disp)}</td>`;
+            return `<span class="${cls}" data-cname="${escHtml(rawName)}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span>`;
+          }).join("");
+          return `<td><div class="comp-name-cell">${chips}</div></td>`;
         }
         return `<td>${inlineMarkdown(content)}</td>`;
       }).join("");
