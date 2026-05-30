@@ -5538,7 +5538,8 @@ function renderSummary(raw, matHeadings) {
     // Unordered list item (-, *, •)
     const ul = line.match(/^[-*•]\s+(.+)/);
     if (ul) {
-      if (_isWholeSupplement(ul[1])) { flushLists(); out.push(_supCallout(_supSpan(ul[1], 0).inner)); continue; }
+      const usup = _bulletSupInner(ul[1]);
+      if (usup !== null) { flushLists(); out.push(_supCallout(usup)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList)  { out.push("<ul>");  inList  = true;  }
       out.push(`<li>${_wrapSupplements(inlineMarkdown(ul[1]))}</li>`);
@@ -5548,7 +5549,8 @@ function renderSummary(raw, matHeadings) {
     // Ordered list item (1. 2. 3.) — render as bullet for visual consistency
     const ol = line.match(/^\d+[.)]\s+(.+)/);
     if (ol) {
-      if (_isWholeSupplement(ol[1])) { flushLists(); out.push(_supCallout(_supSpan(ol[1], 0).inner)); continue; }
+      const osup = _bulletSupInner(ol[1]);
+      if (osup !== null) { flushLists(); out.push(_supCallout(osup)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList) { out.push("<ul>"); inList = true; }
       out.push(`<li>${_wrapSupplements(inlineMarkdown(ol[1]))}</li>`);
@@ -5655,10 +5657,18 @@ function _supSpan(str, idx) {
   return { inner: str.slice(innerStart, j - 1), end: j };
 }
 
-// True when the whole string is a single 簡報補充 note (e.g. a risk bullet
-// "（簡報補充）某新風險") — such bullets are pulled out into a callout block.
-function _isWholeSupplement(s) {
-  return s.startsWith(_SUP_MARK) && _supSpan(s, 0).end >= s.length;
+// If a list item is itself a 簡報補充 note — the「（簡報補充）」marker at the start,
+// possibly inside a leading **bold** (risks are formatted "**（簡報補充）標題**：…")
+// — return the bullet text with just the marker token removed, so it can render
+// as a callout. Otherwise null.
+function _bulletSupInner(raw) {
+  if (!/^(\*\*)?（簡報補充[）：]/.test(raw)) return null;
+  const idx = raw.indexOf(_SUP_MARK);
+  if (raw[idx + _SUP_MARK.length] === "）") {
+    return raw.slice(0, idx) + raw.slice(idx + _SUP_MARK.length + 1);   // drop「（簡報補充）」
+  }
+  const { inner, end } = _supSpan(raw, idx);                            // inline「（簡報補充：…）」
+  return raw.slice(0, idx) + inner + raw.slice(end);
 }
 
 // Inline highlight for 簡報補充 inside list items (kept inline so the bullet
