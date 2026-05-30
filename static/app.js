@@ -2292,15 +2292,15 @@ function applySummaryTabs(container) {
   if (!tabbar) return;
   tabbar.innerHTML = "";
   // Each top-level section = a bare <h3>(+siblings) OR a .summary-mat-section wrapper.
-  const sections = [];   // { title, nodes: [...] }
+  const sections = [];   // { title, isMat, nodes: [...] }
   let cur = null;
   for (const node of [...container.children]) {
     if (node.classList && node.classList.contains("summary-mat-section")) {
       const h3 = node.querySelector("h3");
-      sections.push({ title: _cleanHeading(h3), nodes: [node] });
+      sections.push({ title: _cleanHeading(h3), isMat: true, nodes: [node] });
       cur = null;
     } else if (node.tagName === "H3") {
-      cur = { title: _cleanHeading(node), nodes: [node] };
+      cur = { title: _cleanHeading(node), isMat: false, nodes: [node] };
       sections.push(cur);
     } else if (cur) {
       cur.nodes.push(node);
@@ -2319,7 +2319,9 @@ function applySummaryTabs(container) {
     page.style.display = i === 0 ? "" : "none";
     const tab = document.createElement("div");
     tab.className = "summary-tab" + (i === 0 ? " on" : "");
-    tab.textContent = sec.title || `第 ${i + 1} 段`;
+    // tab IS the section heading (the in-page h3 is hidden); 簡報段落帶 📎
+    tab.innerHTML = `<span>${escHtml(sec.title || ("第 " + (i + 1) + " 段"))}</span>` +
+      (sec.isMat ? `<span class="summary-tab-clip" title="含補充資訊">${_CLIP_SVG}</span>` : "");
     tab.onclick = () => _showSummaryTab(container, i);
     tabbar.appendChild(tab);
   });
@@ -5581,7 +5583,8 @@ function renderSummary(raw, matHeadings) {
       }).join("");
       return `<tr>${tds}</tr>`;
     }).join("");
-    out.push(`<table class="summary-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
+    const tcls = "summary-table" + (isCompetitorTable ? " competitor-table" : "");
+    out.push(`<table class="${tcls}"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
     tableRows = [];
     inTable = false;
   };

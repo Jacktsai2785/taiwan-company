@@ -423,7 +423,7 @@ async def _summarize_company(company_id: str, api_key: str = "", provider: str =
             events.append({"type": "done"})
             return
 
-        push("正在生成公司簡介（約 2–4 分鐘）…")
+        push("正在生成公司簡介（約 3–7 分鐘）…")
         try:
             ctx = _gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
@@ -1277,7 +1277,7 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         except Exception as e:
             push(f"資料查詢失敗：{e}，跳過繼續")
 
-        push("正在生成公司簡介（約 2–4 分鐘）…")
+        push("正在生成公司簡介（約 3–7 分鐘）…")
         company = data_store.get_company(company_id)
         try:
             ctx = _gather_competitor_context(company_id, company.get("name", ""))
@@ -1321,7 +1321,7 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
             events.append({"type": "done"})
             return
 
-        push("正在深度搜尋媒體報導與新聞（約 60-120 秒）…")
+        push("正在深度搜尋媒體報導與新聞（約 4–8 分鐘）…")
         try:
             ctx = _gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:

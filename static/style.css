@@ -803,6 +803,7 @@ body {
   min-height: 400px;
   max-height: 76vh;
   overflow-y: auto;
+  font-size: 13px;   /* consistent base across all pages (含專利提示) */
 }
 
 /* 公司簡介內部橫向分頁 */
@@ -824,9 +825,13 @@ body {
   white-space: nowrap;
 }
 .summary-tab:hover { color: var(--text); }
+.summary-tab { display: inline-flex; align-items: center; gap: 4px; }
 .summary-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
-.summary-tab-page > h3:first-child,
-.summary-tab-page > .summary-mat-section:first-child h3 { margin-top: 2px; }
+.summary-tab-clip { display: inline-flex; align-items: center; color: #9aa6b2; }
+/* the tab IS the section heading — hide the redundant in-page section title */
+.summary-tab-page h3 { display: none; }
+.summary-tab-page > :first-child,
+.summary-tab-page > .summary-mat-section:first-child > :first-child { margin-top: 0; }
 .modal-section { margin-bottom: 22px; }
 .modal-section h4 {
   font-size: 15px;
@@ -1699,25 +1704,31 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .summary-placeholder { color: var(--muted); font-style: italic; }
 
 .summary-table {
-  width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0 14px;
+  width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 12px 0 18px;
 }
 .summary-table th {
   background: var(--accent-light);
-  padding: 7px 10px;
+  padding: 9px 12px;
   text-align: left;
   font-weight: 700;
   color: var(--accent);
-  border: 1px solid #c7d9ee;
+  border-bottom: 2px solid #c7d9ee;   /* only a header underline, no cell grid */
   white-space: nowrap;
 }
 .summary-table td {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);   /* horizontal separators only — cleaner */
   vertical-align: top;
-  line-height: 1.5;
+  line-height: 1.65;
 }
-.summary-table tr:nth-child(even) td { background: #f7fafd; }
-.summary-table tr:first-child td { font-weight: 600; background: var(--accent-light); color: var(--accent); }
+.summary-table tr:nth-child(even) td { background: #f9fbfd; }
+.summary-table tr:first-child td { background: #eef4fb; }   /* 本案 row, subtle */
+
+/* 競業表格欄寬：把空間留給文字欄，狀態/類型欄收窄不換行 */
+.competitor-table td:nth-child(1), .competitor-table th:nth-child(1) { width: 14%; }   /* 公司名稱 */
+.competitor-table td:nth-child(2), .competitor-table th:nth-child(2) { width: 26%; }   /* 核心業務 */
+.competitor-table td:nth-child(4), .competitor-table th:nth-child(4),
+.competitor-table td:nth-child(5), .competitor-table th:nth-child(5) { white-space: nowrap; width: 1%; }  /* 上市狀態 / 競業類型 */
 
 /* ── 競業表格：可點擊公司名稱 ── */
 .competitor-chip {
