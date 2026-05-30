@@ -3790,10 +3790,14 @@ async function openManualDialogWithName(name, warn = false) {
   setTimeout(() => { ta.focus(); if (warn) ta.select(); }, 50);
 }
 
+// Core name without the legal suffix, so 短名/全名 compare equal
+// (e.g.「廣太綠能」≡「廣太綠能股份有限公司」).
+function _coreName(s) {
+  return (s || "").replace(/(股份有限公司|有限公司)$/, "").trim();
+}
+
 function openCompanyByName(name) {
-  const co = state.companies.find(
-    c => c.name === name || c.name === name + "股份有限公司" || c.name === name + "有限公司"
-  );
+  const co = state.companies.find(c => _coreName(c.name) === _coreName(name));
   if (co) openModal(co.id);
 }
 
@@ -5698,9 +5702,7 @@ function renderSummary(raw, matHeadings) {
         const content = c.trim();
         if (isCompetitorTable && ci === 0 && !content.includes("（本案）")) {
           const rawName = content.replace(/（[^）]*）/g, "").trim();
-          const alreadyAdded = state.companies.some(
-            co => co.name === rawName || co.name === rawName + "股份有限公司" || co.name === rawName + "有限公司"
-          );
+          const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
           const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
           const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
           const safeN = escHtml(rawName);
