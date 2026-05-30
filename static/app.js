@@ -3801,6 +3801,17 @@ function openCompanyByName(name) {
   if (co) openModal(co.id);
 }
 
+// Re-evaluate competitor chips' 「已加入」state in-place (no full re-render), e.g.
+// after a competitor was just added to the company list from its chip.
+function _refreshCompetitorChips() {
+  document.querySelectorAll("#modal-summary .competitor-chip").forEach(chip => {
+    const added = state.companies.some(co => _coreName(co.name) === _coreName(chip.dataset.cname));
+    chip.dataset.added = added;
+    chip.classList.toggle("competitor-chip--added", added);
+    chip.title = added ? "已在清單中，點擊開啟" : "點擊新增此公司";
+  });
+}
+
 function handleCompetitorChip(el) {
   const name  = el.dataset.cname;
   const added = el.dataset.added === "true";
@@ -4509,6 +4520,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     computeGroups();
     renderSidebar();
     renderGrid();
+    _refreshCompetitorChips();   // 若 modal 開著，更新競業表格「已加入」綠勾
   } catch (err) {
     toast(`儲存失敗：${err.message}`, true);
     return;
