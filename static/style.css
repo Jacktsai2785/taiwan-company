@@ -2777,14 +2777,11 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 }
 #mat-review-all-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; cursor: pointer; }
 
-/* ── Modal summary: sections applied from 簡報 ── */
-.summary-mat-section {
-  border-left: 3px solid #0d8f7a;
-  padding-left: 12px;
-  margin: 6px 0 10px;
-  background: rgba(13,143,122,.045);
-  border-radius: 0 6px 6px 0;
-}
+/* ── Modal summary: sections that incorporate 簡報 content ──
+   Clean treatment (like other sections): teal title + trailing 📎, no box.
+   `display:contents` keeps the wrapper as a grouping/marking boundary without
+   adding any visual box of its own. */
+.summary-mat-section { display: contents; }
 .summary-mat-section h3 { color: #0b6e5f; }
 /* 「營運綜覽」umbrella sub-headings (### → h4) */
 .summary-mat-section h4 {
@@ -2793,16 +2790,10 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   font-size: 13px;
   font-weight: 700;
 }
-.summary-mat-chip {
-  font-size: 10px;
-  font-weight: 700;
-  color: #0d8f7a;
-  background: #e3f5ee;
-  border-radius: 99px;
-  padding: 1px 8px;
-  margin-left: 6px;
-  vertical-align: middle;
-}
+/* title + 📎 grouped as one flex item so the title stays left-aligned with
+   non-簡報 sections and the icon trails right after the text. */
+.mat-h3-label { display: inline-flex; align-items: center; }
+.summary-mat-icon { font-size: 11px; margin-left: 5px; }
 /* Inline「（簡報補充…）」inside list items (kept inline so bullets aren't broken) */
 .mat-supplement {
   color: #0b6e5f;

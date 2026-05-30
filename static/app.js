@@ -5616,7 +5616,7 @@ function renderSummary(raw, matHeadings) {
         if (matSet.has(text)) {
           result.push('<div class="summary-mat-section">');
           matOpen = true;
-          result.push(`<h3>${hm[1]} <span class="summary-mat-chip">簡報</span></h3>`);
+          result.push(`<h3><span class="mat-h3-label">${hm[1]} <span class="summary-mat-icon" title="此段含簡報補充資訊">📎</span></span></h3>`);
           continue;
         }
       }
