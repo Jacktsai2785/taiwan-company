@@ -610,6 +610,11 @@ def _docx_summary_body(doc, lines: list[str],
             i += 1
             continue
 
+        # 競業類型定義行：前端改用頁籤 tooltip，匯出也一併略過
+        if re.match(r"^競業類型定義[：:]", stripped):
+            i += 1
+            continue
+
         # ### sub-heading
         if stripped.startswith("###"):
             _docx_summary_h4(doc, stripped.lstrip("#").strip())
@@ -1122,6 +1127,10 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
             line = lines[i].strip()
             if not line or re.match(r"^-{3,}$", line):   # skip blank / hr
                 y += 4; i += 1; continue
+
+            # 競業類型定義行：前端改用頁籤 tooltip，匯出也一併略過
+            if re.match(r"^競業類型定義[：:]", line):
+                i += 1; continue
 
             # Markdown table
             if line.startswith("|") and i + 1 < len(lines) and \
