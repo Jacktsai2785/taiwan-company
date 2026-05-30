@@ -151,19 +151,26 @@ def _bullet_sup_inner(raw: str) -> tuple[str, str] | None:
     return raw[:idx] + inner + raw[end:], src
 
 
-def _strip_nested_sup(inner: str) -> str:
-    """Unwrap redundant「（XX補充…）」markers inside a callout body (mirrors _stripNestedSup)."""
-    out, i = "", 0
+def _split_callout_body(inner: str) -> list[str]:
+    """Split a callout body into paragraphs at nested「（XX補充…）」markers (mirrors _splitCalloutBody)."""
+    parts: list[str] = []
+    i = 0
     while True:
         m = _SUP_RE.search(inner, i)
         if not m:
-            out += inner[i:]
+            t = inner[i:].strip()
+            if t:
+                parts.append(t)
             break
-        out += inner[i:m.start()]
+        t = inner[i:m.start()].strip()
+        if t:
+            parts.append(t)
         sub, end = _sup_span(inner, m.start())
-        out += sub
+        s = sub.strip()
+        if s:
+            parts.append(s)
         i = end
-    return out
+    return parts or [inner.strip()]
 
 
 def _inline_sup_segments(text: str) -> list[tuple[str, str | None]]:
@@ -557,7 +564,6 @@ def _docx_summary_h4(doc, text: str):
 
 def _docx_callout(doc, inner: str, src: str):
     """Source-coloured supplement box: tinted fill + left accent bar + label. Mirrors .sup-callout."""
-    inner = _strip_nested_sup(inner)
     style = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
     tbl  = doc.add_table(rows=1, cols=1)
     _no_table_borders(tbl)
@@ -573,9 +579,11 @@ def _docx_callout(doc, inner: str, src: str):
     lr.font.size = Pt(8.5)
     lr.font.color.rgb = RGBColor.from_string(style["label"])
 
-    bp = cell.add_paragraph()
-    _para_spacing(bp, before=0, after=0, line=270)
-    _add_rich_runs(bp, inner, 9, _R.TEXT)
+    parts = _split_callout_body(inner)
+    for pi, part in enumerate(parts):
+        bp = cell.add_paragraph()
+        _para_spacing(bp, before=0, after=(60 if pi < len(parts) - 1 else 0), line=270)
+        _add_rich_runs(bp, part, 9, _R.TEXT)
 
     sp = doc.add_paragraph()
     _para_spacing(sp, before=0, after=0)
@@ -1064,18 +1072,20 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
     # ── Supplement callout (source-coloured box) ──────────────────────────────
 
     def callout(inner: str, src: str):
-        """Tinted box + left accent bar + coloured label. Mirrors .sup-callout."""
+        """Tinted box + left accent bar + coloured label, body split into 段. Mirrors .sup-callout."""
         nonlocal y
-        inner    = _strip_nested_sup(inner)
         style    = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
         bg_c     = _hex_to_float(style["bg"])
         bar_c    = _hex_to_float(style["border"])
         label_c  = _hex_to_float(style["label"])
-        PAD, BAR = 8.0, 3.0
+        PAD, BAR, PARA_GAP = 8.0, 3.0, 5.0
         inner_x  = ML + BAR + PAD
         text_w   = CW - BAR - PAD * 2
-        body     = _wrap_mixed(_strip_inline_md(inner), 9, text_w)
-        box_h    = PAD + 10 + 5 + len(body) * (9 + 3) + PAD
+        wrapped  = [_wrap_mixed(_strip_inline_md(p), 9, text_w)
+                    for p in _split_callout_body(inner)]
+        body_h   = (sum(len(w) * (9 + 3) for w in wrapped)
+                    + PARA_GAP * (len(wrapped) - 1))
+        box_h    = PAD + 10 + 5 + body_h + PAD
 
         # If the whole box won't fit, start a fresh page so the fill stays intact.
         if y + box_h > PAGE_H - MB and box_h <= PAGE_H - 60 - MB:
@@ -1086,9 +1096,12 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
         yy = y + PAD
         txt(style["name"], inner_x, yy + 8.5, size=8.5, color=label_c)
         yy += 10 + 5
-        for ln in body:
-            txt(ln, inner_x, yy + 9, size=9, color=_F.TEXT)
-            yy += 9 + 3
+        for wi, w in enumerate(wrapped):
+            for ln in w:
+                txt(ln, inner_x, yy + 9, size=9, color=_F.TEXT)
+                yy += 9 + 3
+            if wi < len(wrapped) - 1:
+                yy += PARA_GAP
         y += box_h + 6
 
     # ── PDF summary body ──────────────────────────────────────────────────────

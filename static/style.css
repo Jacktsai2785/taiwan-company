@@ -3031,6 +3031,8 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   line-height: 1.85;
 }
 .sup-callout.open .sup-callout-body { display: block; }
+.sup-callout-body p { margin: 0 0 9px; }
+.sup-callout-body p:last-child { margin-bottom: 0; }
 
 #memo-transcript-box { border-top: 1px solid var(--border); }
 #memo-transcript-header {

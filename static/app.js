@@ -5969,29 +5969,31 @@ function _splitSupplements(line) {
 }
 
 // A callout body already carries a source label, so any further「（XX補充…）」
-// markers inside it are redundant double-tagging from the model. Unwrap them to
-// plain content (keep the text, drop the marker shell).
-function _stripNestedSup(inner) {
-  let out = "", i = 0;
+// markers inside it are redundant double-tagging. They also mark the natural
+// topic boundaries, so split the body INTO paragraphs at those markers (instead
+// of flattening to one wall of text): head text + each note's content = one 段.
+function _splitCalloutBody(inner) {
+  const parts = [];
+  let i = 0;
   for (;;) {
     const f = _findSup(inner, i);
-    if (!f) { out += inner.slice(i); break; }
-    out += inner.slice(i, f.idx);
+    if (!f) { const t = inner.slice(i).trim(); if (t) parts.push(t); break; }
+    const t = inner.slice(i, f.idx).trim(); if (t) parts.push(t);
     const { inner: sub, end } = _supSpan(inner, f.idx);
-    out += sub;
+    const s = sub.trim(); if (s) parts.push(s);
     i = end;
   }
-  return out;
+  return parts.length ? parts : [inner.trim()];
 }
 
 function _supCallout(inner, src) {
-  inner = _stripNestedSup(inner);
   const meta = _SUP_META[src] || _SUP_META["簡報"];
+  const body = _splitCalloutBody(inner).map(p => `<p>${inlineMarkdown(p)}</p>`).join("");
   return `<div class="sup-callout sup-${meta.cls} open">` +
     '<div class="sup-callout-head" onclick="this.parentElement.classList.toggle(&quot;open&quot;)">' +
     `<span class="sup-callout-label">${meta.icon} ${meta.label}</span>` +
     '<span class="sup-callout-caret">▸</span></div>' +
-    `<div class="sup-callout-body">${inlineMarkdown(inner)}</div></div>`;
+    `<div class="sup-callout-body">${body}</div></div>`;
 }
 
 /* ── Util ── */
