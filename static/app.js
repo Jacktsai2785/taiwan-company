@@ -2280,7 +2280,9 @@ function showModalSection(page) {
 // Update count badges. All three pages are always clickable (專利 page lets you
 // generate when empty), so no bookmark is greyed out.
 function _refreshModalBookmarks() {
-  const patCount = document.getElementById("modal-patents-body")?.childElementCount || 0;
+  // 排除「展開全部」那一列 fold row，只算真正的專利列
+  const patCount = document.getElementById("modal-patents-body")
+    ?.querySelectorAll("tr:not(#patent-fold-row)").length || 0;
   document.querySelectorAll("#modal-nav .modal-bm").forEach(b => b.classList.remove("disabled"));
   const patBadge = document.getElementById("bm-ct-patents");
   if (patBadge) { patBadge.textContent = patCount || ""; patBadge.style.display = patCount ? "" : "none"; }
