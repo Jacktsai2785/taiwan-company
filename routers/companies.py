@@ -1231,6 +1231,66 @@ def _save_summary_result(company_id: str, result: dict) -> dict:
     return fields
 
 
+class AddCompetitorRequest(BaseModel):
+    name: str
+    competition_type: str
+
+
+_COMPETITION_TYPES = {"正面競業", "替代路徑", "側翼潛入", "垂直整合"}
+
+
+def _insert_competitor_row(summary: str, row: str) -> str:
+    """Append a row to the markdown 競業分析 table in summary. Returns unchanged
+    summary if no such table is found."""
+    lines = summary.split("\n")
+    in_section = False
+    last_row_idx = -1
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if re.match(r"^##\s+競業分析", s):
+            in_section = True
+            continue
+        if in_section and re.match(r"^##\s+", s):
+            break
+        if in_section and s.startswith("|") and s.endswith("|") and not re.match(r"^\|[\s\-|]+\|$", s):
+            last_row_idx = i
+    if last_row_idx == -1:
+        return summary
+    lines.insert(last_row_idx + 1, row)
+    return "\n".join(lines)
+
+
+@router.post("/{company_id}/competitors/add")
+async def add_competitor(company_id: str, req: AddCompetitorRequest, ai: dict = Depends(ai_from_headers)):
+    """Manually add a competitor: AI researches it (WebSearch) and fills 核心業務/
+    差異化/上市狀態; 競業類型 is the user's choice. Inserted into the 競業分析 table."""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    name = (req.name or "").strip()
+    ctype = (req.competition_type or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="請輸入競業公司名稱")
+    if ctype not in _COMPETITION_TYPES:
+        raise HTTPException(status_code=422, detail="競業類型不正確")
+    if not (company.get("summary") or "").strip():
+        raise HTTPException(status_code=422, detail="本案尚無公司簡介，請先生成簡介再新增競業")
+
+    analysis = await report_generator.analyze_competitor(company, name, ctype, **ai)
+    # use the AI-resolved full legal name (matches other rows + enables company link);
+    # listing is already resolved in analyze_competitor, so don't run the downgrading
+    # _fix_competitor_listing here (it would clobber short/unmatched names to 非公發).
+    row_name = analysis.get("full_name") or name
+    row = f"| {row_name} | {analysis['core_biz']} | {analysis['differentiation']} | {analysis['listing']} | {ctype} |"
+    new_summary = _insert_competitor_row(company.get("summary", ""), row)
+    if new_summary == company.get("summary", ""):
+        raise HTTPException(status_code=422, detail="找不到競業分析表格，請先生成公司簡介")
+
+    competitors = _resolve_competitor_ids(report_generator._parse_competitor_table(new_summary))
+    data_store.update_company(company_id, {"summary": new_summary, "competitors": competitors})
+    return {"summary": new_summary, "competitors": competitors}
+
+
 async def _enrich_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
     _running.add(company_id)
     events: list[dict] = []

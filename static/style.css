@@ -832,6 +832,34 @@ body {
 .summary-tab-page h3 { display: none; }
 .summary-tab-page > :first-child,
 .summary-tab-page > .summary-mat-section:first-child > :first-child { margin-top: 0; }
+
+/* 手動新增競業 */
+.add-comp-wrap { margin: 14px 0 4px; }
+.add-comp-btn {
+  font-size: 12.5px; font-weight: 600; color: var(--accent);
+  border: 1px dashed var(--accent); border-radius: 8px; background: #fff;
+  padding: 6px 14px; cursor: pointer;
+}
+.add-comp-btn:hover { background: var(--accent-light); }
+.add-comp-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.add-comp-name {
+  flex: 1; min-width: 160px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px;
+}
+.add-comp-name:focus { border-color: var(--accent); outline: none; }
+.add-comp-type {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; background: #fff; cursor: pointer;
+}
+.add-comp-submit {
+  font-size: 12.5px; font-weight: 700; color: #fff; background: var(--accent);
+  border: none; border-radius: 6px; padding: 8px 15px; cursor: pointer;
+}
+.add-comp-submit:hover { background: #255d90; }
+.add-comp-submit:disabled { opacity: .55; cursor: not-allowed; }
+.add-comp-status { font-size: 12px; }
+.add-comp-status.info { color: var(--accent); }
+.add-comp-status.err { color: #e05a5a; }
 .modal-section { margin-bottom: 22px; }
 .modal-section h4 {
   font-size: 15px;

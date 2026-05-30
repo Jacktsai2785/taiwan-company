@@ -2316,6 +2316,7 @@ function applySummaryTabs(container) {
     page.dataset.idx = i;
     sec.nodes[0].before(page);
     sec.nodes.forEach(n => page.appendChild(n));
+    if (sec.title === "競業分析") page.appendChild(_addCompetitorUI());
     page.style.display = i === 0 ? "" : "none";
     const tab = document.createElement("div");
     tab.className = "summary-tab" + (i === 0 ? " on" : "");
@@ -2340,6 +2341,62 @@ function _showSummaryTab(container, idx) {
   document.querySelectorAll("#summary-tabbar .summary-tab").forEach((t, i) => {
     t.classList.toggle("on", i == idx);
   });
+}
+
+/* ── 手動新增競業 ── */
+function _addCompetitorUI() {
+  const wrap = document.createElement("div");
+  wrap.className = "add-comp-wrap";
+  wrap.innerHTML =
+    `<button class="add-comp-btn" onclick="toggleAddCompetitor(this)">＋ 新增競業</button>` +
+    `<div class="add-comp-form" style="display:none">` +
+      `<input class="add-comp-name" placeholder="競業公司名稱" />` +
+      `<select class="add-comp-type">` +
+        `<option value="正面競業">正面競業</option>` +
+        `<option value="替代路徑">替代路徑</option>` +
+        `<option value="側翼潛入">側翼潛入</option>` +
+        `<option value="垂直整合">垂直整合</option>` +
+      `</select>` +
+      `<button class="add-comp-submit" onclick="submitAddCompetitor(this)">分析並加入</button>` +
+      `<span class="add-comp-status"></span>` +
+    `</div>`;
+  return wrap;
+}
+
+function toggleAddCompetitor(btn) {
+  const form = btn.parentElement.querySelector(".add-comp-form");
+  const open = form.style.display === "none";
+  form.style.display = open ? "" : "none";
+  btn.textContent = open ? "✕ 取消" : "＋ 新增競業";
+  if (open) form.querySelector(".add-comp-name").focus();
+}
+
+async function submitAddCompetitor(btn) {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const form = btn.closest(".add-comp-form");
+  const name = form.querySelector(".add-comp-name").value.trim();
+  const type = form.querySelector(".add-comp-type").value;
+  const status = form.querySelector(".add-comp-status");
+  if (!name) { status.textContent = "請輸入公司名稱"; status.className = "add-comp-status err"; return; }
+  if (isCloudDeploy() && !getAiKey()) { toast("請先在設定中輸入 API Key"); openSettings(); return; }
+
+  btn.disabled = true;
+  status.textContent = "🔍 AI 分析中（約 30–60 秒）…";
+  status.className = "add-comp-status info";
+  try {
+    const res = await api("POST", `/api/companies/${id}/competitors/add`, { name, competition_type: type });
+    const c = state.companies.find(x => x.id === id);
+    if (c) { c.summary = res.summary; c.competitors = res.competitors; }
+    _updateSummaryInModal(c);   // rebuild summary tabs with the new row
+    const ct = [...document.querySelectorAll("#summary-tabbar .summary-tab")].find(t => t.textContent.includes("競業"));
+    if (ct) ct.click();         // stay on 競業分析 tab
+    toast(`已新增競業：${name}`);
+  } catch (err) {
+    status.textContent = `❌ ${err.message}`;
+    status.className = "add-comp-status err";
+    btn.disabled = false;
+  }
 }
 
 

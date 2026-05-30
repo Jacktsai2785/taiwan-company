@@ -241,6 +241,59 @@ _NORMAL_MODEL = "claude-sonnet-4-6"
 _DEEP_MODEL = "claude-opus-4-7"
 
 
+def _grab_field(raw: str, label: str) -> str:
+    """Extract the value after a「label：value」line from model output."""
+    m = re.search(rf"^{re.escape(label)}\s*[：:]\s*(.+)$", raw or "", re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
+                             api_key: str = "", provider: str = "anthropic") -> dict:
+    """Research a single named competitor (WebSearch) in the context of the case
+    company, and return {core_biz, differentiation, listing}. 競業類型 is supplied
+    by the user, not the model."""
+    name = company.get("name", "")
+    short, full = _company_name_variants(name)
+    biz = _extract_section(company.get("summary", ""), "業務概況") or company.get("blurb", "") or "不詳"
+    prompt = f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
+
+本案公司是「{full}」（簡稱：{short}），其業務概況：
+{biz[:700]}
+
+請用 WebSearch 搜尋「{comp_name}」這家公司（官網、公司介紹、媒體報導、104 公司頁），
+然後以「本案的競爭對手」角度分析它，回傳以下四項，**格式固定、每項一行、不要其他文字**：
+
+正式登記名稱：（該公司的完整登記名稱，如 ○○股份有限公司／○○有限公司；查不到就填你查到的名稱）
+核心業務：（一句話，{comp_name} 的核心產品或服務）
+主要差異化特點：（相對本案，{comp_name} 的差異化或相對優劣勢，1-2 點，具體）
+上市狀態：（只能填 上市／上櫃／興櫃／創新板／非公發 其一，查不到填 非公發）
+
+若完全查無此公司資料，核心業務與差異化請據實標「——（查無公開資料）」。"""
+    raw = await asyncio.to_thread(
+        claude_client.ask, prompt, 180, _WEB_TOOLS, api_key, provider, 8, _NORMAL_MODEL
+    )
+    full_name = _grab_field(raw, "正式登記名稱") or comp_name
+    listing_ai = _grab_field(raw, "上市狀態")
+    listing_ai = listing_ai if listing_ai in _VALID_LISTING else "非公發"
+    # Authoritative listing via TWSE/TPEX cache (matches on full legal name); fall
+    # back to the model's WebSearch answer when the cache has no match.
+    listing = listing_ai
+    try:
+        async with httpx.AsyncClient() as client:
+            await _ensure_listing_cache(client)
+        resolved = _resolve_listing_status("", full_name)
+        if resolved in {"上市", "上櫃", "興櫃", "創新板"}:
+            listing = resolved
+    except Exception as e:
+        log.warning("competitor listing resolve failed for %s: %s", full_name, e)
+    return {
+        "full_name": full_name,
+        "core_biz": _grab_field(raw, "核心業務") or "——",
+        "differentiation": _grab_field(raw, "主要差異化特點") or "——",
+        "listing": listing,
+    }
+
+
 async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic",
                               competitor_context: dict | None = None) -> dict:
     """Search news/media and refine the existing summary. Returns {summary, blurb}.
