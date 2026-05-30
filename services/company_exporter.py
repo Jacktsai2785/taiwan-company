@@ -70,6 +70,93 @@ def _strip_inline_md(text: str) -> str:
     return re.sub(r"\*(.+?)\*", r"\1", text)
 
 
+# ── 補充來源 callout — mirrors _supCallout / .sup-callout in app.js + style.css ──
+# bg = 低透明度 tint 壓在白底上的近似純色。
+
+_SUP_RE       = re.compile(r"（(簡報|訪談|介紹|筆記)補充")
+_SUP_MARKLEN  = 5   # （ + 簡報/訪談/… (2) + 補充 (2)
+_SUP_STYLE = {
+    "簡報": {"name": "簡報補充", "border": "0d8f7a", "bg": "eef7f6", "label": "0b6e5f"},
+    "訪談": {"name": "訪談補充", "border": "7c5cbf", "bg": "f5f2fa", "label": "5b45a0"},
+    "介紹": {"name": "介紹補充", "border": "c47d0a", "bg": "faf5eb", "label": "9a6307"},
+    "筆記": {"name": "筆記補充", "border": "5b6b7d", "bg": "f2f3f5", "label": "46535f"},
+}
+
+
+def _hex_to_float(h: str) -> tuple[float, float, float]:
+    return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255)
+
+
+def _sup_span(s: str, idx: int) -> tuple[str, int]:
+    """Span of one「（XX補充…）」note at idx → (inner_text, end). Mirrors _supSpan."""
+    sep = s[idx + _SUP_MARKLEN] if idx + _SUP_MARKLEN < len(s) else ""
+    if sep == "）":
+        return s[idx + _SUP_MARKLEN + 1:], len(s)
+    depth, j = 0, idx
+    while j < len(s):
+        if s[j] == "（":
+            depth += 1
+        elif s[j] == "）":
+            depth -= 1
+            if depth == 0:
+                j += 1
+                break
+        j += 1
+    inner_start = idx + _SUP_MARKLEN + (1 if sep in ("：", ":") else 0)
+    return s[inner_start:j - 1], j
+
+
+def _split_supplements(line: str) -> list[tuple[str, str, str | None]]:
+    """[(kind, text, src)] — kind 'text'|'sup'; sup text is marker-stripped inner. Mirrors _splitSupplements."""
+    pieces: list[tuple[str, str, str | None]] = []
+    i = 0
+    while True:
+        m = _SUP_RE.search(line, i)
+        if not m:
+            if i < len(line):
+                pieces.append(("text", line[i:], None))
+            break
+        idx, src = m.start(), m.group(1)
+        if idx > i:
+            pieces.append(("text", line[i:idx], None))
+        inner, end = _sup_span(line, idx)
+        pieces.append(("sup", inner, src))
+        i = end
+    return pieces
+
+
+def _bullet_sup_inner(raw: str) -> tuple[str, str] | None:
+    """If the whole bullet is a supplement note → (inner, src), else None. Mirrors _bulletSupInner."""
+    m = re.match(r"^(\*\*)?（(簡報|訪談|介紹|筆記)補充[）：]", raw)
+    if not m:
+        return None
+    src = m.group(2)
+    idx = raw.index("（" + src + "補充")
+    if idx + _SUP_MARKLEN < len(raw) and raw[idx + _SUP_MARKLEN] == "）":
+        return raw[:idx] + raw[idx + _SUP_MARKLEN + 1:], src
+    inner, end = _sup_span(raw, idx)
+    return raw[:idx] + inner + raw[end:], src
+
+
+def _inline_sup_segments(text: str) -> list[tuple[str, str | None]]:
+    """[(text, src_or_None)] keeping the full marker text for inline-coloured spans. Mirrors _wrapSupplements."""
+    segs: list[tuple[str, str | None]] = []
+    i = 0
+    while True:
+        m = _SUP_RE.search(text, i)
+        if not m:
+            if i < len(text):
+                segs.append((text[i:], None))
+            break
+        idx, src = m.start(), m.group(1)
+        if idx > i:
+            segs.append((text[i:idx], None))
+        _, end = _sup_span(text, idx)
+        segs.append((text[idx:end], src))
+        i = end
+    return segs
+
+
 def _wrap_smart(text: str, size: float, max_w: float) -> list[str]:
     """Width-aware line wrap: CJK chars ≈ 1.0× size, ASCII ≈ 0.55× size."""
     if not text:
@@ -319,14 +406,14 @@ def _no_table_borders(table):
     tblPr.append(tblBdr)
 
 
-def _set_cell_borders(cell, hex_color: str = "d1dae6", sides=("bottom",)):
+def _set_cell_borders(cell, hex_color: str = "d1dae6", sides=("bottom",), sz: int = 4):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBdr = OxmlElement("w:tcBorders")
     for side in sides:
         el = OxmlElement(f"w:{side}")
         el.set(qn("w:val"),   "single")
-        el.set(qn("w:sz"),    "4")
+        el.set(qn("w:sz"),    str(sz))
         el.set(qn("w:space"), "0")
         el.set(qn("w:color"), hex_color)
         tcBdr.append(el)
@@ -389,6 +476,20 @@ def _add_md_runs(para, text: str, size_pt: float, color: RGBColor):
         r.font.color.rgb = color
 
 
+def _add_rich_runs(para, text: str, size_pt: float, base_color: RGBColor):
+    """Like _add_md_runs but colours inline 「（XX補充…）」spans by source (mirrors _wrapSupplements)."""
+    for seg, src in _inline_sup_segments(text):
+        color = RGBColor.from_string(_SUP_STYLE[src]["label"]) if src else base_color
+        for part in re.split(r"(\*\*[^*]+\*\*)", seg):
+            if not part:
+                continue
+            bold = part.startswith("**") and part.endswith("**")
+            r = para.add_run(part[2:-2] if bold else part)
+            r.bold = bold
+            r.font.size = Pt(size_pt)
+            r.font.color.rgb = color
+
+
 # ── DOCX builder helpers ──────────────────────────────────────────────────────
 
 def _docx_section_heading(doc, text: str):
@@ -424,6 +525,31 @@ def _docx_summary_h4(doc, text: str):
     r.font.size = Pt(9)
     r.font.color.rgb = _R.MUTED
     return p
+
+
+def _docx_callout(doc, inner: str, src: str):
+    """Source-coloured supplement box: tinted fill + left accent bar + label. Mirrors .sup-callout."""
+    style = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
+    tbl  = doc.add_table(rows=1, cols=1)
+    _no_table_borders(tbl)
+    cell = tbl.cell(0, 0)
+    _shading(cell, style["bg"])
+    _set_cell_borders(cell, style["border"], ("left",), sz=18)   # ~3px accent bar
+    _cell_margins(cell, top=70, bottom=70, left=150, right=130)
+
+    lp = cell.paragraphs[0]
+    _para_spacing(lp, before=0, after=40)
+    lr = lp.add_run(style["name"])
+    lr.bold = True
+    lr.font.size = Pt(8.5)
+    lr.font.color.rgb = RGBColor.from_string(style["label"])
+
+    bp = cell.add_paragraph()
+    _para_spacing(bp, before=0, after=0, line=270)
+    _add_rich_runs(bp, inner, 9, _R.TEXT)
+
+    sp = doc.add_paragraph()
+    _para_spacing(sp, before=0, after=0)
 
 
 def _docx_summary_body(doc, lines: list[str],
@@ -485,6 +611,12 @@ def _docx_summary_body(doc, lines: list[str],
         # List item — hanging indent matching PDF (bullet at 10pt, text at 22pt)
         if re.match(r"^[-*]\s+", stripped) or re.match(r"^\d+\.\s+", stripped):
             content = re.sub(r"^[-*]\s+", "", re.sub(r"^\d+\.\s+", "", stripped))
+            # Whole-bullet supplement → callout box (mirrors _bulletSupInner path)
+            bsup = _bullet_sup_inner(content)
+            if bsup:
+                _docx_callout(doc, bsup[0], bsup[1])
+                i += 1
+                continue
             p   = doc.add_paragraph()
             _para_spacing(p, before=0, after=40, line=276)
             pPr = p._p.get_or_add_pPr()
@@ -495,14 +627,18 @@ def _docx_summary_body(doc, lines: list[str],
             br = p.add_run("• ")
             br.font.size      = Pt(8)
             br.font.color.rgb = _R.TEXT
-            _add_md_runs(p, content, 9.5, _R.TEXT)
+            _add_rich_runs(p, content, 9.5, _R.TEXT)   # inline supplements coloured
             i += 1
             continue
 
-        # Regular paragraph
-        p = doc.add_paragraph()
-        _para_spacing(p, before=20, after=60, line=276)
-        _add_md_runs(p, stripped, 9.5, _R.TEXT)
+        # Regular paragraph — split out supplement notes into their own callout boxes
+        for kind, text, src in _split_supplements(stripped):
+            if kind == "sup":
+                _docx_callout(doc, text, src)
+            elif text.strip():
+                p = doc.add_paragraph()
+                _para_spacing(p, before=20, after=60, line=276)
+                _add_md_runs(p, text.strip(), 9.5, _R.TEXT)
         i += 1
 
 
@@ -895,6 +1031,35 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
             y += row_h
         y += 6
 
+    # ── Supplement callout (source-coloured box) ──────────────────────────────
+
+    def callout(inner: str, src: str):
+        """Tinted box + left accent bar + coloured label. Mirrors .sup-callout."""
+        nonlocal y
+        style    = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
+        bg_c     = _hex_to_float(style["bg"])
+        bar_c    = _hex_to_float(style["border"])
+        label_c  = _hex_to_float(style["label"])
+        PAD, BAR = 8.0, 3.0
+        inner_x  = ML + BAR + PAD
+        text_w   = CW - BAR - PAD * 2
+        body     = _wrap_mixed(_strip_inline_md(inner), 9, text_w)
+        box_h    = PAD + 10 + 5 + len(body) * (9 + 3) + PAD
+
+        # If the whole box won't fit, start a fresh page so the fill stays intact.
+        if y + box_h > PAGE_H - MB and box_h <= PAGE_H - 60 - MB:
+            _new_page()
+
+        filled_rect(ML, y, ML + CW, y + box_h, bg_c)      # tinted background
+        filled_rect(ML, y, ML + BAR, y + box_h, bar_c)    # left accent bar
+        yy = y + PAD
+        txt(style["name"], inner_x, yy + 8.5, size=8.5, color=label_c)
+        yy += 10 + 5
+        for ln in body:
+            txt(ln, inner_x, yy + 9, size=9, color=_F.TEXT)
+            yy += 9 + 3
+        y += box_h + 6
+
     # ── PDF summary body ──────────────────────────────────────────────────────
 
     def pdf_summary_body(lines: list[str]):
@@ -921,6 +1086,11 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
             # List item — hanging indent: bullet at BX, text+wrap at TX
             if re.match(r"^[-*]\s+", line) or re.match(r"^\d+\.\s+", line):
                 content = re.sub(r"^[-*]\s+", "", re.sub(r"^\d+\.\s+", "", line))
+                # Whole-bullet supplement → callout box (mirrors _bulletSupInner path)
+                bsup = _bullet_sup_inner(content)
+                if bsup:
+                    callout(bsup[0], bsup[1])
+                    i += 1; continue
                 BX, TX = ML + 10, ML + 22          # bullet pos, text pos
                 TW     = CW - (TX - ML)             # wrap width from TX to right margin
                 lns    = _wrap_mixed(_strip_inline_md(content), 9.5, TW)
@@ -938,8 +1108,12 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
                 summary_h4(line.lstrip("#").strip())
                 i += 1; continue
 
-            # Regular paragraph
-            put(line, size=9.5, gap_after=5)
+            # Regular paragraph — split out supplement notes into their own callout boxes
+            for kind, text, src in _split_supplements(line):
+                if kind == "sup":
+                    callout(text, src)
+                elif text.strip():
+                    put(text.strip(), size=9.5, gap_after=5)
             i += 1
 
     # ═══════════════ Build document ═══════════════

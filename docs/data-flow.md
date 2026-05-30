@@ -43,6 +43,7 @@ source_repo: ~/taiwan-company
 
 - 大股東段比照 modal `_renderShareholderSection`：董監事持股合計 < 99.9% 才顯示，列出未揭露比例提醒；並即時串 `mops_investee` 反查哪些公發公司揭露持有本公司股份（查不到不阻擋匯出）
 - 專利段把 `company.patents` 列成表（專利號 / 名稱 / 申請日 / 狀態 / 發明人）
+- **補充來源 callout**：公司簡介裡的「（簡報補充）／（訪談補充）／（介紹補充）／（筆記補充）」比照 modal `_supCallout` 渲染成來源著色的方塊（左側色條 + 底色 tint + 色標題），DOCX 用單格表格、PDF 用 filled rect；行內補充則著色文字。配色與 `style.css` 的 `.sup-*` 一致
 - endpoint 為 async，匯出前先 await holders 反查再交給 exporter
 
 ## 母子公司關係圖
