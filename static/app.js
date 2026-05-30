@@ -5623,7 +5623,7 @@ function renderSummary(raw, matHeadings) {
         if (matSet.has(text)) {
           result.push('<div class="summary-mat-section">');
           matOpen = true;
-          result.push(`<h3><span class="mat-h3-label">${hm[1]} <span class="summary-mat-icon" title="此段含簡報補充資訊">📎</span></span></h3>`);
+          result.push(`<h3><span class="mat-h3-label">${hm[1]} <span class="summary-mat-icon" title="此段含補充資訊">${_CLIP_SVG}</span></span></h3>`);
           continue;
         }
       }
@@ -5642,10 +5642,14 @@ function inlineMarkdown(str) {
     .replace(/\*(.+?)\*/g, "<em>$1</em>");
 }
 
+// Inline SVG paperclip (consistent across OSes, unlike the 📎 emoji which renders
+// thin/ugly on some systems). Tilted clip, inherits colour via currentColor.
+const _CLIP_SVG = '<svg class="ico-clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+
 // Supplement markers by source. All markers are「（XX補充」(opening paren + 4 hanzi).
 const _SUP_RE = /（(簡報|訪談|介紹|筆記)補充/;
 const _SUP_META = {
-  "簡報": { cls: "deck",  icon: "📎", label: "簡報補充" },
+  "簡報": { cls: "deck",  icon: _CLIP_SVG, label: "簡報補充" },
   "訪談": { cls: "talk",  icon: "🎙", label: "訪談補充" },
   "介紹": { cls: "intro", icon: "📄", label: "介紹補充" },
   "筆記": { cls: "note",  icon: "✏", label: "筆記補充" },

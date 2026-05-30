@@ -2847,7 +2847,11 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 /* title + 📎 grouped as one flex item so the title stays left-aligned with
    non-簡報 sections and the icon trails right after the text. */
 .mat-h3-label { display: inline-flex; align-items: center; }
-.summary-mat-icon { font-size: 11px; margin-left: 5px; }
+/* subtle muted-grey paperclip next to the teal heading (low-key, not loud) */
+.summary-mat-icon { display: inline-flex; align-items: center; margin-left: 5px; color: #9aa6b2; }
+/* inline SVG paperclip — consistent across OSes */
+.ico-clip { width: 9px; height: 9px; }
+.sup-callout-label .ico-clip { width: 9px; height: 9px; margin-right: 1px; vertical-align: -2px; }
 /* Inline supplement inside list items (kept inline so bullets aren't broken) —
    source colour set by .mat-sup-{deck,talk,intro,note} */
 .mat-supplement {
