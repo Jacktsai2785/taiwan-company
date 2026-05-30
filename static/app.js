@@ -2243,6 +2243,11 @@ function openModal(id) {
     _renderPatents(id);
   } else {
     if (patTable) patTable.style.display = "none";
+    // 清掉前一間殘留的列與「共 N 筆」，否則 badge 與抬頭會沿用上一間的數字
+    const patBody = document.getElementById("modal-patents-body");
+    if (patBody) patBody.innerHTML = "";
+    const patHint = document.getElementById("modal-patents-hint");
+    if (patHint) patHint.textContent = "";
     if (patentStatus) patentStatus.innerHTML = '<p class="summary-placeholder">尚未生成專利資料，點右上「📋 生成專利」開始（約 15–45 秒）。</p>';
   }
 
