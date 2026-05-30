@@ -150,6 +150,101 @@ def _dir_table_rows(directors: list[dict]) -> tuple[list[list[str]], bool]:
     return [header] + data + [total_row], has_shares
 
 
+# ── 大股東（公發公司反查）helpers — mirrors _renderShareholderSection in app.js ──
+
+_HOLDER_CATEGORY_LABEL = {
+    "subsidiary":       "子公司",
+    "associate":        "關聯企業",
+    "fvoci_noncurrent": "FVOCI股權投資（非流動）",
+    "fvoci_current":    "FVOCI股權投資（流動）",
+    "fvoci_equity":     "FVOCI股權投資",
+    "mainland_china":   "大陸投資",
+    "other_lt_equity":  "其他長期股權",
+}
+
+
+def _holder_pct_display(r: dict, total_shares: int) -> str:
+    """Mirror app.js pctDisplay: 持股張數 + (持股比例)."""
+    shares = r.get("shares_nt")
+    shares_num = None
+    if shares is not None:
+        try:
+            shares_num = float(shares)
+        except (TypeError, ValueError):
+            shares_num = None
+    shares_str = f"{int(shares_num):,}張" if shares_num is not None else None
+
+    pct = r.get("pct")
+    ratio = pct if pct is not None else (
+        shares_num * 1000 / total_shares
+        if (shares_num is not None and total_shares) else None
+    )
+    ratio_str = f"({ratio * 100:.2f}%)" if ratio is not None else None
+
+    if shares_str and ratio_str:
+        return f"{shares_str} {ratio_str}"
+    return shares_str or ratio_str or "—"
+
+
+def _holder_table_rows(results: list[dict], total_shares: int) -> list[list[str]]:
+    header = ["持有公司", "代號", "持股張數/比例", "資料日期", "類型"]
+    rows = [header]
+    for r in results:
+        cat = r.get("category") or ""
+        rows.append([
+            r.get("holder_name") or "—",
+            r.get("holder_id") or "—",
+            _holder_pct_display(r, total_shares),
+            r.get("as_of_date") or "—",
+            _HOLDER_CATEGORY_LABEL.get(cat, cat or "—"),
+        ])
+    return rows
+
+
+def _shareholder_block(company: dict, holders: dict | None) -> dict | None:
+    """
+    Return a render plan for the 大股東 section, or None to hide it.
+    Mirrors _renderShareholderSection: only shown when directors carry ratios.
+    """
+    directors = company.get("directors") or []
+    ratios = [d["ratio"] for d in directors if d.get("ratio") is not None]
+    if not ratios:
+        return None
+    total_ratio = sum(ratios)
+    pct = total_ratio * 100
+    if total_ratio >= 0.999:
+        return {"complete": True,
+                "note": f"董監事持股合計 {pct:.2f}%，持股已完整揭露"}
+
+    missing = 100 - pct
+    block: dict = {
+        "complete": False,
+        "alert": (f"董監事持股合計 {pct:.2f}%，尚有 {missing:.2f}% "
+                  f"股份未在董監事名單中揭露，可能由其他股東持有"),
+    }
+    results = (holders or {}).get("results") or []
+    if results:
+        block["found_note"] = f"找到 {len(results)} 家公發公司揭露持有此公司股份："
+        block["rows"] = _holder_table_rows(results, (holders or {}).get("total_shares") or 0)
+    else:
+        block["empty_note"] = "查無公發公司揭露持有此公司股份"
+    return block
+
+
+def _patent_table_rows(patents: list[dict]) -> list[list[str]]:
+    header = ["專利號", "名稱", "申請日", "狀態", "發明人"]
+    rows = [header]
+    for p in patents:
+        rows.append([
+            p.get("patent_no") or "—",
+            p.get("title") or "—",
+            p.get("app_date") or "—",
+            p.get("status") or "—",
+            "、".join(p.get("inventors") or []) or "—",
+        ])
+    return rows
+
+
 # ── DOCX width helpers ────────────────────────────────────────────────────────
 
 def _docx_est_pt(text: str, size_pt: float = 9) -> float:
@@ -411,9 +506,46 @@ def _docx_summary_body(doc, lines: list[str],
         i += 1
 
 
+def _docx_render_table(doc, grid: list[list[str]], content_pt: float = 468):
+    """Render a list-of-rows as a styled table (header shaded, alt rows)."""
+    if not grid:
+        return
+    cols = max(len(r) for r in grid)
+    cws  = _docx_auto_cols(grid, 9, content_pt)
+    t    = doc.add_table(rows=len(grid), cols=cols)
+    t.style = "Table Grid"
+    for ri, row_cells in enumerate(grid):
+        for ci in range(cols):
+            val  = row_cells[ci] if ci < len(row_cells) else ""
+            cell = t.cell(ri, ci)
+            cell.width = cws[ci] if ci < len(cws) else Pt(content_pt / cols)
+            cell.paragraphs[0].clear()
+            _cell_margins(cell, top=40, bottom=40, left=80, right=80)
+            r = cell.paragraphs[0].add_run(_strip_inline_md(str(val)))
+            r.font.size = Pt(9)
+            if ri == 0:
+                _shading(cell, "edf4fb")
+                r.bold = True
+                r.font.color.rgb = _R.ACCENT
+            else:
+                r.font.color.rgb = _R.TEXT
+                if ri % 2 == 0:
+                    _shading(cell, "f7fafd")
+
+
+def _docx_note_paragraph(doc, text: str, color, size_pt: float = 9,
+                         before: int = 0, after: int = 30):
+    p = doc.add_paragraph()
+    _para_spacing(p, before=before, after=after, line=276)
+    r = p.add_run(text)
+    r.font.size = Pt(size_pt)
+    r.font.color.rgb = color
+    return p
+
+
 # ── Main DOCX builder ─────────────────────────────────────────────────────────
 
-def build_docx(company: dict) -> bytes:
+def build_docx(company: dict, holders: dict | None = None) -> bytes:
     doc = Document()
 
     for sec in doc.sections:
@@ -524,6 +656,21 @@ def build_docx(company: dict) -> bytes:
 
         doc.add_paragraph()
 
+    # ── 大股東 ──
+    sh = _shareholder_block(company, holders)
+    if sh:
+        _docx_section_heading(doc, "大股東")
+        if sh.get("complete"):
+            _docx_note_paragraph(doc, sh["note"], _R.MUTED, after=20)
+        else:
+            _docx_note_paragraph(doc, "⚠ " + sh["alert"], _R.TEXT, after=30)
+            if sh.get("rows"):
+                _docx_note_paragraph(doc, sh["found_note"], _R.MUTED, after=20)
+                _docx_render_table(doc, sh["rows"])
+            elif sh.get("empty_note"):
+                _docx_note_paragraph(doc, sh["empty_note"], _R.MUTED, after=20)
+        doc.add_paragraph()
+
     # ── Summary ──
     summary_raw = company.get("summary", "")
     if summary_raw:
@@ -534,6 +681,15 @@ def build_docx(company: dict) -> bytes:
                 _docx_summary_h3(doc, heading)
             _docx_summary_body(doc, body.split("\n"))
 
+    # ── 專利 ──
+    patents = company.get("patents") or []
+    if patents:
+        _docx_section_heading(doc, "專利")
+        _docx_note_paragraph(
+            doc, f"共 {len(patents)} 筆（更新：{patents[0].get('fetched_at', '')}）",
+            _R.MUTED, after=20)
+        _docx_render_table(doc, _patent_table_rows(patents))
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -543,7 +699,7 @@ def build_docx(company: dict) -> bytes:
 #  PDF
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_pdf(company: dict) -> bytes:
+def build_pdf(company: dict, holders: dict | None = None) -> bytes:
     import fitz
 
     PAGE_W, PAGE_H = 595, 842
@@ -847,6 +1003,21 @@ def build_pdf(company: dict) -> bytes:
         hline(y + total_h, x0=ML, x1=ML + total_w, color=_F.BORDER, w=0.4)
         y += total_h + 6
 
+    # ── 大股東 ─────────────────────────────────────────────────────────────────
+    sh = _shareholder_block(company, holders)
+    if sh:
+        section_heading("大股東")
+        if sh.get("complete"):
+            put(sh["note"], size=9, color=_F.MUTED, gap_after=4)
+        else:
+            put("⚠ " + sh["alert"], size=9, color=_F.TEXT, gap_after=5)
+            if sh.get("rows"):
+                put(sh["found_note"], size=9, color=_F.MUTED, gap_after=3)
+                rows = sh["rows"]
+                pdf_table(rows, _auto_col_widths(rows, 8.5, CW))
+            elif sh.get("empty_note"):
+                put(sh["empty_note"], size=9, color=_F.MUTED, gap_after=4)
+
     # ── Summary ───────────────────────────────────────────────────────────────
     summary_raw = company.get("summary", "")
     if summary_raw:
@@ -855,6 +1026,15 @@ def build_pdf(company: dict) -> bytes:
             if heading:
                 summary_h3(heading)
             pdf_summary_body(body.split("\n"))
+
+    # ── 專利 ───────────────────────────────────────────────────────────────────
+    patents = company.get("patents") or []
+    if patents:
+        section_heading("專利")
+        put(f"共 {len(patents)} 筆（更新：{patents[0].get('fetched_at', '')}）",
+            size=9, color=_F.MUTED, gap_after=4)
+        prows = _patent_table_rows(patents)
+        pdf_table(prows, _auto_col_widths(prows, 8.5, CW))
 
     buf = io.BytesIO()
     doc.save(buf)

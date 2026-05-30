@@ -235,7 +235,7 @@ async def patent_stream(company_id: str):
 
 
 @router.get("/{company_id}/export")
-def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|pdf)$")):
+async def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|pdf)$")):
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -243,15 +243,22 @@ def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|
     raw_name = company.get("name", company_id)[:50]
     encoded  = quote(raw_name, safe="")
 
+    # 大股東區塊需要公發公司反查資料（與 modal 一致）；查不到不阻擋匯出
+    holders = None
+    try:
+        holders = await _lookup_investee_holders(company)
+    except Exception:
+        log.warning("export: investee-holders 查詢失敗，大股東表將略過", exc_info=True)
+
     if format == "pdf":
-        data = company_exporter.build_pdf(company)
+        data = company_exporter.build_pdf(company, holders)
         return Response(
             content=data,
             media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}.pdf"},
         )
     else:
-        data = company_exporter.build_docx(company)
+        data = company_exporter.build_docx(company, holders)
         return Response(
             content=data,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -267,22 +274,14 @@ def get_company(company_id: str):
     return company
 
 
-@router.get("/{company_id}/investee-holders")
-async def get_investee_holders(company_id: str, fuzzy: bool = False):
-    """反查哪些公發公司在財報中揭露持有此公司的股份（串接 mops_investee）。"""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+async def _lookup_investee_holders(company: dict, fuzzy: bool = False) -> dict:
+    """反查哪些公發公司揭露持有此公司股份，回傳去重後（每 holder+category 取最新一期）結果。"""
     from services import mops_investee_client
-    try:
-        results = await mops_investee_client.reverse_lookup(
-            name=company["name"],
-            tax_id=company.get("tax_id") or None,
-            fuzzy=fuzzy,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
-
+    results = await mops_investee_client.reverse_lookup(
+        name=company["name"],
+        tax_id=company.get("tax_id") or None,
+        fuzzy=fuzzy,
+    )
     # 每個 (holder_id, category) 只保留最新一期
     latest: dict = {}
     for r in results:
@@ -290,9 +289,20 @@ async def get_investee_holders(company_id: str, fuzzy: bool = False):
         if key not in latest or r.get("as_of_date", "") > latest[key].get("as_of_date", ""):
             latest[key] = r
     deduped = sorted(latest.values(), key=lambda r: r.get("as_of_date", ""), reverse=True)
+    return {"query": company["name"], "count": len(deduped),
+            "total_shares": company.get("total_shares") or 0, "results": deduped}
 
-    total_shares = company.get("total_shares") or 0
-    return {"query": company["name"], "count": len(deduped), "total_shares": total_shares, "results": deduped}
+
+@router.get("/{company_id}/investee-holders")
+async def get_investee_holders(company_id: str, fuzzy: bool = False):
+    """反查哪些公發公司在財報中揭露持有此公司的股份（串接 mops_investee）。"""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    try:
+        return await _lookup_investee_holders(company, fuzzy=fuzzy)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"mops_investee 查詢失敗：{exc}")
 
 
 @router.post("/confirm")

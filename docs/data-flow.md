@@ -37,6 +37,14 @@ source_repo: ~/taiwan-company
 - 大股東 / 公司簡介 / 專利三段折疊（commit fc7ada7）
 - 串 `mops_investee` 反查公發母公司
 
+## 匯出報告（DOCX / PDF）
+
+`GET /api/companies/{id}/export?format=docx|pdf`，由 `services/company_exporter.py` 產出，視覺對齊 modal。涵蓋 modal 的完整資訊：**基本資料 → 董監事名單 → 大股東 → 公司簡介 → 專利**。
+
+- 大股東段比照 modal `_renderShareholderSection`：董監事持股合計 < 99.9% 才顯示，列出未揭露比例提醒；並即時串 `mops_investee` 反查哪些公發公司揭露持有本公司股份（查不到不阻擋匯出）
+- 專利段把 `company.patents` 列成表（專利號 / 名稱 / 申請日 / 狀態 / 發明人）
+- endpoint 為 async，匯出前先 await holders 反查再交給 exporter
+
 ## 母子公司關係圖
 
 - `GET /api/companies/{id}/build-relationship` — SSE 串流建關係圖
