@@ -3807,9 +3807,14 @@ function _displayCompName(s) {
   return (s || "").replace(/(股份有限公司|有限公司)(?=（|$)/, "").trim();
 }
 
-// 一格塞多家公司時用「／」「/」分隔（如「雙鴻（3324）／奇鋐（3017）」）→ 拆成單家陣列。
+// 一格塞多家公司時拆成單家陣列。分隔符涵蓋「／」「/」「、」「與」（如
+// 「雙鴻（3324）／奇鋐（3017）」「臻鼎、欣興、健鼎與上游南亞、長春」），並去掉
+// 「上游/下游/中游」這類方向描述詞，讓每家是乾淨的公司名（名稱解析交給 name-lookup）。
 function _splitCompCell(content) {
-  return (content || "").split(/[／/]/).map(s => s.trim()).filter(Boolean);
+  return (content || "")
+    .split(/[／/、]|與/)
+    .map(s => s.replace(/^(上游|下游|中游)/, "").trim())
+    .filter(Boolean);
 }
 
 function openCompanyByName(name) {
