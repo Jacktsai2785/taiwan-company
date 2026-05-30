@@ -297,39 +297,34 @@
     </div>
   </div>
   <div id="materials-panel-body">
-
-    <!-- ① 上傳檔案（簡報／介紹／照片） -->
-    <div class="materials-section-divider">📎 上傳檔案</div>
-    <div id="materials-upload-area">
-      <label id="materials-drop-label" for="materials-file-input">
-        <span class="memo-upload-icon">📑</span>
-        <span>上傳簡報 / 公司介紹 / 照片</span>
-        <small>PDF / PPTX / DOCX / XLSX / 圖片，可多選</small>
-      </label>
-      <input type="file" id="materials-file-input" multiple
-             accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
-      <div id="materials-upload-status"></div>
+    <div class="materials-tabs">
+      <div class="mtab on" data-tab="files" onclick="switchMatTab('files')">檔案<span id="mtab-file-count" class="mtab-count" style="display:none"></span></div>
+      <div class="mtab" data-tab="memo" onclick="switchMatTab('memo')">訪談備忘錄</div>
     </div>
-    <div id="materials-file-list"></div>
 
-    <!-- ② 訪談備忘錄（可手動填寫，或上傳逐字稿／錄音自動填） -->
-    <div class="materials-section-divider">🎙 訪談備忘錄</div>
-    <div id="memo-upload-area">
-      <label id="memo-drop-label" for="memo-file-input">
-        <span class="memo-upload-icon">📄</span>
-        <span>上傳逐字稿以自動填寫</span>
-        <small>TXT / PDF / Word</small>
-      </label>
+    <!-- 分頁①：上傳檔案（簡報／介紹／照片） -->
+    <div id="mtab-files">
+      <div id="materials-upload-area" class="upload-compact">
+        <label id="materials-drop-label" for="materials-file-input"
+               title="可上傳 PDF / PPTX / DOCX / XLSX / 圖片，可多選">
+          <span>＋ 上傳簡報 / 公司介紹 / 照片</span>
+        </label>
+        <input type="file" id="materials-file-input" multiple
+               accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
+        <div id="materials-upload-status"></div>
+      </div>
+      <div id="materials-file-list"></div>
+    </div>
+
+    <!-- 分頁②：訪談備忘錄（手動填寫，或上傳逐字稿／錄音自動填） -->
+    <div id="mtab-memo" style="display:none">
+      <div class="memo-upload-row">
+        <label class="memo-up-btn" for="memo-file-input" title="逐字稿：TXT / PDF / Word">＋ 逐字稿</label>
+        <label class="memo-up-btn" for="memo-audio-input" title="錄音：MP3 / WAV / M4A / OGG / WEBM / FLAC">＋ 錄音</label>
+      </div>
       <input type="file" id="memo-file-input" accept=".txt,.pdf,.doc,.docx" style="display:none" />
-      <div id="memo-extract-status"></div>
-    </div>
-    <div id="memo-audio-area">
-      <label id="memo-audio-label" for="memo-audio-input">
-        <span class="memo-upload-icon">🎙️</span>
-        <span>上傳錄音檔以語音辨識並自動填寫</span>
-        <small>MP3 / WAV / M4A / OGG / WEBM / FLAC</small>
-      </label>
       <input type="file" id="memo-audio-input" accept=".mp3,.wav,.m4a,.ogg,.webm,.flac,.aac" style="display:none" />
+      <div id="memo-extract-status"></div>
       <div id="memo-audio-status"></div>
       <div id="memo-transcript-box" style="display:none">
         <div id="memo-transcript-header" onclick="toggleTranscript()">
@@ -337,11 +332,12 @@
         </div>
         <textarea id="memo-transcript-text" readonly rows="6"></textarea>
       </div>
+      <div id="memo-fields"></div>
     </div>
-    <div id="memo-fields"></div>
+  </div>
 
-    <!-- ③ 用補充資料更新公司簡介 -->
-    <div class="materials-section-divider">✨ 更新公司簡介</div>
+  <!-- 固定底部：更新公司簡介（切分頁皆可見） -->
+  <div id="materials-panel-footer">
     <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 Opus 4.7 更新公司簡介</button>
     <div id="materials-gen-status"></div>
     <div id="materials-result-wrap" style="display:none">

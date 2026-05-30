@@ -2551,6 +2551,40 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   border-bottom: 1px solid var(--border);
 }
 .materials-section-divider:first-child { margin-top: 2px; }
+/* compact upload buttons inside 補充資料 panel (formats shown via title tooltip) */
+#materials-upload-area.upload-compact,
+#memo-upload-area.upload-compact { padding: 7px 12px; margin-bottom: 8px; }
+#memo-audio-area.upload-compact { margin-bottom: 8px; }
+#memo-audio-area.upload-compact #memo-audio-label { padding: 7px 12px; }
+.upload-compact label { font-size: 12.5px; color: var(--accent); cursor: pointer; }
+.upload-compact small { display: none; }
+
+/* tabs inside 補充資料 panel */
+.materials-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.mtab {
+  padding: 8px 14px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.mtab.on { color: #0b6e5f; border-bottom-color: #0d8f7a; }
+.mtab-count { font-size: 10px; color: #fff; background: #0d8f7a; border-radius: 99px; padding: 0 6px; margin-left: 5px; }
+
+/* 逐字稿 / 錄音 並排上傳按鈕 */
+.memo-upload-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.memo-up-btn {
+  flex: 1; text-align: center; border: 1.5px dashed var(--border); border-radius: 8px;
+  padding: 8px; color: var(--accent); font-size: 12.5px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.memo-up-btn:hover { border-color: var(--accent); background: var(--accent-light); }
+
+/* 固定底部：更新公司簡介 */
+#materials-panel-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding: 12px 18px;
+  background: #fff;
+}
+#materials-panel-footer #materials-gen-status { padding-top: 8px; }
 
 /* Open button in modal header */
 #materials-open-btn {

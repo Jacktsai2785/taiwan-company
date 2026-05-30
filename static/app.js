@@ -1580,7 +1580,7 @@ async function toggleModalWatch() {
     updateWatchCount();
     renderGrid();
     // refresh memo button visibility
-    const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">📎 補充資料</button>`;
+    const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">➕ 補充資料</button>`;
     document.getElementById("modal-name").innerHTML =
       escHtml(shortName(c.name)) + listingBadge(c.listing_status) + supBtnHtml;
     _updateModalWatchBtn(c);
@@ -1759,7 +1759,7 @@ function toggleTranscript() {
   toggle.textContent = collapsed ? "▲" : "▼";
 }
 
-/* ── Materials (簡報摘要) ── */
+/* ── 補充資料 panel ── */
 function openMaterialsPanel() {
   const id = _modalCompanyId;
   if (!id) return;
@@ -1767,9 +1767,17 @@ function openMaterialsPanel() {
   document.getElementById("materials-upload-status").textContent = "";
   document.getElementById("materials-gen-status").textContent = "";
   _setMatRegenStale(false);
+  switchMatTab("files");
   panel.classList.add("open");
   loadMaterials(id);
   _loadMemoSection(id);
+}
+
+function switchMatTab(tab) {
+  document.querySelectorAll("#materials-panel .mtab").forEach(t =>
+    t.classList.toggle("on", t.dataset.tab === tab));
+  document.getElementById("mtab-files").style.display = tab === "files" ? "" : "none";
+  document.getElementById("mtab-memo").style.display = tab === "memo" ? "" : "none";
 }
 
 // Mark the generate button as「需要重新生成」(stale) after files change while a
@@ -1810,6 +1818,11 @@ function _materialsIcon(name) {
 
 function _renderMaterialsList(materials) {
   const wrap = document.getElementById("materials-file-list");
+  const badge = document.getElementById("mtab-file-count");
+  if (badge) {
+    badge.textContent = materials.length || "";
+    badge.style.display = materials.length ? "" : "none";
+  }
   if (!materials.length) {
     wrap.innerHTML = `<div class="materials-empty">尚未上傳任何檔案</div>`;
     return;
@@ -2102,7 +2115,7 @@ function openModal(id) {
   const c = state.companies.find(x => x.id === id);
   if (!c) return;
 
-  const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">📎 補充資料</button>`;
+  const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">➕ 補充資料</button>`;
   document.getElementById("modal-name").innerHTML =
     escHtml(shortName(c.name)) + listingBadge(c.listing_status) + supBtnHtml;
 
