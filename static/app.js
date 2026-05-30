@@ -2367,11 +2367,14 @@ function _setupCompetitorTabs(page) {
     return;
   }
 
-  // tag each body row with its 競業類型 (last cell); 本案 row always shown
+  // tag each body row with its 競業類型 (last cell); 本案 row always shown.
+  // 本案列只認第一欄（公司名稱）的「（本案）」標記——不能用整列含「本案」判斷，
+  // 否則差異化特點寫到「本案客戶」之類的競業列會被誤判成本案列。
   const rows = [...table.querySelectorAll("tbody tr")];
   rows.forEach(tr => {
-    if (tr.textContent.includes("本案")) { tr.dataset.ctype = "__case__"; return; }
     const cells = tr.querySelectorAll("td");
+    const firstCell = cells.length ? cells[0].textContent : "";
+    if (firstCell.includes("（本案）")) { tr.dataset.ctype = "__case__"; return; }
     const last = cells.length ? cells[cells.length - 1].textContent.trim() : "";
     tr.dataset.ctype = _COMP_TYPES.includes(last) ? last : "其他";
   });
