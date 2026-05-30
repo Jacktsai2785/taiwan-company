@@ -3801,6 +3801,12 @@ function _coreName(s) {
   return (s || "").replace(/(股份有限公司|有限公司)$/, "").trim();
 }
 
+// 顯示用：去掉法定尾綴但保留後面的括號註記（（本案）/（2308）…）。
+// 尾綴可能在字串結尾，或緊接在括號前。
+function _displayCompName(s) {
+  return (s || "").replace(/(股份有限公司|有限公司)(?=（|$)/, "").trim();
+}
+
 function openCompanyByName(name) {
   const co = state.companies.find(c => _coreName(c.name) === _coreName(name));
   if (co) openModal(co.id);
@@ -5717,13 +5723,18 @@ function renderSummary(raw, matHeadings) {
       const cells = row.split("|").filter((_,i,a) => i>0 && i<a.length-1);
       const tds = cells.map((c, ci) => {
         const content = c.trim();
-        if (isCompetitorTable && ci === 0 && !content.includes("（本案）")) {
-          const rawName = content.replace(/（[^）]*）/g, "").trim();
-          const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
-          const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
-          const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
-          const safeN = escHtml(rawName);
-          return `<td><span class="${cls}" data-cname="${safeN}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(content)}</span></td>`;
+        if (isCompetitorTable && ci === 0) {
+          // 公司名稱欄顯示時去掉法定尾綴（保留（本案）/（2308）等括號）；比對仍走 _coreName
+          const disp = _displayCompName(content);
+          if (!content.includes("（本案）")) {
+            const rawName = content.replace(/（[^）]*）/g, "").trim();
+            const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
+            const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
+            const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
+            const safeN = escHtml(rawName);
+            return `<td><span class="${cls}" data-cname="${safeN}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span></td>`;
+          }
+          return `<td>${inlineMarkdown(disp)}</td>`;
         }
         return `<td>${inlineMarkdown(content)}</td>`;
       }).join("");

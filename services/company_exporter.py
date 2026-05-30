@@ -70,6 +70,19 @@ def _strip_inline_md(text: str) -> str:
     return re.sub(r"\*(.+?)\*", r"\1", text)
 
 
+def _display_comp_name(s: str) -> str:
+    """顯示用：去掉法定尾綴但保留括號註記（（本案）/（2308）…）。Mirrors _displayCompName."""
+    return re.sub(r"(股份有限公司|有限公司)(?=（|$)", "", s or "").strip()
+
+
+def _strip_comp_suffix(grid: list[list[str]]) -> None:
+    """若為競業表（首欄表頭＝公司名稱），就地去掉資料列首欄的法定尾綴。"""
+    if grid and grid[0] and grid[0][0].strip() == "公司名稱":
+        for row in grid[1:]:
+            if row:
+                row[0] = _display_comp_name(row[0])
+
+
 # ── 補充來源 callout — mirrors _supCallout / .sup-callout in app.js + style.css ──
 # bg = 低透明度 tint 壓在白底上的近似純色。
 
@@ -599,6 +612,7 @@ def _docx_summary_body(doc, lines: list[str],
             if data_rows:
                 grid = [[c.strip() for c in r.strip().strip("|").split("|")]
                         for r in data_rows]
+                _strip_comp_suffix(grid)
                 cols  = max(len(r) for r in grid)
                 cws   = _docx_auto_cols(grid, 9, content_pt)
                 t     = doc.add_table(rows=len(grid), cols=cols)
@@ -1095,6 +1109,7 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
                     block.append(lines[i]); i += 1
                 data = [r for r in block if not re.match(r"^\s*\|[-| ]+\|\s*$", r.strip())]
                 rows = [[c.strip() for c in r.strip().strip("|").split("|")] for r in data]
+                _strip_comp_suffix(rows)
                 if rows:
                     n  = max(len(r) for r in rows)
                     pdf_table(rows, _auto_col_widths(rows, 8.5, CW))
