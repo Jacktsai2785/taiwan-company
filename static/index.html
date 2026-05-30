@@ -291,8 +291,6 @@
   <div id="materials-panel-header">
     <div id="materials-panel-title">補充資料</div>
     <div id="materials-panel-actions">
-      <button class="memo-action-btn" onclick="saveMemo()">💾 儲存</button>
-      <button class="memo-action-btn" onclick="downloadMemo()">⬇ 備忘錄 .docx</button>
       <button id="materials-panel-close" onclick="closeMaterialsPanel()">✕</button>
     </div>
   </div>
@@ -318,6 +316,10 @@
 
     <!-- 分頁②：訪談備忘錄（手動填寫，或上傳逐字稿／錄音自動填） -->
     <div id="mtab-memo" style="display:none">
+      <div class="memo-actions-row">
+        <button class="memo-tab-btn" onclick="saveMemo()">💾 儲存</button>
+        <button class="memo-tab-btn" onclick="downloadMemo()">⬇ 備忘錄 .docx</button>
+      </div>
       <div class="memo-upload-row">
         <label class="memo-up-btn" for="memo-file-input" title="逐字稿：TXT / PDF / Word">＋ 逐字稿</label>
         <label class="memo-up-btn" for="memo-audio-input" title="錄音：MP3 / WAV / M4A / OGG / WEBM / FLAC">＋ 錄音</label>

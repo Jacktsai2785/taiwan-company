@@ -2568,6 +2568,15 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .mtab.on { color: #0b6e5f; border-bottom-color: #0d8f7a; }
 .mtab-count { font-size: 10px; color: #fff; background: #0d8f7a; border-radius: 99px; padding: 0 6px; margin-left: 5px; }
 
+/* 訪談備忘錄分頁的動作列（儲存 / DOCX，僅與備忘錄相關） */
+.memo-actions-row { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 10px; }
+.memo-tab-btn {
+  font-size: 11.5px; font-weight: 600; color: var(--accent);
+  border: 1px solid var(--border); border-radius: 99px; background: #fff;
+  padding: 4px 11px; cursor: pointer; transition: border-color .12s, background .12s;
+}
+.memo-tab-btn:hover { border-color: var(--accent); background: var(--accent-light); }
+
 /* 逐字稿 / 錄音 並排上傳按鈕 */
 .memo-upload-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .memo-up-btn {
