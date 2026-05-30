@@ -833,8 +833,31 @@ body {
 .summary-tab-page > :first-child,
 .summary-tab-page > .summary-mat-section:first-child > :first-child { margin-top: 0; }
 
+/* 競業分析：四種類型 sub-tab bar（＋新增競業靠右） */
+.comp-type-bar {
+  display: flex; align-items: center; gap: 4px;
+  margin: 14px 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.comp-type-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.comp-type-tab:hover { color: var(--text); }
+.comp-type-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+.comp-type-ct {
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--muted);
+  border-radius: 99px; padding: 0 6px;
+}
+.comp-type-tab.on .comp-type-ct { background: var(--accent); }
+.comp-bar-add { margin-left: auto; margin-bottom: 4px; }
+
+.comp-add-only { margin: 14px 0 10px; text-align: right; }
+
 /* 手動新增競業 */
-.add-comp-wrap { margin: 14px 0 4px; }
+.add-comp-wrap { margin: 0 0 10px; }
 .add-comp-btn {
   font-size: 12.5px; font-weight: 600; color: var(--accent);
   border: 1px dashed var(--accent); border-radius: 8px; background: #fff;

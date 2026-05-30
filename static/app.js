@@ -2316,7 +2316,7 @@ function applySummaryTabs(container) {
     page.dataset.idx = i;
     sec.nodes[0].before(page);
     sec.nodes.forEach(n => page.appendChild(n));
-    if (sec.title === "競業分析") page.appendChild(_addCompetitorUI());
+    if (sec.title === "競業分析") _setupCompetitorTabs(page);
     page.style.display = i === 0 ? "" : "none";
     const tab = document.createElement("div");
     tab.className = "summary-tab" + (i === 0 ? " on" : "");
@@ -2343,19 +2343,79 @@ function _showSummaryTab(container, idx) {
   });
 }
 
-/* ── 手動新增競業 ── */
-function _addCompetitorUI() {
+/* ── 競業分析：四種類型 sub-tab + 手動新增 ── */
+const _COMP_TYPES = ["正面競業", "替代路徑", "側翼潛入", "垂直整合"];
+
+function _setupCompetitorTabs(page) {
+  const table = page.querySelector(".competitor-table");
+  if (!table) { page.appendChild(_addCompetitorForm()); return; }
+
+  // Legacy 4-column tables have no 競業類型 → no type sub-tabs, just the add button.
+  const headers = [...table.querySelectorAll("thead th")].map(h => h.textContent.trim());
+  if (!headers.some(h => h.includes("競業類型"))) {
+    const w = document.createElement("div");
+    w.className = "comp-add-only";
+    const add = document.createElement("button");
+    add.className = "add-comp-btn";
+    add.textContent = "＋ 新增競業";
+    add.onclick = function () { toggleAddCompetitor(this); };
+    w.appendChild(add);
+    table.before(w);
+    w.after(_addCompetitorForm());
+    return;
+  }
+
+  // tag each body row with its 競業類型 (last cell); 本案 row always shown
+  const rows = [...table.querySelectorAll("tbody tr")];
+  rows.forEach(tr => {
+    if (tr.textContent.includes("本案")) { tr.dataset.ctype = "__case__"; return; }
+    const cells = tr.querySelectorAll("td");
+    const last = cells.length ? cells[cells.length - 1].textContent.trim() : "";
+    tr.dataset.ctype = _COMP_TYPES.includes(last) ? last : "其他";
+  });
+
+  // type bar (left) + 新增競業 button (right), placed just above the table
+  const bar = document.createElement("div");
+  bar.className = "comp-type-bar";
+  _COMP_TYPES.forEach((t, i) => {
+    const n = rows.filter(r => r.dataset.ctype === t).length;
+    const tab = document.createElement("div");
+    tab.className = "comp-type-tab" + (i === 0 ? " on" : "");
+    tab.dataset.type = t;
+    tab.innerHTML = `${t}<span class="comp-type-ct">${n}</span>`;
+    tab.onclick = () => _showCompetitorType(page, t);
+    bar.appendChild(tab);
+  });
+  const add = document.createElement("button");
+  add.className = "add-comp-btn comp-bar-add";
+  add.textContent = "＋ 新增競業";
+  add.onclick = function () { toggleAddCompetitor(this); };
+  bar.appendChild(add);
+  table.before(bar);
+  bar.after(_addCompetitorForm());   // hidden form right below the bar
+
+  _showCompetitorType(page, _COMP_TYPES[0]);   // default 正面競業
+}
+
+function _showCompetitorType(page, type) {
+  page.querySelectorAll(".competitor-table tbody tr").forEach(tr => {
+    const ct = tr.dataset.ctype;
+    tr.style.display = (ct === "__case__" || ct === type || !_COMP_TYPES.includes(ct)) ? "" : "none";
+  });
+  page.querySelectorAll(".comp-type-bar .comp-type-tab").forEach(t => {
+    t.classList.toggle("on", t.dataset.type === type);
+  });
+  page.dataset.activeCtype = type;
+}
+
+function _addCompetitorForm() {
   const wrap = document.createElement("div");
   wrap.className = "add-comp-wrap";
   wrap.innerHTML =
-    `<button class="add-comp-btn" onclick="toggleAddCompetitor(this)">＋ 新增競業</button>` +
     `<div class="add-comp-form" style="display:none">` +
       `<input class="add-comp-name" placeholder="競業公司名稱" />` +
       `<select class="add-comp-type">` +
-        `<option value="正面競業">正面競業</option>` +
-        `<option value="替代路徑">替代路徑</option>` +
-        `<option value="側翼潛入">側翼潛入</option>` +
-        `<option value="垂直整合">垂直整合</option>` +
+        _COMP_TYPES.map(t => `<option value="${t}">${t}</option>`).join("") +
       `</select>` +
       `<button class="add-comp-submit" onclick="submitAddCompetitor(this)">分析並加入</button>` +
       `<span class="add-comp-status"></span>` +
@@ -2364,11 +2424,18 @@ function _addCompetitorUI() {
 }
 
 function toggleAddCompetitor(btn) {
-  const form = btn.parentElement.querySelector(".add-comp-form");
+  const page = btn.closest(".summary-tab-page");
+  const form = page && page.querySelector(".add-comp-form");
+  if (!form) return;
   const open = form.style.display === "none";
   form.style.display = open ? "" : "none";
   btn.textContent = open ? "✕ 取消" : "＋ 新增競業";
-  if (open) form.querySelector(".add-comp-name").focus();
+  if (open) {
+    // pre-select the currently-viewed type
+    const t = page.dataset.activeCtype;
+    if (t) form.querySelector(".add-comp-type").value = t;
+    form.querySelector(".add-comp-name").focus();
+  }
 }
 
 async function submitAddCompetitor(btn) {
@@ -2391,6 +2458,9 @@ async function submitAddCompetitor(btn) {
     _updateSummaryInModal(c);   // rebuild summary tabs with the new row
     const ct = [...document.querySelectorAll("#summary-tabbar .summary-tab")].find(t => t.textContent.includes("競業"));
     if (ct) ct.click();         // stay on 競業分析 tab
+    const compPage = [...document.querySelectorAll("#modal-summary .summary-tab-page")]
+      .find(p => p.querySelector(".comp-type-bar"));
+    if (compPage) _showCompetitorType(compPage, type);   // jump to the added type
     toast(`已新增競業：${name}`);
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
