@@ -138,6 +138,21 @@ def _bullet_sup_inner(raw: str) -> tuple[str, str] | None:
     return raw[:idx] + inner + raw[end:], src
 
 
+def _strip_nested_sup(inner: str) -> str:
+    """Unwrap redundant「（XX補充…）」markers inside a callout body (mirrors _stripNestedSup)."""
+    out, i = "", 0
+    while True:
+        m = _SUP_RE.search(inner, i)
+        if not m:
+            out += inner[i:]
+            break
+        out += inner[i:m.start()]
+        sub, end = _sup_span(inner, m.start())
+        out += sub
+        i = end
+    return out
+
+
 def _inline_sup_segments(text: str) -> list[tuple[str, str | None]]:
     """[(text, src_or_None)] keeping the full marker text for inline-coloured spans. Mirrors _wrapSupplements."""
     segs: list[tuple[str, str | None]] = []
@@ -529,6 +544,7 @@ def _docx_summary_h4(doc, text: str):
 
 def _docx_callout(doc, inner: str, src: str):
     """Source-coloured supplement box: tinted fill + left accent bar + label. Mirrors .sup-callout."""
+    inner = _strip_nested_sup(inner)
     style = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
     tbl  = doc.add_table(rows=1, cols=1)
     _no_table_borders(tbl)
@@ -1036,6 +1052,7 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
     def callout(inner: str, src: str):
         """Tinted box + left accent bar + coloured label. Mirrors .sup-callout."""
         nonlocal y
+        inner    = _strip_nested_sup(inner)
         style    = _SUP_STYLE.get(src, _SUP_STYLE["簡報"])
         bg_c     = _hex_to_float(style["bg"])
         bar_c    = _hex_to_float(style["border"])

@@ -5954,7 +5954,24 @@ function _splitSupplements(line) {
   return pieces;
 }
 
+// A callout body already carries a source label, so any further「（XX補充…）」
+// markers inside it are redundant double-tagging from the model. Unwrap them to
+// plain content (keep the text, drop the marker shell).
+function _stripNestedSup(inner) {
+  let out = "", i = 0;
+  for (;;) {
+    const f = _findSup(inner, i);
+    if (!f) { out += inner.slice(i); break; }
+    out += inner.slice(i, f.idx);
+    const { inner: sub, end } = _supSpan(inner, f.idx);
+    out += sub;
+    i = end;
+  }
+  return out;
+}
+
 function _supCallout(inner, src) {
+  inner = _stripNestedSup(inner);
   const meta = _SUP_META[src] || _SUP_META["簡報"];
   return `<div class="sup-callout sup-${meta.cls} open">` +
     '<div class="sup-callout-head" onclick="this.parentElement.classList.toggle(&quot;open&quot;)">' +

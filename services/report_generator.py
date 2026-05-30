@@ -387,11 +387,16 @@ def _build_materials_prompt(company: dict, materials_text: str = "", interview_t
 
     # How to tag supplements by source. With an interview present we distinguish
     # file-sourced「（簡報補充）」from interview-sourced「（訪談補充）」.
+    _no_nest = (
+        "【標記規則｜務必遵守】每一則補充只標記**一次**，二擇一：要嘛整段以標記開頭、"
+        "要嘛行內以「（…：…）」附在敘述後。**嚴禁巢狀或重複**：已用「（簡報補充）」開頭的段落內,"
+        "不可再出現任何「（簡報補充：…）」；同一句也不要疊兩個標記。"
+    )
     if has_interview:
         src_tag = ("補充資訊請依**來源**標註：來自上傳檔案／簡報的標「（簡報補充）」、"
-                   "來自訪談備忘錄的標「（訪談補充）」。")
+                   "來自訪談備忘錄的標「（訪談補充）」。" + _no_nest)
     else:
-        src_tag = "簡報／檔案新增或更具體的內容請以「（簡報補充）」標示。"
+        src_tag = "簡報／檔案新增或更具體的內容請以「（簡報補充）」標示。" + _no_nest
 
     existing_biz = _extract_section(company.get("summary", ""), "業務概況")
     biz_block = (
@@ -402,8 +407,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "", interview_t
         biz_instruction = (
             "以上方「既有業務概況」為基礎，**完整保留**既有敘述；再融入上傳檔案或訪談中、"
             f"既有敘述沒有的額外資訊（產品、技術、客戶、市場）。{src_tag}"
-            "（行內可用「（簡報補充：…）」「（訪談補充：…）」附在相關敘述之後，或另起一句以該標記開頭）"
-            "；不要刪除既有內容、不要原文重複既有敘述。"
+            "不要刪除既有內容、不要原文重複既有敘述。"
         )
     else:
         biz_instruction = "公司在做什麼：主要產品或服務、核心技術、解決的問題"
