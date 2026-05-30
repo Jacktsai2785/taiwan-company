@@ -265,6 +265,36 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
             raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
+_MEMO_LABELS = [
+    ("deal_source", "案件來源"), ("interviewees", "受訪人"), ("paid_in_capital", "實收資本額"),
+    ("address", "地址"), ("founding_date", "設立日期"), ("underwriter", "承銷商"),
+    ("auditor", "會計師事務所"), ("chairman", "董事長"), ("general_manager", "總經理"),
+    ("headcount", "員工人數"), ("ipo_timeline", "公開發行及上市櫃時程/募資規劃"),
+    ("investment_terms", "增資計畫或投資條件"), ("business_revenue", "主要業務、產品營收比重"),
+    ("financials", "財務狀況"), ("management_team", "經營團隊背景"),
+    ("board_shareholding", "董監或主要股東持股情形"), ("recent_development", "公司發展近況"),
+    ("major_customers", "主要銷貨客戶"), ("major_suppliers", "主要進貨廠商"),
+    ("factory_capacity", "廠房及產能使用情形"), ("competitors", "國內外主要競爭對手"),
+    ("industry_trends", "產業發展趨勢"), ("risk_tracking", "風險評估及追蹤事項"),
+    ("conclusion", "評估結論與建議"),
+]
+
+
+def serialize_memo(memo: dict | None) -> str:
+    """Turn a call_memo dict into a readable interview text block (non-empty fields)."""
+    if not memo:
+        return ""
+    lines: list[str] = []
+    date = (memo.get("interview_date") or "").strip()
+    if date:
+        lines.append(f"訪談日期：{date}")
+    for key, label in _MEMO_LABELS:
+        val = (memo.get(key) or "").strip()
+        if val:
+            lines.append(f"{label}：{val}")
+    return "\n".join(lines)
+
+
 def _extract_section(summary: str, heading: str) -> str:
     """Return the body text of a `## heading` section from a markdown summary, or ''."""
     out: list[str] = []
@@ -281,7 +311,7 @@ def _extract_section(summary: str, heading: str) -> str:
     return "\n".join(out).strip()
 
 
-def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
+def _build_materials_prompt(company: dict, materials_text: str = "", interview_text: str = "") -> str:
     name     = company.get("name", "")
     industry = company.get("industry", "") or "不詳"
     rep      = company.get("representative", "") or "不詳"
@@ -293,9 +323,22 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
     capital_str = f"NT$ {capital:,}" if capital else "不詳"
 
     text_block = (
-        f"\n【其他檔案文字內容（簡報／文件擷取）】\n{materials_text.strip()}\n"
+        f"\n【上傳檔案文字內容（簡報／公司介紹／文件擷取）】\n{materials_text.strip()}\n"
         if materials_text.strip() else ""
     )
+    has_interview = bool(interview_text.strip())
+    interview_block = (
+        f"\n【訪談備忘錄內容（來自實地訪談，由使用者填寫或逐字稿／錄音整理）】\n{interview_text.strip()}\n"
+        if has_interview else ""
+    )
+
+    # How to tag supplements by source. With an interview present we distinguish
+    # file-sourced「（簡報補充）」from interview-sourced「（訪談補充）」.
+    if has_interview:
+        src_tag = ("補充資訊請依**來源**標註：來自上傳檔案／簡報的標「（簡報補充）」、"
+                   "來自訪談備忘錄的標「（訪談補充）」。")
+    else:
+        src_tag = "簡報／檔案新增或更具體的內容請以「（簡報補充）」標示。"
 
     existing_biz = _extract_section(company.get("summary", ""), "業務概況")
     biz_block = (
@@ -304,10 +347,10 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
     )
     if existing_biz:
         biz_instruction = (
-            "以上方「既有業務概況」為基礎，**完整保留**既有敘述；再融入你讀完簡報後發現、"
-            "既有敘述沒有的額外資訊（產品、技術、客戶、市場）。簡報新增或更具體的內容，"
-            "請以「（簡報補充：…）」附在相關敘述之後，或另起一句以「（簡報補充）」開頭；"
-            "不要刪除既有內容、不要原文重複既有敘述。"
+            "以上方「既有業務概況」為基礎，**完整保留**既有敘述；再融入上傳檔案或訪談中、"
+            f"既有敘述沒有的額外資訊（產品、技術、客戶、市場）。{src_tag}"
+            "（行內可用「（簡報補充：…）」「（訪談補充：…）」附在相關敘述之後，或另起一句以該標記開頭）"
+            "；不要刪除既有內容、不要原文重複既有敘述。"
         )
     else:
         biz_instruction = "公司在做什麼：主要產品或服務、核心技術、解決的問題"
@@ -320,17 +363,20 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
     if existing_risks:
         risk_instruction = (
             "請先**完整保留**上方「既有主要風險」的每一條（可微調文字但不可刪除其指出的風險），"
-            "再**補充**你讀完簡報後發現、既有清單尚未涵蓋的額外風險。整合成一份去重後的完整清單："
-            "既有風險在前、簡報新增的風險在後並於條目開頭標「（簡報補充）」。每條需具體指向本公司業務，禁止空泛語句。"
+            "再**補充**你從上傳檔案或訪談中發現、既有清單尚未涵蓋的額外風險。整合成一份去重後的完整清單："
+            f"既有風險在前、新增風險在後，新增條目依來源於開頭標「（簡報補充）」或「（訪談補充）」。"
+            "每條需具體指向本公司業務，禁止空泛語句。"
         )
     else:
         risk_instruction = (
             "以 PE 視角列 3-5 點具體風險，需具體指向本公司業務或產業，禁止「市場競爭激烈」「法規風險」等空泛語句。"
         )
 
+    sources_desc = "上傳的簡報／公司介紹／照片等檔案" + ("，以及一份訪談備忘錄" if has_interview else "")
+
     return f"""你是一位在台灣有豐富經驗的資深私募股權（PE）投資人。
-以下是「{full_name}」提供的簡報、公司介紹或相關資料（可能是 PDF、簡報或照片），以及系統登記的基本資料。
-請**完整閱讀所有已提供的檔案內容**，僅根據這些檔案與基本資料撰寫一份公司簡介。
+以下是「{full_name}」的補充資料（{sources_desc}），以及系統登記的基本資料。
+請**完整閱讀所有已提供的內容**，僅根據這些補充資料與基本資料撰寫一份公司簡介。
 
 【系統登記基本資料】
 公司名稱：{full_name}（簡稱：{short_name}）
@@ -340,7 +386,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 實收資本額：{capital_str}
 所在地：{address}
 上市狀態：{listing}
-{text_block}{biz_block}{risk_block}
+{text_block}{interview_block}{biz_block}{risk_block}
 【任務】
 用繁體中文撰寫以下格式的公司簡介（純 Markdown，不加開頭標題行）：
 
@@ -351,24 +397,26 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 （具體產品線、服務項目、應用場景；可條列）
 
 ## 商業模式與市場
-（如何賺錢、目標客戶、市場定位、競爭優勢；簡報有提到才寫）
+（如何賺錢、目標客戶、市場定位、競爭優勢；補充資料有提到才寫）
 
 ## 團隊與股東
-（創辦人、經營團隊、重要股東或投資人；簡報未提供則標「——（簡報未提供）」）
+（創辦人、經營團隊、重要股東或投資人；補充資料未提供則標「——（補充資料未提供）」）
 
 ## 財務與募資亮點
-（營收、成長、募資金額、估值、訂單或客戶數等**具體數字**；簡報未提供則標「——（簡報未提供）」）
+（營收、成長、募資金額、估值、訂單或客戶數等**具體數字**；補充資料未提供則標「——（補充資料未提供）」）
 
 ## 投資亮點
-（以 PE 視角，列 2-4 點從簡報內容讀到的投資亮點 / 重點；**只寫亮點，不要寫風險**，風險一律放到下面的「主要風險」）
+（以 PE 視角，列 2-4 點從補充資料讀到的投資亮點 / 重點；**只寫亮點，不要寫風險**，風險一律放到下面的「主要風險」）
 
 ## 主要風險
 （{risk_instruction}）
 
+通用規則：上面各段落中，凡是新增、補充或更具體的資訊，{src_tag}
+
 嚴格規則：
-- 各段落**只寫上傳檔案或基本資料中明確出現的資訊**，不得引用外部知識或自行推測（例外：「業務概況」與「主要風險」需依上方指示整合既有內容）。
-- 具體數字（營收、募資、估值、客戶數）務必依簡報原文，**禁止杜撰、湊整或推估**。
-- 某段落在檔案中查無資訊時，直接標「——（簡報未提供）」，不要用模糊語氣填充。
+- 各段落**只寫上傳檔案、訪談備忘錄或基本資料中明確出現的資訊**，不得引用外部知識或自行推測（例外：「業務概況」與「主要風險」需依上方指示整合既有內容）。
+- 具體數字（營收、募資、估值、客戶數）務必依補充資料原文，**禁止杜撰、湊整或推估**。
+- 某段落在補充資料中查無資訊時，直接標「——（補充資料未提供）」，不要用模糊語氣填充。
 - 禁止描述自己的閱讀過程或檔案結構。
 - **嚴格禁止在末尾輸出任何 Sources、References、來源清單或 URL 列表。**
 
@@ -378,19 +426,22 @@ def _build_materials_prompt(company: dict, materials_text: str = "") -> str:
 
 async def generate_summary_from_materials(
     company: dict, file_paths: list[str], materials_text: str = "",
-    api_key: str = "", provider: str = "anthropic",
+    interview_text: str = "", api_key: str = "", provider: str = "anthropic",
 ) -> dict:
-    """Scan uploaded slides/intro/photos with opus-4.7 and produce a standalone
-    company profile (kept separate from the public-data `summary`).
+    """Scan uploaded supplementary material (slides/intro/photos + interview memo)
+    with opus-4.7 and produce a company profile that integrates them, tagging
+    additions by source「（簡報補充）」/「（訪談補充）」.
 
     `file_paths` are binary-native files (PDF + images) read directly by the
-    model; `materials_text` is pre-extracted text from office/txt files."""
+    model; `materials_text` is pre-extracted text from office/txt files;
+    `interview_text` is the serialized call-memo content."""
     name = company.get("name", "")
-    prompt = _build_materials_prompt(company, materials_text)
+    prompt = _build_materials_prompt(company, materials_text, interview_text)
     model = _DEEP_MODEL
     async with _CLAUDE_LOCK:
         try:
-            log.info("Generating materials summary for %s (%d files)", name, len(file_paths))
+            log.info("Generating materials summary for %s (%d files, interview=%s)",
+                     name, len(file_paths), bool(interview_text.strip()))
             raw = await asyncio.to_thread(
                 claude_client.ask_with_files, prompt, file_paths, 420, api_key, provider, model
             )

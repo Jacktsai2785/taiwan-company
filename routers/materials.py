@@ -126,8 +126,9 @@ def delete_material(company_id: str, stored_name: str):
 async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_headers)):
     company = _require_company(company_id)
     materials = company.get("materials") or []
-    if not materials:
-        raise HTTPException(status_code=422, detail="尚未上傳任何簡報或檔案")
+    interview_text = report_generator.serialize_memo(company.get("call_memo"))
+    if not materials and not interview_text.strip():
+        raise HTTPException(status_code=422, detail="尚無補充資料（請上傳檔案或填寫訪談備忘錄）")
 
     base_dir = _company_dir(company_id)
     native_paths: list[str] = []
@@ -152,12 +153,12 @@ async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_he
             if txt and not txt.startswith("["):
                 text_parts.append(f"── 檔案：{m.get('filename', stored)} ──\n{txt}")
 
-    if not native_paths and not text_parts:
-        raise HTTPException(status_code=422, detail="無法從已上傳的檔案讀取任何內容")
+    if not native_paths and not text_parts and not interview_text.strip():
+        raise HTTPException(status_code=422, detail="無法從補充資料讀取任何內容")
 
     materials_text = "\n\n".join(text_parts)
     result = await report_generator.generate_summary_from_materials(
-        company, native_paths, materials_text, **ai
+        company, native_paths, materials_text, interview_text, **ai
     )
 
     now = datetime.now(timezone.utc).isoformat()

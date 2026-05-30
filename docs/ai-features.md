@@ -45,15 +45,16 @@ source_repo: ~/taiwan-company
 - 在 `_enrich_company` / `_deep_enrich_company` 任務中產出 `blurb`（一句話）與 `summary`（長段 Markdown，含業務概況 / 競業分析 / SWOT 之類）
 - 從實檔 sample 看到的 summary 結構：`## 業務概況` + `## 競業分析`（含表格）+ 其他段
 
-### 2b. 簡報摘要（materials，`routers/materials.py` + `report_generator.generate_summary_from_materials`）
-- 使用者從公司 modal 的「🖼 簡報摘要」側欄上傳簡報 / 公司介紹 / 照片（PDF / PPTX / DOCX / XLSX / 圖片），檔案落地到 `data/uploads/{company_id}/`，由 `/uploads` static mount serve，可點擊看原檔
-- 點「✦ 用 Opus 4.7 生成」後（前端有 spinner + 已過秒數動畫，避免誤判當機），後端把 PDF / 圖片交給 `ask_with_files`、office/txt 先抽文字內嵌，用 `claude-opus-4-7`（`_DEEP_MODEL`）掃過全部內容生成一份簡報版簡介，存 `materials_summary` / `materials_blurb`
+### 2b. 補充資料 → 增強公司簡介（materials，`routers/materials.py` + `report_generator.generate_summary_from_materials`）
+- **統一「📎 補充資料」側欄**：把原本分開的「簡報摘要」與「訪談備忘錄」併成單一面板，集中所有補充來源：①上傳檔案（簡報/介紹/照片，落地 `data/uploads/{id}/`、`/uploads` serve、可點開）②訪談備忘錄（24 欄可手動 key，或上傳逐字稿/錄音自動填，保留 DOCX 匯出）
+- 點「✦ 用 Opus 4.7 更新公司簡介」後（前端 spinner + 計時動畫），後端把 PDF/圖片交給 `ask_with_files`、office/txt 抽文字內嵌、訪談備忘錄由 `serialize_memo` 組成訪談文字，一起用 `claude-opus-4-7`（`_DEEP_MODEL`）讀過，生成整合版簡介，存 `materials_summary` / `materials_blurb`
+- **依來源標註補充**：prompt 要求新增/補充內容依來源標「（簡報補充）」（上傳檔案）或「（訪談補充）」（訪談備忘錄）；前端 `renderSummary` 把這些補充渲染成**可摺疊的 callout 區塊、依來源著色**（簡報 teal / 訪談 紫 / 介紹 琥珀 / 筆記 灰）
 - 生成完跳出**逐段審核框**：把簡報版按 `##` 拆段，使用者勾選後 `POST /materials/apply` 合併進公開的 `summary`。合併規則：deck 段落若同名於公開 DD 段落（業務概況/競業分析/主要風險）→ 就地取代該段（標「修改」）；其餘 deck 主題（產品與服務、商業模式、團隊、財務、觀察…）→ 一律收進單一上層 `## 營運綜覽`，各為 `### 子段`（標「歸入營運綜覽」）
-- 被套用的頂層段落（營運綜覽、被取代的業務概況）記在 `materials_applied_headings`，前端 `renderSummary` 據此以 teal 色條 + 「簡報」chip 標示來源
-- 公司簡介**所有 `##` 段落一律可摺疊**（前端 `applyCollapsible` 不再用 hardcoded 白名單），不論簡報產出什麼標題都不必改 code
+- 被套用的頂層段落（營運綜覽、被取代的業務概況）記在 `materials_applied_headings`，前端 `renderSummary` 據此把標題用 teal 字 + 尾綴 📎 標示（不再用 teal 盒子）
+- 公司簡介**所有 `##` 段落一律可摺疊**（前端 `applyCollapsible` 不再用 hardcoded 白名單），不論產出什麼標題都不必改 code
 - 一旦走「重新生成 / 深度生成」整份重建 `summary`，`_save_summary_result` 會清空 `materials_applied_headings`（標記不再適用）
-- prompt 嚴格限定「只寫檔案明確出現的資訊、禁杜撰數字、查無則標『——（簡報未提供）』」
-- **風險整合**：生成簡報簡介時會把現有公開的「主要風險」一併餵給 Opus，要求**完整保留既有風險 + 補充簡報讀到的額外風險**（新增條目標「（簡報補充）」），輸出單一整合後的「## 主要風險」；簡報的亮點則獨立成「## 投資亮點」收進營運綜覽。風險因此只有一處（套用時走「修改」取代公開的主要風險）
+- prompt 嚴格限定「只寫補充資料明確出現的資訊、禁杜撰數字、查無則標『——（補充資料未提供）』」
+- **業務概況與主要風險整合**：生成時把現有公開的「業務概況」「主要風險」一併餵給 Opus，要求**完整保留既有內容 + 補充檔案或訪談讀到的額外資訊/風險**（依來源標「（簡報補充）」「（訪談補充）」），輸出單一整合段；亮點獨立成「## 投資亮點」收進營運綜覽。風險因此只集中一處
 
 ### 3. Call memo 抽取（`memo_extractor.py`）
 - `extract_from_transcript(company_name, transcript)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）

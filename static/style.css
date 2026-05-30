@@ -2540,6 +2540,17 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 }
 #materials-panel-close:hover { background: rgba(255,255,255,.3); }
 #materials-panel-body { flex: 1; overflow-y: auto; padding: 16px 18px 24px; }
+/* section dividers inside the unified 補充資料 panel */
+.materials-section-divider {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b6e5f;
+  letter-spacing: .04em;
+  margin: 18px 0 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.materials-section-divider:first-child { margin-top: 2px; }
 
 /* Open button in modal header */
 #materials-open-btn {
@@ -2794,24 +2805,31 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
    non-簡報 sections and the icon trails right after the text. */
 .mat-h3-label { display: inline-flex; align-items: center; }
 .summary-mat-icon { font-size: 11px; margin-left: 5px; }
-/* Inline「（簡報補充…）」inside list items (kept inline so bullets aren't broken) */
+/* Inline supplement inside list items (kept inline so bullets aren't broken) —
+   source colour set by .mat-sup-{deck,talk,intro,note} */
 .mat-supplement {
-  color: #0b6e5f;
-  background: rgba(13,143,122,.12);
   border-radius: 4px;
   padding: 0 4px;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+.mat-sup-deck  { color:#0b6e5f; background:rgba(13,143,122,.12); }
+.mat-sup-talk  { color:#5b45a0; background:rgba(124,92,191,.14); }
+.mat-sup-intro { color:#9a6307; background:rgba(196,125,10,.14); }
+.mat-sup-note  { color:#46535f; background:rgba(91,107,125,.14); }
 
-/* 簡報補充 — collapsible indented callout block (style B) */
+/* 補充 — collapsible indented callout block; source colour by .sup-{deck,talk,...} */
 .sup-callout {
   margin: 10px 0 12px 2px;
-  border-left: 3px solid #0d8f7a;
-  background: rgba(13,143,122,.07);
+  border-left: 3px solid var(--sup-c, #0d8f7a);
+  background: var(--sup-bg, rgba(13,143,122,.07));
   border-radius: 0 8px 8px 0;
   overflow: hidden;
 }
+.sup-deck  { --sup-c:#0d8f7a; --sup-bg:rgba(13,143,122,.07); --sup-hov:rgba(13,143,122,.12); --sup-label:#0b6e5f; }
+.sup-talk  { --sup-c:#7c5cbf; --sup-bg:rgba(124,92,191,.08); --sup-hov:rgba(124,92,191,.14); --sup-label:#5b45a0; }
+.sup-intro { --sup-c:#c47d0a; --sup-bg:rgba(196,125,10,.08); --sup-hov:rgba(196,125,10,.14); --sup-label:#9a6307; }
+.sup-note  { --sup-c:#5b6b7d; --sup-bg:rgba(91,107,125,.08); --sup-hov:rgba(91,107,125,.14); --sup-label:#46535f; }
 .sup-callout-head {
   display: flex;
   align-items: center;
@@ -2820,19 +2838,19 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   cursor: pointer;
   user-select: none;
 }
-.sup-callout-head:hover { background: rgba(13,143,122,.10); }
-.sup-callout-label { font-size: 11px; font-weight: 700; color: #0b6e5f; letter-spacing: .02em; }
+.sup-callout-head:hover { background: var(--sup-hov, rgba(13,143,122,.10)); }
+.sup-callout-label { font-size: 11px; font-weight: 700; color: var(--sup-label, #0b6e5f); letter-spacing: .02em; }
 .sup-callout-caret {
   margin-left: auto;
   font-size: 11px;
-  color: #0d8f7a;
+  color: var(--sup-c, #0d8f7a);
   transition: transform .15s;
 }
 .sup-callout.open .sup-callout-caret { transform: rotate(90deg); }
 .sup-callout-body {
   display: none;
   padding: 0 14px 9px;
-  color: #214b43;
+  color: #2b3742;
   font-size: 13px;
   line-height: 1.7;
 }

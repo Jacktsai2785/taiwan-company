@@ -286,17 +286,34 @@
   </div>
 </div>
 
-<!-- ── Call Memo Side Panel ── -->
-<div id="memo-panel">
-  <div id="memo-panel-header">
-    <div id="memo-panel-title">訪談備忘錄</div>
-    <div id="memo-panel-actions">
+<!-- ── 補充資料 Side Panel (unified: 上傳檔案 + 訪談備忘錄 → 更新公司簡介) ── -->
+<div id="materials-panel">
+  <div id="materials-panel-header">
+    <div id="materials-panel-title">補充資料</div>
+    <div id="materials-panel-actions">
       <button class="memo-action-btn" onclick="saveMemo()">💾 儲存</button>
-      <button class="memo-action-btn" onclick="downloadMemo()">⬇ 下載 .docx</button>
-      <button id="memo-panel-close" onclick="closeMemoPanel()">✕</button>
+      <button class="memo-action-btn" onclick="downloadMemo()">⬇ 備忘錄 .docx</button>
+      <button id="materials-panel-close" onclick="closeMaterialsPanel()">✕</button>
     </div>
   </div>
-  <div id="memo-panel-body">
+  <div id="materials-panel-body">
+
+    <!-- ① 上傳檔案（簡報／介紹／照片） -->
+    <div class="materials-section-divider">📎 上傳檔案</div>
+    <div id="materials-upload-area">
+      <label id="materials-drop-label" for="materials-file-input">
+        <span class="memo-upload-icon">📑</span>
+        <span>上傳簡報 / 公司介紹 / 照片</span>
+        <small>PDF / PPTX / DOCX / XLSX / 圖片，可多選</small>
+      </label>
+      <input type="file" id="materials-file-input" multiple
+             accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
+      <div id="materials-upload-status"></div>
+    </div>
+    <div id="materials-file-list"></div>
+
+    <!-- ② 訪談備忘錄（可手動填寫，或上傳逐字稿／錄音自動填） -->
+    <div class="materials-section-divider">🎙 訪談備忘錄</div>
     <div id="memo-upload-area">
       <label id="memo-drop-label" for="memo-file-input">
         <span class="memo-upload-icon">📄</span>
@@ -322,34 +339,11 @@
       </div>
     </div>
     <div id="memo-fields"></div>
-  </div>
-</div>
 
-<!-- ── Materials (簡報摘要) Side Panel ── -->
-<div id="materials-panel">
-  <div id="materials-panel-header">
-    <div id="materials-panel-title">簡報摘要</div>
-    <div id="materials-panel-actions">
-      <button id="materials-panel-close" onclick="closeMaterialsPanel()">✕</button>
-    </div>
-  </div>
-  <div id="materials-panel-body">
-    <div id="materials-upload-area">
-      <label id="materials-drop-label" for="materials-file-input">
-        <span class="memo-upload-icon">📑</span>
-        <span>上傳簡報 / 公司介紹 / 照片</span>
-        <small>PDF / PPTX / DOCX / XLSX / 圖片，可多選</small>
-      </label>
-      <input type="file" id="materials-file-input" multiple
-             accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
-      <div id="materials-upload-status"></div>
-    </div>
-
-    <div id="materials-file-list"></div>
-
-    <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 Opus 4.7 生成公司簡介</button>
+    <!-- ③ 用補充資料更新公司簡介 -->
+    <div class="materials-section-divider">✨ 更新公司簡介</div>
+    <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 Opus 4.7 更新公司簡介</button>
     <div id="materials-gen-status"></div>
-
     <div id="materials-result-wrap" style="display:none">
       <div id="materials-result"></div>
     </div>

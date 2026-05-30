@@ -1580,12 +1580,9 @@ async function toggleModalWatch() {
     updateWatchCount();
     renderGrid();
     // refresh memo button visibility
-    const memoBtnHtml = c.watched
-      ? `<button id="memo-open-btn" onclick="openMemoPanel()">📋 訪談備忘錄</button>`
-      : "";
-    const materialsBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">🖼 簡報摘要</button>`;
+    const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">📎 補充資料</button>`;
     document.getElementById("modal-name").innerHTML =
-      escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml + materialsBtnHtml;
+      escHtml(shortName(c.name)) + listingBadge(c.listing_status) + supBtnHtml;
     _updateModalWatchBtn(c);
   } catch (err) {
     toast(`操作失敗：${err.message}`, true);
@@ -1654,13 +1651,13 @@ async function loadMemo(id) {
   }
 }
 
-function openMemoPanel() {
-  const id = _modalCompanyId;
-  if (!id) return;
-  const panel = document.getElementById("memo-panel");
-  document.getElementById("memo-extract-status").textContent = "";
-  panel.classList.add("open");
+// Memo lives inside the unified 補充資料 panel now. Kept as an alias in case
+// anything still calls it.
+function openMemoPanel() { openMaterialsPanel(); }
 
+// Render the 訪談備忘錄 fields into the unified panel (from cache or backend).
+function _loadMemoSection(id) {
+  document.getElementById("memo-extract-status").textContent = "";
   const c = state.companies.find(x => x.id === id);
   if (c && c.call_memo && Object.keys(c.call_memo).length > 0) {
     _renderMemoFields(c.call_memo);
@@ -1668,13 +1665,6 @@ function openMemoPanel() {
     _renderMemoFields({});
     loadMemo(id);
   }
-}
-
-async function closeMemoPanel() {
-  const panel = document.getElementById("memo-panel");
-  if (!panel.classList.contains("open")) return;
-  await saveMemo(true);
-  panel.classList.remove("open");
 }
 
 function _collectMemoData() {
@@ -1779,6 +1769,7 @@ function openMaterialsPanel() {
   _setMatRegenStale(false);
   panel.classList.add("open");
   loadMaterials(id);
+  _loadMemoSection(id);
 }
 
 // Mark the generate button as「需要重新生成」(stale) after files change while a
@@ -1788,12 +1779,15 @@ function _setMatRegenStale(stale) {
   if (!btn || btn.disabled) return;  // don't fight the running state
   btn.classList.toggle("is-stale", stale);
   btn.textContent = stale
-    ? "✦ 用 Opus 4.7 重新生成（納入新檔案）"
-    : "✦ 用 Opus 4.7 生成公司簡介";
+    ? "✦ 用 Opus 4.7 重新生成（納入新資料）"
+    : "✦ 用 Opus 4.7 更新公司簡介";
 }
 
-function closeMaterialsPanel() {
-  document.getElementById("materials-panel").classList.remove("open");
+async function closeMaterialsPanel() {
+  const panel = document.getElementById("materials-panel");
+  if (!panel.classList.contains("open")) return;
+  await saveMemo(true);   // auto-save the 訪談備忘錄 fields
+  panel.classList.remove("open");
 }
 
 async function loadMaterials(id) {
@@ -1851,7 +1845,7 @@ function _renderMaterialsResult(summary, generatedAt) {
   }
   const when = generatedAt ? new Date(generatedAt).toLocaleString("zh-TW", { hour12: false }) : "";
   el.innerHTML =
-    `<div class="materials-redo-note">已生成簡報簡介${when ? `（${escHtml(when)}）` : ""}，` +
+    `<div class="materials-redo-note">已生成更新版簡介${when ? `（${escHtml(when)}）` : ""}，` +
     `尚未套用到公司簡介的段落可重新審核。</div>` +
     `<button class="materials-redo-btn" onclick="openMatReview(_matLastSummary)">📝 重新審核並套用</button>`;
   wrap.style.display = "";
@@ -1886,6 +1880,9 @@ async function generateFromMaterials() {
     openSettings();
     return;
   }
+  // Persist the 訪談備忘錄 fields first so the backend reads the latest content.
+  await saveMemo(true);
+
   const status = document.getElementById("materials-gen-status");
   const btn = document.getElementById("materials-gen-btn");
 
@@ -1894,7 +1891,7 @@ async function generateFromMaterials() {
   const renderProgress = () => {
     status.innerHTML =
       `<span class="mat-spinner"></span>` +
-      `<span>Opus 4.7 正在閱讀所有上傳檔案並生成簡介` +
+      `<span>Opus 4.7 正在閱讀所有補充資料並更新簡介` +
       `<span class="mat-dots"><i>.</i><i>.</i><i>.</i></span></span>` +
       `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–4 分鐘）</span>`;
   };
@@ -2105,12 +2102,9 @@ function openModal(id) {
   const c = state.companies.find(x => x.id === id);
   if (!c) return;
 
-  const memoBtnHtml = c.watched
-    ? `<button id="memo-open-btn" onclick="openMemoPanel()">📋 訪談備忘錄</button>`
-    : "";
-  const materialsBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">🖼 簡報摘要</button>`;
+  const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">📎 補充資料</button>`;
   document.getElementById("modal-name").innerHTML =
-    escHtml(shortName(c.name)) + listingBadge(c.listing_status) + memoBtnHtml + materialsBtnHtml;
+    escHtml(shortName(c.name)) + listingBadge(c.listing_status) + supBtnHtml;
 
   _updateModalWatchBtn(c);
 
@@ -3339,7 +3333,7 @@ function _subscribeDeepEnrich(companyId) {
 function _closeDetailModal() {
   document.getElementById("modal-overlay").classList.remove("open");
   document.body.classList.remove("detail-open");
-  closeMemoPanel();
+  closeMaterialsPanel();
 }
 document.getElementById("modal-close").addEventListener("click", _closeDetailModal);
 document.getElementById("modal-overlay").addEventListener("click", e => {
@@ -5539,7 +5533,7 @@ function renderSummary(raw, matHeadings) {
     const ul = line.match(/^[-*•]\s+(.+)/);
     if (ul) {
       const usup = _bulletSupInner(ul[1]);
-      if (usup !== null) { flushLists(); out.push(_supCallout(usup)); continue; }
+      if (usup) { flushLists(); out.push(_supCallout(usup.inner, usup.src)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList)  { out.push("<ul>");  inList  = true;  }
       out.push(`<li>${_wrapSupplements(inlineMarkdown(ul[1]))}</li>`);
@@ -5550,7 +5544,7 @@ function renderSummary(raw, matHeadings) {
     const ol = line.match(/^\d+[.)]\s+(.+)/);
     if (ol) {
       const osup = _bulletSupInner(ol[1]);
-      if (osup !== null) { flushLists(); out.push(_supCallout(osup)); continue; }
+      if (osup) { flushLists(); out.push(_supCallout(osup.inner, osup.src)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList) { out.push("<ul>"); inList = true; }
       out.push(`<li>${_wrapSupplements(inlineMarkdown(ol[1]))}</li>`);
@@ -5573,7 +5567,7 @@ function renderSummary(raw, matHeadings) {
     // collapsible callout blocks; the surrounding public text stays as paragraphs.
     flushLists();
     for (const piece of _splitSupplements(line)) {
-      if (piece.type === "sup") out.push(_supCallout(piece.text));
+      if (piece.type === "sup") out.push(_supCallout(piece.text, piece.src));
       else if (piece.text.trim()) out.push(inlineMarkdown(piece.text));
     }
   }
@@ -5635,77 +5629,92 @@ function inlineMarkdown(str) {
     .replace(/\*(.+?)\*/g, "<em>$1</em>");
 }
 
-const _SUP_MARK = "（簡報補充";
+// Supplement markers by source. All markers are「（XX補充」(opening paren + 4 hanzi).
+const _SUP_RE = /（(簡報|訪談|介紹|筆記)補充/;
+const _SUP_META = {
+  "簡報": { cls: "deck",  icon: "📎", label: "簡報補充" },
+  "訪談": { cls: "talk",  icon: "🎙", label: "訪談補充" },
+  "介紹": { cls: "intro", icon: "📄", label: "介紹補充" },
+  "筆記": { cls: "note",  icon: "✏", label: "筆記補充" },
+};
+const _SUP_MARKLEN = 5;  // （ + 簡報/訪談/… (2) + 補充 (2)
 
-// Find the span of one「（簡報補充…）」note starting at idx. Returns {inner, end}:
-// `inner` is the note text (marker + outer parens stripped), `end` is the index
-// just past the note. Handles both the inline「（簡報補充：…）」form (balanced
-// full-width parens, nested parens safe) and the「（簡報補充）整段…」prefix form
-// (the whole remainder of the line is the note).
+// Find the earliest supplement marker at/after `from`. Returns {idx, src, meta} or null.
+function _findSup(str, from) {
+  const m = _SUP_RE.exec(str.slice(from));
+  if (!m) return null;
+  return { idx: from + m.index, src: m[1], meta: _SUP_META[m[1]] };
+}
+
+// Span of one「（XX補充…）」note starting at idx. Returns {inner, end}: `inner` is
+// the note text (marker + outer parens stripped), `end` is just past the note.
+// Handles inline「（XX補充：…）」(balanced full-width parens, nested-safe) and the
+// prefix「（XX補充）整段…」form (whole remainder of the line is the note).
 function _supSpan(str, idx) {
-  const sep = str[idx + _SUP_MARK.length];
+  const sep = str[idx + _SUP_MARKLEN];
   if (sep === "）") {
-    return { inner: str.slice(idx + _SUP_MARK.length + 1), end: str.length };
+    return { inner: str.slice(idx + _SUP_MARKLEN + 1), end: str.length };
   }
   let depth = 0, j = idx;
   for (; j < str.length; j++) {
     if (str[j] === "（") depth++;
     else if (str[j] === "）") { depth--; if (depth === 0) { j++; break; } }
   }
-  // strip「（簡報補充：」prefix and trailing「）」
-  const innerStart = idx + _SUP_MARK.length + (sep === "：" || sep === ":" ? 1 : 0);
+  const innerStart = idx + _SUP_MARKLEN + (sep === "：" || sep === ":" ? 1 : 0);
   return { inner: str.slice(innerStart, j - 1), end: j };
 }
 
-// If a list item is itself a 簡報補充 note — the「（簡報補充）」marker at the start,
-// possibly inside a leading **bold** (risks are formatted "**（簡報補充）標題**：…")
-// — return the bullet text with just the marker token removed, so it can render
-// as a callout. Otherwise null.
+// If a list item is itself a supplement note — marker at the start, possibly
+// inside a leading **bold** (risks: "**（訪談補充）標題**：…") — return the bullet
+// text with just the marker token removed + its source. Otherwise null.
 function _bulletSupInner(raw) {
-  if (!/^(\*\*)?（簡報補充[）：]/.test(raw)) return null;
-  const idx = raw.indexOf(_SUP_MARK);
-  if (raw[idx + _SUP_MARK.length] === "）") {
-    return raw.slice(0, idx) + raw.slice(idx + _SUP_MARK.length + 1);   // drop「（簡報補充）」
+  const m = /^(\*\*)?（(簡報|訪談|介紹|筆記)補充[）：]/.exec(raw);
+  if (!m) return null;
+  const src = m[2];
+  const idx = raw.indexOf("（" + src + "補充");
+  if (raw[idx + _SUP_MARKLEN] === "）") {
+    return { inner: raw.slice(0, idx) + raw.slice(idx + _SUP_MARKLEN + 1), src };
   }
-  const { inner, end } = _supSpan(raw, idx);                            // inline「（簡報補充：…）」
-  return raw.slice(0, idx) + inner + raw.slice(end);
+  const { inner, end } = _supSpan(raw, idx);
+  return { inner: raw.slice(0, idx) + inner + raw.slice(end), src };
 }
 
-// Inline highlight for 簡報補充 inside list items (kept inline so the bullet
-// structure isn't broken). Wraps the note in a .mat-supplement span.
+// Inline highlight for supplements inside list items (kept inline so the bullet
+// structure isn't broken). Wraps the note in a source-coloured span.
 function _wrapSupplements(html) {
   let out = "", i = 0;
   for (;;) {
-    const idx = html.indexOf(_SUP_MARK, i);
-    if (idx === -1) { out += html.slice(i); break; }
-    out += html.slice(i, idx);
-    const { end } = _supSpan(html, idx);
-    out += `<span class="mat-supplement">${html.slice(idx, end)}</span>`;
+    const f = _findSup(html, i);
+    if (!f) { out += html.slice(i); break; }
+    out += html.slice(i, f.idx);
+    const { end } = _supSpan(html, f.idx);
+    out += `<span class="mat-supplement mat-sup-${f.meta.cls}">${html.slice(f.idx, end)}</span>`;
     i = end;
   }
   return out;
 }
 
-// Split a paragraph line into public-text pieces and 簡報補充 notes (which become
-// collapsible callout blocks).
+// Split a paragraph line into public-text pieces and supplement notes (which
+// become collapsible, source-coloured callout blocks).
 function _splitSupplements(line) {
   const pieces = [];
   let i = 0;
   for (;;) {
-    const idx = line.indexOf(_SUP_MARK, i);
-    if (idx === -1) { if (i < line.length) pieces.push({ type: "text", text: line.slice(i) }); break; }
-    if (idx > i) pieces.push({ type: "text", text: line.slice(i, idx) });
-    const { inner, end } = _supSpan(line, idx);
-    pieces.push({ type: "sup", text: inner });
+    const f = _findSup(line, i);
+    if (!f) { if (i < line.length) pieces.push({ type: "text", text: line.slice(i) }); break; }
+    if (f.idx > i) pieces.push({ type: "text", text: line.slice(i, f.idx) });
+    const { inner, end } = _supSpan(line, f.idx);
+    pieces.push({ type: "sup", text: inner, src: f.src });
     i = end;
   }
   return pieces;
 }
 
-function _supCallout(inner) {
-  return '<div class="sup-callout open">' +
+function _supCallout(inner, src) {
+  const meta = _SUP_META[src] || _SUP_META["簡報"];
+  return `<div class="sup-callout sup-${meta.cls} open">` +
     '<div class="sup-callout-head" onclick="this.parentElement.classList.toggle(&quot;open&quot;)">' +
-    '<span class="sup-callout-label">📎 簡報補充</span>' +
+    `<span class="sup-callout-label">${meta.icon} ${meta.label}</span>` +
     '<span class="sup-callout-caret">▸</span></div>' +
     `<div class="sup-callout-body">${inlineMarkdown(inner)}</div></div>`;
 }
