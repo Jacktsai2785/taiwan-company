@@ -2803,7 +2803,7 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   margin-left: 6px;
   vertical-align: middle;
 }
-/* Inline「（簡報補充…）」annotations — deck-sourced additions inside public text */
+/* Inline「（簡報補充…）」inside list items (kept inline so bullets aren't broken) */
 .mat-supplement {
   color: #0b6e5f;
   background: rgba(13,143,122,.12);
@@ -2812,6 +2812,40 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+
+/* 簡報補充 — collapsible indented callout block (style B) */
+.sup-callout {
+  margin: 10px 0 12px 2px;
+  border-left: 3px solid #0d8f7a;
+  background: rgba(13,143,122,.07);
+  border-radius: 0 8px 8px 0;
+  overflow: hidden;
+}
+.sup-callout-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.sup-callout-head:hover { background: rgba(13,143,122,.10); }
+.sup-callout-label { font-size: 11px; font-weight: 700; color: #0b6e5f; letter-spacing: .02em; }
+.sup-callout-caret {
+  margin-left: auto;
+  font-size: 11px;
+  color: #0d8f7a;
+  transition: transform .15s;
+}
+.sup-callout.open .sup-callout-caret { transform: rotate(90deg); }
+.sup-callout-body {
+  display: none;
+  padding: 0 14px 9px;
+  color: #214b43;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.sup-callout.open .sup-callout-body { display: block; }
 
 #memo-transcript-box { border-top: 1px solid var(--border); }
 #memo-transcript-header {

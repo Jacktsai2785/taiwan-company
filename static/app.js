@@ -5538,18 +5538,20 @@ function renderSummary(raw, matHeadings) {
     // Unordered list item (-, *, •)
     const ul = line.match(/^[-*•]\s+(.+)/);
     if (ul) {
+      if (_isWholeSupplement(ul[1])) { flushLists(); out.push(_supCallout(_supSpan(ul[1], 0).inner)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList)  { out.push("<ul>");  inList  = true;  }
-      out.push(`<li>${inlineMarkdown(ul[1])}</li>`);
+      out.push(`<li>${_wrapSupplements(inlineMarkdown(ul[1]))}</li>`);
       continue;
     }
 
     // Ordered list item (1. 2. 3.) — render as bullet for visual consistency
     const ol = line.match(/^\d+[.)]\s+(.+)/);
     if (ol) {
+      if (_isWholeSupplement(ol[1])) { flushLists(); out.push(_supCallout(_supSpan(ol[1], 0).inner)); continue; }
       if (inOList) { out.push("</ol>"); inOList = false; }
       if (!inList) { out.push("<ul>"); inList = true; }
-      out.push(`<li>${inlineMarkdown(ol[1])}</li>`);
+      out.push(`<li>${_wrapSupplements(inlineMarkdown(ol[1]))}</li>`);
       continue;
     }
 
@@ -5565,10 +5567,13 @@ function renderSummary(raw, matHeadings) {
       continue;
     }
 
-    // Close lists before normal content
+    // Close lists before normal content. Split out 簡報補充 notes into their own
+    // collapsible callout blocks; the surrounding public text stays as paragraphs.
     flushLists();
-
-    out.push(inlineMarkdown(line));
+    for (const piece of _splitSupplements(line)) {
+      if (piece.type === "sup") out.push(_supCallout(piece.text));
+      else if (piece.text.trim()) out.push(inlineMarkdown(piece.text));
+    }
   }
 
   flushLists();
@@ -5580,6 +5585,7 @@ function renderSummary(raw, matHeadings) {
   const BLOCK = s => s.startsWith("<h") || s.startsWith("<ul") || s.startsWith("</ul")
     || s.startsWith("<ol") || s.startsWith("</ol")
     || s.startsWith("<li")
+    || s.startsWith("<div")
     || s.startsWith("<table") || s === "<hr>";
   for (const l of out) {
     if (l === "") {
@@ -5622,31 +5628,76 @@ function renderSummary(raw, matHeadings) {
 }
 
 function inlineMarkdown(str) {
-  const html = escHtml(str)
+  return escHtml(str)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>");
-  return _wrapSupplements(html);
 }
 
-// Wrap each「（簡報補充…）」annotation in a styled span so deck-sourced additions
-// stand out from the public-research text. Uses balanced full-width-paren scanning
-// so nested （…） inside the note don't cut it short.
+const _SUP_MARK = "（簡報補充";
+
+// Find the span of one「（簡報補充…）」note starting at idx. Returns {inner, end}:
+// `inner` is the note text (marker + outer parens stripped), `end` is the index
+// just past the note. Handles both the inline「（簡報補充：…）」form (balanced
+// full-width parens, nested parens safe) and the「（簡報補充）整段…」prefix form
+// (the whole remainder of the line is the note).
+function _supSpan(str, idx) {
+  const sep = str[idx + _SUP_MARK.length];
+  if (sep === "）") {
+    return { inner: str.slice(idx + _SUP_MARK.length + 1), end: str.length };
+  }
+  let depth = 0, j = idx;
+  for (; j < str.length; j++) {
+    if (str[j] === "（") depth++;
+    else if (str[j] === "）") { depth--; if (depth === 0) { j++; break; } }
+  }
+  // strip「（簡報補充：」prefix and trailing「）」
+  const innerStart = idx + _SUP_MARK.length + (sep === "：" || sep === ":" ? 1 : 0);
+  return { inner: str.slice(innerStart, j - 1), end: j };
+}
+
+// True when the whole string is a single 簡報補充 note (e.g. a risk bullet
+// "（簡報補充）某新風險") — such bullets are pulled out into a callout block.
+function _isWholeSupplement(s) {
+  return s.startsWith(_SUP_MARK) && _supSpan(s, 0).end >= s.length;
+}
+
+// Inline highlight for 簡報補充 inside list items (kept inline so the bullet
+// structure isn't broken). Wraps the note in a .mat-supplement span.
 function _wrapSupplements(html) {
-  const MARK = "（簡報補充";
   let out = "", i = 0;
   for (;;) {
-    const idx = html.indexOf(MARK, i);
+    const idx = html.indexOf(_SUP_MARK, i);
     if (idx === -1) { out += html.slice(i); break; }
     out += html.slice(i, idx);
-    let depth = 0, j = idx;
-    for (; j < html.length; j++) {
-      if (html[j] === "（") depth++;
-      else if (html[j] === "）") { depth--; if (depth === 0) { j++; break; } }
-    }
-    out += `<span class="mat-supplement">${html.slice(idx, j)}</span>`;
-    i = j;
+    const { end } = _supSpan(html, idx);
+    out += `<span class="mat-supplement">${html.slice(idx, end)}</span>`;
+    i = end;
   }
   return out;
+}
+
+// Split a paragraph line into public-text pieces and 簡報補充 notes (which become
+// collapsible callout blocks).
+function _splitSupplements(line) {
+  const pieces = [];
+  let i = 0;
+  for (;;) {
+    const idx = line.indexOf(_SUP_MARK, i);
+    if (idx === -1) { if (i < line.length) pieces.push({ type: "text", text: line.slice(i) }); break; }
+    if (idx > i) pieces.push({ type: "text", text: line.slice(i, idx) });
+    const { inner, end } = _supSpan(line, idx);
+    pieces.push({ type: "sup", text: inner });
+    i = end;
+  }
+  return pieces;
+}
+
+function _supCallout(inner) {
+  return '<div class="sup-callout open">' +
+    '<div class="sup-callout-head" onclick="this.parentElement.classList.toggle(&quot;open&quot;)">' +
+    '<span class="sup-callout-label">📎 簡報補充</span>' +
+    '<span class="sup-callout-caret">▸</span></div>' +
+    `<div class="sup-callout-body">${inlineMarkdown(inner)}</div></div>`;
 }
 
 /* ── Util ── */
