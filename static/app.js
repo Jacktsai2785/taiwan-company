@@ -2352,6 +2352,12 @@ function _showSummaryTab(container, idx) {
 
 /* ── 競業分析：四種類型 sub-tab + 手動新增 ── */
 const _COMP_TYPES = ["正面競業", "替代路徑", "側翼潛入", "垂直整合"];
+const _COMP_TYPE_DEFS = {
+  "正面競業": "同產品／服務，直接搶相同客戶或標案",
+  "替代路徑": "客戶解決相同問題的不同技術或商業模式",
+  "側翼潛入": "現在不在此市場，但有能力、有誘因跨入的鄰近業者（如大型集團、跨國廠商）",
+  "垂直整合": "重要客戶或上游供應商有可能自行發展相同能力者",
+};
 
 function _setupCompetitorTabs(page) {
   const table = page.querySelector(".competitor-table");
@@ -2392,6 +2398,7 @@ function _setupCompetitorTabs(page) {
     const tab = document.createElement("div");
     tab.className = "comp-type-tab" + (i === 0 ? " on" : "");
     tab.dataset.type = t;
+    if (_COMP_TYPE_DEFS[t]) tab.dataset.tip = _COMP_TYPE_DEFS[t];   // hover 顯示定義
     tab.innerHTML = `${t}<span class="comp-type-ct">${n}</span>`;
     tab.onclick = () => _showCompetitorType(page, t);
     bar.appendChild(tab);
@@ -5786,6 +5793,9 @@ function renderSummary(raw, matHeadings) {
   for (let i = 0; i < lines.length; i++) {
     const raw  = lines[i];
     const line = raw.trim();
+
+    // 「競業類型定義：…」改用頁籤 tooltip 呈現，這裡直接濾掉避免重複佔版面
+    if (/^競業類型定義[：:]/.test(line)) continue;
 
     // Table row
     if (line.startsWith("|") && line.endsWith("|")) {
