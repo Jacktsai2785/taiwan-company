@@ -5697,6 +5697,17 @@ function applyCollapsible(container) {
 }
 
 /* ── Markdown summary renderer ── */
+// 長段正文依句號（。）拆成數個 <p>，讓不同主題各自成段、不再擠成一坨。
+// 短段（<100 字）或單句不拆，避免太碎。
+function _proseParagraphs(text) {
+  const plain = text.replace(/<[^>]+>/g, "");
+  if (plain.length < 100) return `<p>${text}</p>`;
+  const parts = text.split(/(?<=。)/)
+    .map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) return `<p>${text}</p>`;
+  return parts.map(s => `<p>${s}</p>`).join("");
+}
+
 function renderSummary(raw, matHeadings) {
   // Drop any preamble before the first ## heading (e.g. Claude status messages)
   // Also drop "## 公司名稱 公司簡介" opening title if present
@@ -5839,15 +5850,15 @@ function renderSummary(raw, matHeadings) {
     || s.startsWith("<table") || s === "<hr>";
   for (const l of out) {
     if (l === "") {
-      if (para.length) { html.push(`<p>${para.join(" ")}</p>`); para = []; }
+      if (para.length) { html.push(_proseParagraphs(para.join(" "))); para = []; }
     } else if (BLOCK(l)) {
-      if (para.length) { html.push(`<p>${para.join(" ")}</p>`); para = []; }
+      if (para.length) { html.push(_proseParagraphs(para.join(" "))); para = []; }
       html.push(l);
     } else {
       para.push(l);
     }
   }
-  if (para.length) html.push(`<p>${para.join(" ")}</p>`);
+  if (para.length) html.push(_proseParagraphs(para.join(" ")));
 
   // Mark sections that were applied from uploaded materials (簡報) with a
   // distinct wrapper + chip so the user can see what came from the deck.

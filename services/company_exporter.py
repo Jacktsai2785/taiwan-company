@@ -70,6 +70,14 @@ def _strip_inline_md(text: str) -> str:
     return re.sub(r"\*(.+?)\*", r"\1", text)
 
 
+def _prose_sentences(text: str) -> list[str]:
+    """長段正文依句號拆成數句（短段或單句不拆），對齊前端 _proseParagraphs。"""
+    if len(text) < 100:
+        return [text]
+    parts = [s.strip() for s in re.split(r"(?<=。)", text) if s.strip()]
+    return parts if len(parts) >= 2 else [text]
+
+
 def _display_comp_name(s: str) -> str:
     """顯示用：去掉法定尾綴但保留括號註記（（本案）/（2308）…）。Mirrors _displayCompName."""
     return re.sub(r"(股份有限公司|有限公司)(?=（|$)", "", s or "").strip()
@@ -669,14 +677,15 @@ def _docx_summary_body(doc, lines: list[str],
             i += 1
             continue
 
-        # Regular paragraph — split out supplement notes into their own callout boxes
+        # Regular paragraph — split out supplement notes into callout boxes; 長段正文再依句拆段
         for kind, text, src in _split_supplements(stripped):
             if kind == "sup":
                 _docx_callout(doc, text, src)
             elif text.strip():
-                p = doc.add_paragraph()
-                _para_spacing(p, before=20, after=60, line=276)
-                _add_md_runs(p, text.strip(), 9.5, _R.TEXT)
+                for sent in _prose_sentences(text.strip()):
+                    p = doc.add_paragraph()
+                    _para_spacing(p, before=20, after=60, line=276)
+                    _add_md_runs(p, sent, 9.5, _R.TEXT)
         i += 1
 
 
@@ -1153,12 +1162,13 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
                 summary_h4(line.lstrip("#").strip())
                 i += 1; continue
 
-            # Regular paragraph — split out supplement notes into their own callout boxes
+            # Regular paragraph — supplement notes → callout boxes; 長段正文再依句拆段
             for kind, text, src in _split_supplements(line):
                 if kind == "sup":
                     callout(text, src)
                 elif text.strip():
-                    put(text.strip(), size=9.5, gap_after=5)
+                    for sent in _prose_sentences(text.strip()):
+                        put(sent, size=9.5, gap_after=5)
             i += 1
 
     # ═══════════════ Build document ═══════════════
