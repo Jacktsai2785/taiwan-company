@@ -2231,29 +2231,113 @@ function openModal(id) {
   const summaryEl = document.getElementById("modal-summary");
   summaryEl.innerHTML =
     c.summary ? renderSummary(c.summary, c.materials_applied_headings) : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
-  summaryEl.style.display = "none";
-  const summaryH4 = summaryEl.closest(".modal-section")?.querySelector(".collapsible-h4");
-  if (summaryH4) summaryH4.classList.remove("is-open");
-  applyCollapsible(summaryEl);
+  summaryEl.style.display = "";   // visible within its page; the bookmark controls page visibility
+  applySummaryTabs(summaryEl);    // 公司簡介內部橫向分頁
 
-  // Patents: show section if data exists, hide if not
-  const patentSection = document.getElementById("modal-patents-section");
-  const patentStatus  = document.getElementById("modal-patents-status");
+  // Patents: render rows if data exists (section visibility handled by bookmarks)
+  const patentStatus = document.getElementById("modal-patents-status");
+  const patTable = document.getElementById("modal-patents-table");
   if (c.patents && c.patents.length) {
-    if (patentSection) patentSection.style.display = "";
-    if (patentStatus)  patentStatus.innerHTML = "";
-    // Reset to collapsed state each time modal opens
-    const patH4 = document.querySelector(".patent-section-h4");
-    if (patH4) patH4.classList.remove("is-open");
-    const patTable = document.getElementById("modal-patents-table");
-    if (patTable) patTable.style.display = "none";
+    if (patentStatus) patentStatus.innerHTML = "";
+    if (patTable) patTable.style.display = "";
     _renderPatents(id);
   } else {
-    if (patentSection) patentSection.style.display = "none";
+    if (patTable) patTable.style.display = "none";
+    if (patentStatus) patentStatus.innerHTML = '<p class="summary-placeholder">尚未生成專利資料，點右上「📋 生成專利」開始（約 15–45 秒）。</p>';
   }
+
+  _refreshModalBookmarks();
+  showModalSection("info");   // default page
 
   document.getElementById("modal-overlay").classList.add("open");
   document.body.classList.add("detail-open");
+}
+
+/* ── Modal 左側 3 頁籤導覽 ── */
+// A section is "empty" (hide even within its page) when it has no rendered data.
+function _modalSectionEmpty(sec) {
+  if (sec.id === "modal-directors-section")
+    return (document.getElementById("modal-directors")?.childElementCount || 0) === 0;
+  if (sec.id === "modal-shareholders-section")
+    return !(document.getElementById("modal-shareholder-content")?.innerHTML.trim());
+  // 專利頁永遠顯示（空的時候顯示「生成專利」按鈕 + 提示），故不視為空
+  return false;  // 基本資料 / 公司簡介 / 專利 are never page-empty
+}
+
+function showModalSection(page) {
+  const bm = document.querySelector(`#modal-nav .modal-bm[data-page="${page}"]`);
+  if (bm && bm.classList.contains("disabled")) return;   // 灰掉的頁籤不動作
+  document.querySelectorAll("#modal-content .modal-section").forEach(s => {
+    s.style.display = (s.dataset.page === page && !_modalSectionEmpty(s)) ? "" : "none";
+  });
+  document.querySelectorAll("#modal-nav .modal-bm").forEach(b => {
+    b.classList.toggle("on", b.dataset.page === page);
+  });
+  const content = document.getElementById("modal-content");
+  if (content) content.scrollTop = 0;
+}
+
+// Update count badges. All three pages are always clickable (專利 page lets you
+// generate when empty), so no bookmark is greyed out.
+function _refreshModalBookmarks() {
+  const patCount = document.getElementById("modal-patents-body")?.childElementCount || 0;
+  document.querySelectorAll("#modal-nav .modal-bm").forEach(b => b.classList.remove("disabled"));
+  const patBadge = document.getElementById("bm-ct-patents");
+  if (patBadge) { patBadge.textContent = patCount || ""; patBadge.style.display = patCount ? "" : "none"; }
+}
+
+// Split the rendered 公司簡介 into horizontal sub-tabs (one section shown at a time).
+function applySummaryTabs(container) {
+  const tabbar = document.getElementById("summary-tabbar");
+  if (!tabbar) return;
+  tabbar.innerHTML = "";
+  // Each top-level section = a bare <h3>(+siblings) OR a .summary-mat-section wrapper.
+  const sections = [];   // { title, nodes: [...] }
+  let cur = null;
+  for (const node of [...container.children]) {
+    if (node.classList && node.classList.contains("summary-mat-section")) {
+      const h3 = node.querySelector("h3");
+      sections.push({ title: _cleanHeading(h3), nodes: [node] });
+      cur = null;
+    } else if (node.tagName === "H3") {
+      cur = { title: _cleanHeading(node), nodes: [node] };
+      sections.push(cur);
+    } else if (cur) {
+      cur.nodes.push(node);
+    }
+  }
+  if (sections.length < 1) { tabbar.style.display = "none"; return; }
+  tabbar.style.display = "";
+
+  // wrap each section's nodes in a page div, hidden by default
+  sections.forEach((sec, i) => {
+    const page = document.createElement("div");
+    page.className = "summary-tab-page";
+    page.dataset.idx = i;
+    sec.nodes[0].before(page);
+    sec.nodes.forEach(n => page.appendChild(n));
+    page.style.display = i === 0 ? "" : "none";
+    const tab = document.createElement("div");
+    tab.className = "summary-tab" + (i === 0 ? " on" : "");
+    tab.textContent = sec.title || `第 ${i + 1} 段`;
+    tab.onclick = () => _showSummaryTab(container, i);
+    tabbar.appendChild(tab);
+  });
+}
+
+function _cleanHeading(h3) {
+  if (!h3) return "";
+  // text without the「簡報」chip / 📎 icon
+  return (h3.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function _showSummaryTab(container, idx) {
+  container.querySelectorAll(".summary-tab-page").forEach(p => {
+    p.style.display = (p.dataset.idx == idx) ? "" : "none";
+  });
+  document.querySelectorAll("#summary-tabbar .summary-tab").forEach((t, i) => {
+    t.classList.toggle("on", i == idx);
+  });
 }
 
 
@@ -2348,11 +2432,9 @@ async function lookupDirectorParent(entityName, btn) {
 function _renderShareholderSection(totalRatio, hasRatio) {
   const section = document.getElementById("modal-shareholders-section");
   const content = document.getElementById("modal-shareholder-content");
-  if (!hasRatio) { section.style.display = "none"; return; }
+  if (!hasRatio) { content.innerHTML = ""; section.style.display = "none"; return; }
   section.style.display = "";
-  const h4 = section.querySelector(".collapsible-h4");
-  if (h4) h4.classList.remove("is-open");
-  content.style.display = "none";
+  content.style.display = "";   // visible within section (bookmark controls section)
   const pct = (totalRatio * 100).toFixed(2);
   const isIncomplete = totalRatio < 0.999;
   if (isIncomplete) {
@@ -3026,12 +3108,11 @@ function deepEnrich() {
 function patentGen() {
   const id = _modalCompanyId;
   if (!id) return;
-  const section = document.getElementById("modal-patents-section");
-  const status  = document.getElementById("modal-patents-status");
-  const table   = document.getElementById("modal-patents-table");
-  if (section) section.style.display = "";
-  if (table)   table.style.display = "none";
-  if (status)  status.innerHTML = '<p class="summary-placeholder">📋 連接 TIPO 系統中，請稍候…</p>';
+  showModalSection("patents");   // 切到專利頁，進度與結果都在這裡
+  const status = document.getElementById("modal-patents-status");
+  const table  = document.getElementById("modal-patents-table");
+  if (table)  table.style.display = "none";
+  if (status) status.innerHTML = '<p class="summary-placeholder">📋 連接 TIPO 系統中，請稍候…</p>';
   _subscribePatent(id);
 }
 
@@ -3236,11 +3317,9 @@ function _renderPatents(companyId, autoShow = false) {
     </tr>`;
   }
   tbody.innerHTML = rows;
-  if (autoShow) {
-    if (table) table.style.display = "";
-    const patH4 = document.querySelector(".patent-section-h4");
-    if (patH4) patH4.classList.add("is-open");
-  }
+  if (table) table.style.display = "";
+  _refreshModalBookmarks();          // enable 專利 bookmark + badge
+  if (autoShow) showModalSection("patents");
 }
 
 function _updateSummaryInModal(company) {
@@ -3251,7 +3330,9 @@ function _updateSummaryInModal(company) {
   summaryEl.innerHTML = company.summary
     ? renderSummary(company.summary, company.materials_applied_headings)
     : "<p class=\"summary-placeholder\">（公司簡介資料補充中，請稍後重整）</p>";
-  _expandSummarySection();
+  summaryEl.style.display = "";
+  applySummaryTabs(summaryEl);   // rebuild 公司簡介 sub-tabs
+  showModalSection("summary");   // jump to 公司簡介 page to show the result
 }
 
 function _subscribeSummarize(companyId) {

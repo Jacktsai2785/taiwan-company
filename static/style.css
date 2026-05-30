@@ -706,7 +706,7 @@ body {
   background: var(--card);
   border-radius: 12px;
   width: 100%;
-  max-width: 720px;
+  max-width: 900px;
   overflow: hidden;
   position: relative;
   box-shadow: 0 20px 60px rgba(14,26,46,.28);
@@ -759,13 +759,79 @@ body {
 }
 
 /* Modal body */
-#modal-body { padding: 24px 32px 32px; }
+#modal-body { display: flex; align-items: stretch; }
+
+/* 左側書籤導覽欄 */
+#modal-nav {
+  width: 112px;
+  flex-shrink: 0;
+  padding: 16px 0;
+  background: #f4f7fb;
+  border-right: 1px solid var(--border);
+}
+.modal-bm {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 10px 15px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  user-select: none;
+}
+.modal-bm:hover { background: #eaf1f9; color: var(--text); }
+.modal-bm.on {
+  background: var(--card);
+  color: var(--accent);
+  font-weight: 700;
+  border-left-color: var(--accent);
+  box-shadow: 1px 0 0 var(--card);
+}
+.modal-bm.disabled { opacity: .38; cursor: default; pointer-events: none; }
+.modal-bm-ct {
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--muted);
+  border-radius: 99px; padding: 0 6px; margin-left: auto;
+}
+.modal-bm.on .modal-bm-ct { background: var(--accent); }
+
+#modal-content {
+  flex: 1;
+  min-width: 0;
+  padding: 22px 30px 28px;
+  min-height: 400px;
+  max-height: 76vh;
+  overflow-y: auto;
+}
+
+/* 公司簡介內部橫向分頁 */
+#summary-tabbar {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 14px;
+}
+.summary-tab {
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.summary-tab:hover { color: var(--text); }
+.summary-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+.summary-tab-page > h3:first-child,
+.summary-tab-page > .summary-mat-section:first-child h3 { margin-top: 2px; }
 .modal-section { margin-bottom: 22px; }
 .modal-section h4 {
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: .01em;
   color: var(--accent);
   margin-bottom: 10px;
   padding-bottom: 6px;
@@ -1616,13 +1682,14 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 }
 
 #modal-summary h3 {
-  font-size: 12px; font-weight: 700;
+  font-size: 14px; font-weight: 700;
+  line-height: 1.4;
   color: var(--text);
-  margin: 18px 0 6px;
+  margin: 18px 0 7px;
   padding-left: 9px;
   border-left: 3px solid var(--accent);
 }
-#modal-summary h4 { font-size: 11px; font-weight: 700; color: var(--muted); margin: 10px 0 2px; }
+#modal-summary h4 { font-size: 13px; font-weight: 700; color: var(--text); margin: 12px 0 3px; }
 #modal-summary p { margin: 0 0 8px; }
 #modal-summary ul,
 #modal-summary ol { margin: 4px 0 8px 0; padding-left: 18px; }
@@ -2897,9 +2964,9 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .sup-callout-body {
   display: none;
   padding: 0 14px 9px;
-  color: #2b3742;
+  color: var(--text);
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.85;
 }
 .sup-callout.open .sup-callout-body { display: block; }
 

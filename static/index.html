@@ -132,59 +132,68 @@
       </div>
     </div>
     <div id="modal-body">
+      <!-- 左側 3 頁籤：①基本資料(含董監事/大股東) ②公司簡介 ③專利 -->
+      <div id="modal-nav">
+        <div class="modal-bm on" data-page="info" onclick="showModalSection('info')">基本資料</div>
+        <div class="modal-bm" data-page="summary" onclick="showModalSection('summary')">公司簡介</div>
+        <div class="modal-bm" data-page="patents" onclick="showModalSection('patents')">專利<span class="modal-bm-ct" id="bm-ct-patents"></span></div>
+      </div>
 
-      <div class="modal-section">
-        <div class="section-header-row">
-          <h4>基本資料</h4>
-          <button class="gcis-refresh-btn" onclick="refreshGcis()" title="重新從政府 API 拉取基本資料">🔃 更新</button>
+      <div id="modal-content">
+        <div class="modal-section" data-page="info">
+          <div class="section-header-row">
+            <h4>基本資料</h4>
+            <button class="gcis-refresh-btn" onclick="refreshGcis()" title="重新從政府 API 拉取基本資料">🔃 更新</button>
+          </div>
+          <div class="info-grid" id="modal-info"></div>
         </div>
-        <div class="info-grid" id="modal-info"></div>
-      </div>
 
-      <div class="modal-section" id="modal-directors-section">
-        <h4>董監事名單 <span class="director-hint">點 ⊕ 將該位董事設為關係圖分析錨點</span><button class="collapse-parent-rows-btn" id="collapse-parent-rows-btn" onclick="toggleParentRows(this)" style="display:none">收合追蹤</button></h4>
-        <table class="director-table">
-          <thead>
-            <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th><th>分析</th></tr>
-          </thead>
-          <tbody id="modal-directors"></tbody>
-        </table>
-      </div>
+        <div class="modal-section" id="modal-directors-section" data-page="info" style="display:none">
+          <h4>董監事名單 <span class="director-hint">點 ⊕ 將該位董事設為關係圖分析錨點</span><button class="collapse-parent-rows-btn" id="collapse-parent-rows-btn" onclick="toggleParentRows(this)" style="display:none">收合追蹤</button></h4>
+          <table class="director-table">
+            <thead>
+              <tr><th>職稱</th><th>姓名</th><th>所代表法人</th><th>持股數</th><th>持股比例</th><th>分析</th></tr>
+            </thead>
+            <tbody id="modal-directors"></tbody>
+          </table>
+        </div>
 
-      <div class="modal-section" id="modal-shareholders-section" style="display:none">
-        <h4 class="collapsible-h4" onclick="toggleShareholderSection()"><span class="section-chevron">›</span> 大股東</h4>
-        <div id="modal-shareholder-content" style="display:none"></div>
-      </div>
+        <div class="modal-section" id="modal-shareholders-section" data-page="info" style="display:none">
+          <h4>大股東</h4>
+          <div id="modal-shareholder-content"></div>
+        </div>
 
-      <div class="modal-section">
-        <div class="section-header-row">
-          <h4 class="collapsible-h4" onclick="toggleSummarySection()"><span class="section-chevron">›</span> 公司簡介</h4>
-          <div class="gen-dropdown-wrap" id="gen-dropdown-wrap">
-            <button class="gen-dropdown-toggle" id="modal-gen-btn" onclick="toggleGenDropdown()">
-              ✦ 生成 <span class="gen-caret">▾</span>
-            </button>
-            <div class="gen-dropdown-menu" id="gen-dropdown-menu">
-              <button onclick="regenSummary(); closeGenDropdown()">🔄 重新生成<span class="gen-hint">約 3–7 分鐘</span></button>
-              <button onclick="deepEnrich(); closeGenDropdown()">🔍 深度生成<span class="gen-hint">約 4–8 分鐘</span></button>
-              <div class="gen-divider"></div>
-              <button onclick="patentGen(); closeGenDropdown()">📋 專利生成<span class="gen-hint">約 15–45 秒</span></button>
+        <div class="modal-section" data-page="summary" style="display:none">
+          <div class="section-header-row">
+            <h4>公司簡介</h4>
+            <div class="gen-dropdown-wrap" id="gen-dropdown-wrap">
+              <button class="gen-dropdown-toggle" id="modal-gen-btn" onclick="toggleGenDropdown()">
+                ✦ 生成 <span class="gen-caret">▾</span>
+              </button>
+              <div class="gen-dropdown-menu" id="gen-dropdown-menu">
+                <button onclick="regenSummary(); closeGenDropdown()">🔄 重新生成<span class="gen-hint">約 3–7 分鐘</span></button>
+                <button onclick="deepEnrich(); closeGenDropdown()">🔍 深度生成<span class="gen-hint">約 4–8 分鐘</span></button>
+              </div>
             </div>
           </div>
+          <div id="summary-tabbar"></div>
+          <div id="modal-summary"></div>
         </div>
-        <div id="modal-summary" style="display:none"></div>
-      </div>
 
-      <div class="modal-section" id="modal-patents-section" style="display:none">
-        <h4 class="patent-section-h4" onclick="togglePatentSection()"><span class="patent-chevron">›</span> 專利資料 <span class="director-hint" id="modal-patents-hint"></span></h4>
-        <div id="modal-patents-status"></div>
-        <table class="patent-table" id="modal-patents-table" style="display:none">
-          <thead>
-            <tr><th>案號</th><th>名稱</th><th>申請日</th><th>狀態</th><th>申請人/發明人</th><th>簡要說明</th></tr>
-          </thead>
-          <tbody id="modal-patents-body"></tbody>
-        </table>
+        <div class="modal-section" id="modal-patents-section" data-page="patents" style="display:none">
+          <div class="section-header-row">
+            <h4>專利資料 <span class="director-hint" id="modal-patents-hint"></span></h4>
+            <button class="gen-dropdown-toggle" id="patent-gen-btn" onclick="patentGen()">📋 生成專利</button>
+          </div>
+          <div id="modal-patents-status"></div>
+          <table class="patent-table" id="modal-patents-table" style="display:none">
+            <thead>
+              <tr><th>案號</th><th>名稱</th><th>申請日</th><th>狀態</th><th>申請人/發明人</th><th>簡要說明</th></tr>
+            </thead>
+            <tbody id="modal-patents-body"></tbody>
+          </table>
+        </div>
       </div>
-
     </div>
   </div>
 </div>
