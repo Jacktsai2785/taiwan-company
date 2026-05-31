@@ -13,4 +13,4 @@ anthropic>=0.40.0
 python-dotenv>=1.0.0
 openai-whisper>=20250625
 feedparser>=6.0.0
-feedparser>=6.0.0
+playwright==1.59.0
