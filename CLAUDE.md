@@ -2,6 +2,30 @@
 
 FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude CLI 作為 AI 引擎。
 
+## 🤖 給 AI Agent：首次部署協議（最優先，先讀這段）
+
+**情境**：使用者在一台新裝置上裝好 `claude` 後，把這個 repo 的 URL 貼給你、要你 clone。
+他明確表示「**除了貼 URL 與裝 claude，其餘步驟都不會自己操作**」。所以只要符合以下任一情境，
+就**主動完成整個部署，不要把指令丟回去給他自己跑**：
+
+- 你剛幫他 clone 完這個 repo
+- 他只丟 repo URL，或說「裝起來 / 部署 / 跑起來」
+- `.venv/` 不存在、或 `curl -fsS http://localhost:8003/` 不通
+
+**動作（依序，不需再問）：**
+
+1. `cd` 到 repo 根目錄，執行： `bash scripts/bootstrap.sh`
+   — 冪等腳本，自動裝：系統套件（tesseract 繁中、ffmpeg）、uv、Python 套件、
+   playwright Chromium + 系統庫、claude CLI、建 `.env`、設定並啟動 systemd service、healthcheck。
+   需 `sudo` 的步驟會自動帶；過程中若 apt / sudo 需要密碼，請提醒使用者輸入。
+2. 跑完回報 http://localhost:8003 是否 healthcheck 通過。
+3. 提醒使用者**唯一的手動步驟**：本機 AI 引擎需執行一次 `claude` 登入授權；
+   或在 `.env` 填 `ANTHROPIC_API_KEY` 改走雲端。
+4. 若 healthcheck 失敗：讀 `logs/app-error.log` 或 `journalctl --user -u taiwan-company -n 50`，
+   定位後直接修，不要停在「請你自己看 log」。
+
+> 純人類操作（不透過 agent）的等價指令見下方「快速建立環境」。
+
 ## 快速建立環境
 
 ### 全新裝置：一鍵部署（推薦）
