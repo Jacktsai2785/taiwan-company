@@ -1,16 +1,26 @@
-.PHONY: setup start start-bg stop restart logs enable disable status
+.PHONY: bootstrap setup start start-bg stop restart logs enable disable status
 
 SERVICE := taiwan-company.service
-LOG_FILE := /home/jacktsai/taiwan-company/logs/app.log
+LOG_FILE := $(CURDIR)/logs/app.log
 
+# ── 一鍵安裝完整環境（系統套件 + Python + playwright + claude + systemd）────────
+# 新裝置首次部署用這個；它是冪等的，可重複執行。
+bootstrap:
+	bash scripts/bootstrap.sh
+
+# ── 只建 Python 環境（已具備系統依賴時用）──────────────────────────────────────
 setup:
 	@echo "── 建立 Python 虛擬環境 ──"
 	uv venv
 	@echo "── 安裝套件 ──"
 	uv pip install -r requirements.txt
+	@echo "── 下載 playwright Chromium ──"
+	.venv/bin/python -m playwright install chromium
 	@mkdir -p data logs
 	@echo ""
 	@echo "✅ 環境建立完成，執行 make start-bg 啟動（或 make start 跑 hot-reload）"
+	@echo "ℹ 若 findbiz 報 libnspr4.so 缺失，補系統庫："
+	@echo "   sudo .venv/bin/python -m playwright install-deps chromium"
 
 # ── 前景 dev hot-reload ────────────────────────────────────────────────────────
 # 自動暫停 systemd 避免搶 port 8003。Ctrl+C 結束後 systemd 會在 5s 內自動重啟回 production code。

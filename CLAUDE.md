@@ -4,14 +4,28 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
 
 ## 快速建立環境
 
-需要安裝：**uv**（Python 套件管理）、**Claude Desktop 或 Claude CLI**
+### 全新裝置：一鍵部署（推薦）
+
+從零開始（連 repo 都還沒 clone），在新裝置貼一行即可裝完所有環境並啟動：
 
 ```bash
-# 1. 一鍵建立虛擬環境並安裝所有套件
-make setup
+curl -fsSL https://raw.githubusercontent.com/Jacktsai2785/taiwan-company/main/scripts/install.sh | bash
+```
 
-# 2. 啟動伺服器
-make start
+它會：裝 git → clone 到 `~/taiwan-company` → 跑 `scripts/bootstrap.sh` 裝齊
+**系統套件**（tesseract 繁中、ffmpeg）、**uv** + Python 套件、**playwright Chromium + 系統庫**、
+偵測/安裝 **claude CLI**、建立 `.env`、設定並啟動 **systemd service**，最後 healthcheck。
+腳本是**冪等**的，可重複執行。需 `sudo` 的步驟會自動帶；無 sudo 時改印出手動指令。
+
+> 唯一無法全自動的：claude CLI 首次需手動 `claude` 登入授權（一次即可）；或在 `.env` 填 `ANTHROPIC_API_KEY` 走雲端。
+
+已 clone 過的裝置，等價指令：`make bootstrap`。
+
+### 只重建 Python 環境（系統依賴已就緒）
+
+```bash
+make setup      # 建 .venv + 裝套件 + 下載 playwright Chromium
+make start      # 啟動（hot reload）
 ```
 
 開啟瀏覽器至 http://localhost:8003

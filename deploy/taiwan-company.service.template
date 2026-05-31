@@ -1,0 +1,24 @@
+# systemd user service 模板。
+# 由 scripts/bootstrap.sh 將 __PLACEHOLDER__ 替換成實際路徑後，
+# 安裝到 ~/.config/systemd/user/taiwan-company.service。
+# 不要直接編輯安裝後的檔案——改這份 template 再重跑 bootstrap。
+[Unit]
+Description=台灣產業商情平台 (FastAPI + Static Frontend)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_DIR__
+# __EXTRA_PATH__ 由 bootstrap 偵測 node / claude CLI 後填入（結尾含冒號或為空）
+Environment=PATH=__REPO_DIR__/.venv/bin:__EXTRA_PATH____HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+# WSLg / X11 顯示，findbiz scraper 以非 headless 模式啟動 Chromium 時需要
+Environment=DISPLAY=:0
+ExecStart=__REPO_DIR__/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8003
+StandardOutput=append:__REPO_DIR__/logs/app.log
+StandardError=append:__REPO_DIR__/logs/app-error.log
+Restart=always
+RestartSec=5
+TimeoutStopSec=300
+
+[Install]
+WantedBy=default.target
