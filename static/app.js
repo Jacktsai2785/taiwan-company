@@ -3822,11 +3822,23 @@ function _displayCompName(s) {
 // 一格塞多家公司時拆成單家陣列。分隔符涵蓋「／」「/」「、」「與」（如
 // 「雙鴻（3324）／奇鋐（3017）」「臻鼎、欣興、健鼎與上游南亞、長春」），並去掉
 // 「上游/下游/中游」這類方向描述詞，讓每家是乾淨的公司名（名稱解析交給 name-lookup）。
+// 只在「括號外」切，避免切到括號內的分隔符（如「Guardsquare NV（DexGuard / iXGuard）」
+// 的 / 是產品名分隔，不是兩家公司）。
 function _splitCompCell(content) {
-  return (content || "")
-    .split(/[／/、]|與/)
-    .map(s => s.replace(/^(上游|下游|中游)/, "").trim())
-    .filter(Boolean);
+  const parts = [];
+  let buf = "", depth = 0;
+  for (const ch of (content || "")) {
+    if (ch === "（" || ch === "(") depth++;
+    else if (ch === "）" || ch === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === "／" || ch === "/" || ch === "、" || ch === "與")) {
+      if (buf.trim()) parts.push(buf.trim());
+      buf = "";
+    } else {
+      buf += ch;
+    }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  return parts.map(s => s.replace(/^(上游|下游|中游)/, "").trim()).filter(Boolean);
 }
 
 function openCompanyByName(name) {
