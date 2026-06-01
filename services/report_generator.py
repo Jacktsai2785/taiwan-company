@@ -241,7 +241,9 @@ def _build_deep_prompt(company: dict, competitor_context: dict | None = None) ->
 
 
 _NORMAL_MODEL = "claude-sonnet-4-6"
-_DEEP_MODEL = "claude-opus-4-7"
+# "opus" 是本機 claude CLI 的別名，會自動解析成當下最新的 Opus（目前 4.8）。
+# 不寫死版本號，未來 Opus 迭代（4.9、5.0…）會自動跟上，無需再改。
+_DEEP_MODEL = "opus"
 
 
 def _grab_field(raw: str, label: str) -> str:
@@ -300,7 +302,7 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
 async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic",
                               competitor_context: dict | None = None) -> dict:
     """Search news/media and refine the existing summary. Returns {summary, blurb}.
-    Uses claude-opus-4-7 for Anthropic/CLI to get higher-quality deep analysis."""
+    Uses the latest Opus (via the CLI "opus" alias) for higher-quality deep analysis."""
     name = company.get("name", "")
     prompt = _build_deep_prompt(company, competitor_context)
     model = _DEEP_MODEL
@@ -489,7 +491,7 @@ async def generate_summary_from_materials(
     interview_text: str = "", api_key: str = "", provider: str = "anthropic",
 ) -> dict:
     """Scan uploaded supplementary material (slides/intro/photos + interview memo)
-    with opus-4.7 and produce a company profile that integrates them, tagging
+    with the latest Opus and produce a company profile that integrates them, tagging
     additions by source「（簡報補充）」/「（訪談補充）」.
 
     `file_paths` are binary-native files (PDF + images) read directly by the

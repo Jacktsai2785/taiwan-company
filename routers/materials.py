@@ -3,7 +3,7 @@ Company materials (簡報 / 介紹 / 照片) upload + AI profile generation.
 
 Files are persisted under data/uploads/{company_id}/ and served via the
 /uploads static mount so the user can click to view the originals. A separate
-opus-4.7 pass scans all uploaded files and writes a standalone profile into the
+latest-Opus pass scans all uploaded files and writes a standalone profile into the
 company's `materials_summary` field (kept separate from the public-data
 `summary`).
 """

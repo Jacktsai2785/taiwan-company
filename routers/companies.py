@@ -1226,8 +1226,10 @@ def _backlink_competitor(new_id: str, new_name: str) -> None:
             data_store.update_company(co["id"], {"competitors": comps})
 
 
-def _save_summary_result(company_id: str, result: dict) -> dict:
-    """Persist summary/blurb/competitors from a generation result. Returns the fields saved."""
+def _save_summary_result(company_id: str, result: dict, extra: dict | None = None) -> dict:
+    """Persist summary/blurb/competitors from a generation result. `extra` folds
+    additional fields into the same write (avoids a second full-file rewrite).
+    Returns the fields saved."""
     fields: dict = {
         "summary": result.get("summary", ""),
         "blurb":   result.get("blurb", ""),
@@ -1237,6 +1239,8 @@ def _save_summary_result(company_id: str, result: dict) -> dict:
     }
     if "competitors" in result:
         fields["competitors"] = _resolve_competitor_ids(result["competitors"])
+    if extra:
+        fields.update(extra)
     data_store.update_company(company_id, fields)
     return fields
 
@@ -1399,8 +1403,11 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
             result = await report_generator.deep_enrich_summary(
                 company, api_key=api_key, provider=provider, competitor_context=ctx or None
             )
-            saved = _save_summary_result(company_id, result)
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
+            # Mark that a deep enrich has completed, so the UI can warn before
+            # re-running it (distinct from last_updated, which any update touches).
+            deep_at = datetime.now(timezone.utc).isoformat()
+            saved = _save_summary_result(company_id, result, extra={"deep_enriched_at": deep_at})
+            push_data({"summary": saved["summary"], "blurb": saved["blurb"], "deep_enriched_at": deep_at})
             push("深度生成完成")
         except Exception as e:
             push(f"深度生成失敗：{e}")

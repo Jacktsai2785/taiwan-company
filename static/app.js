@@ -1787,8 +1787,8 @@ function _setMatRegenStale(stale) {
   if (!btn || btn.disabled) return;  // don't fight the running state
   btn.classList.toggle("is-stale", stale);
   btn.textContent = stale
-    ? "✦ 用 Opus 4.7 重新生成（納入新資料）"
-    : "✦ 用 Opus 4.7 更新公司簡介";
+    ? "✦ 用 Opus 重新生成（納入新資料）"
+    : "✦ 用 Opus 更新公司簡介";
 }
 
 async function closeMaterialsPanel() {
@@ -1856,7 +1856,7 @@ function _renderMaterialsResult(summary, generatedAt) {
     el.innerHTML = "";
     return;
   }
-  const when = generatedAt ? new Date(generatedAt).toLocaleString("zh-TW", { hour12: false }) : "";
+  const when = formatTimestamp(generatedAt);
   el.innerHTML =
     `<div class="materials-redo-note">已生成更新版簡介${when ? `（${escHtml(when)}）` : ""}，` +
     `尚未套用到公司簡介的段落可重新審核。</div>` +
@@ -1875,7 +1875,7 @@ async function deleteMaterial(storedNameEnc) {
     if (hadSummary && (data.materials || []).length) {
       _setMatRegenStale(true);
       const us = document.getElementById("materials-upload-status");
-      us.textContent = "✅ 已移除檔案。內容已變動，建議按「✦ 用 Opus 4.7 重新生成」更新簡介。";
+      us.textContent = "✅ 已移除檔案。內容已變動，建議按「✦ 用 Opus 重新生成」更新簡介。";
       us.className = "memo-status-ok";
     }
   } catch (err) {
@@ -1904,7 +1904,7 @@ async function generateFromMaterials() {
   const renderProgress = () => {
     status.innerHTML =
       `<span class="mat-spinner"></span>` +
-      `<span>Opus 4.7 正在閱讀所有補充資料並更新簡介` +
+      `<span>Opus 正在閱讀所有補充資料並更新簡介` +
       `<span class="mat-dots"><i>.</i><i>.</i><i>.</i></span></span>` +
       `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–4 分鐘）</span>`;
   };
@@ -2027,7 +2027,7 @@ document.getElementById("materials-file-input").addEventListener("change", async
     _renderMaterialsList(data.materials || []);
     if (hadSummary) {
       // A summary already exists → it doesn't cover the just-added file(s) yet.
-      status.textContent = `✅ 已新增 ${data.saved.length} 個檔案。內容已變動，請按下方「✦ 用 Opus 4.7 重新生成」以納入新檔案（只按「重新審核」不會讀到新檔）。`;
+      status.textContent = `✅ 已新增 ${data.saved.length} 個檔案。內容已變動，請按下方「✦ 用 Opus 重新生成」以納入新檔案（只按「重新審核」不會讀到新檔）。`;
       _setMatRegenStale(true);
     } else {
       status.textContent = `✅ 已上傳 ${data.saved.length} 個檔案，可點下方按鈕生成簡介`;
@@ -3241,6 +3241,11 @@ async function regenSummary() {
 function deepEnrich() {
   const id = _modalCompanyId;
   if (!id) return;
+  const c = state.companies.find(x => x.id === id);
+  if (c && c.deep_enriched_at) {
+    const when = formatTimestamp(c.deep_enriched_at);
+    if (!confirm(`這間公司已於 ${when} 做過深度生成。\n\n再次深度生成會覆蓋現有的簡介與競業分析（約 4–8 分鐘）。\n確定要重新生成嗎？`)) return;
+  }
   const summaryEl = document.getElementById("modal-summary");
   if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 4–8 分鐘）…</p>";
   _expandSummarySection();
@@ -5583,7 +5588,7 @@ function _renderIndustryMap(data) {
   const layout = data.layout_type === "layered" ? "layered" : "matrix";
   const sections = [...data.sections].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const stats = data.stats || {};
-  const ts = data.generated_at ? new Date(data.generated_at).toLocaleString("zh-TW", { hour12: false }) : "";
+  const ts = formatTimestamp(data.generated_at);
   meta.innerHTML = `
     <div class="im-meta">
       <span class="im-meta-pill">${layout === "layered" ? "🪜 上下分層" : "🔲 矩陣並列"}</span>
@@ -6055,6 +6060,11 @@ function cardBlurb(c) {
 
 function shortName(name) {
   return (name || "").replace(/股份有限公司$/, "").trim();
+}
+
+// Format an ISO timestamp as a zh-TW local datetime (24h). Empty string for falsy input.
+function formatTimestamp(iso) {
+  return iso ? new Date(iso).toLocaleString("zh-TW", { hour12: false }) : "";
 }
 
 function escHtml(str) {
