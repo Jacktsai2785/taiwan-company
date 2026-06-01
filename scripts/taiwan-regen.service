@@ -1,0 +1,17 @@
+[Unit]
+Description=台灣產業商情平台 - 競業表批次重生成（自給自足、撞用量上限自動等待、可續跑）
+After=taiwan-company.service
+Wants=taiwan-company.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jacktsai/taiwan-company
+ExecStart=/usr/bin/bash /home/jacktsai/taiwan-company/scripts/regen_summaries.sh
+# 腳本內部已會熬過用量上限（每 15 分重試），跑完即 exit 0；
+# 只有「非正常退出」（crash）才重啟，正常跑完不重啟。開機時靠 enable 自動起。
+Restart=on-failure
+RestartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

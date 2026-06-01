@@ -180,6 +180,29 @@ systemctl --user restart taiwan-company
 
 純改 `static/`（前端 JS/CSS/HTML）不用 restart，瀏覽器 hard reload (Ctrl+Shift+R) 即可——FastAPI 只是 serve static file。
 
+### 批次重生成競業表（維護任務 `taiwan-regen`）
+
+把舊格式公司簡介（legacy 4 欄競業表、多公司同格）批次重生成為新版（5 欄含競業類型、一列一家）的長跑維護工具。腳本 `scripts/regen_summaries.sh`，掛成獨立 systemd user service。
+
+設計重點：
+
+- **自給自足**：每次從 `companies.json` 現況**實算**「還沒新版的」清單（非新版 5 欄、或多公司同格），完成的會自動排除 → 中途停/重啟都只做剩下的、不重做。狀態在資料本身，不依賴 `/tmp`。
+- **撞用量上限自動等待**：本機 Claude CLI 是 5 小時滾動窗口、每窗口約 20 間；偵測到上限訊息就每 15 分鐘重試，額度回血自動接續。
+- **排除規則**：跳過貼了「潛在案源」標籤、有套用補充資料（`materials_*`）、在 skip-list（連續失敗 3 次）的公司。`PRIORITY_LABELS` / `PRIORITY_ONLY` 可調優先或只跑優先。
+- **flock**：同時只允許一個實例（systemd 重啟 / 手動執行不疊跑）。
+- **service**：`Restart=on-failure`（crash 5 分鐘後重起）、`WantedBy=default.target`（開機自啟，靠 `Linger=yes`）。跑完 exit 0 不重啟。
+
+```bash
+# 控制（範本：scripts/taiwan-regen.service → ~/.config/systemd/user/）
+systemctl --user status taiwan-regen
+systemctl --user stop taiwan-regen      # 暫停（把額度讓給其他事；勿用 pkill，會被 service 自動重起）
+systemctl --user start taiwan-regen     # 續跑
+systemctl --user disable taiwan-regen   # 全部跑完後關掉開機自啟
+tail -f logs/regen_progress.log         # 即時進度
+```
+
+> 改了排除/優先規則（`scripts/regen_summaries.sh` 內的 `EXCLUDE_LABELS` / `PRIORITY_*`）後 `systemctl --user restart taiwan-regen` 生效。
+
 ## 注意事項
 
 - `data/companies.json` 和 `data/config.json` 不在 git 追蹤範圍，每台裝置獨立儲存

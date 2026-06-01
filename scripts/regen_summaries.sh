@@ -13,6 +13,13 @@ PY=.venv/bin/python
 WAIT_LIMIT=900     # 偵測到上限時等待秒數（15 分）後重試
 touch "$SKIP"
 
+# flock：同時只允許一個實例（systemd 重啟 / 手動執行不會疊跑）
+exec 9>logs/regen.lock
+if ! flock -n 9; then
+  echo "$(date '+%F %T') 已有實例在跑，本次略過" >> "$LOG"
+  exit 0
+fi
+
 mapfile -t ROWS < <("$PY" - "$SKIP" <<'PYEOF'
 import sys, re
 from services import data_store
@@ -39,7 +46,7 @@ def need(c):
 
 EXCLUDE_LABELS  = {"潛在案源"}                              # 不重生成
 PRIORITY_LABELS = {"創業大聯盟決賽2026", "創業大聯盟複賽2026"}  # 優先（無標籤者也算）
-PRIORITY_ONLY   = True   # ← 使用者要求：只跑優先，跑到 AAMA 就停（之後改 False 即續跑 AAMA）
+PRIORITY_ONLY   = False  # ← 續跑 AAMA（優先的已跑完）
 for c in data_store.get_all_companies():
     if c["id"] in skip: continue
     if c.get("materials_applied_headings") or c.get("materials_summary"): continue
