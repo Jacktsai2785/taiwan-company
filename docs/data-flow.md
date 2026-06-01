@@ -99,7 +99,7 @@ watched: bool（追蹤旗標）
 call_memo: { ...Memo 欄位 }
 patents: [...]（deep-enrich 後有）
 materials: [ { filename, stored_name, url, mime_type, size, uploaded_at } ]（上傳的簡報/介紹/照片，落地在 data/uploads/{id}/，由 /uploads 提供存取）
-materials_summary: 由上傳簡報用 opus-4.7 生成的簡報版簡介（暫存，供逐段審核用）
+materials_summary: 由上傳簡報用 Opus（最新）生成的簡報版簡介（暫存，供逐段審核用）
 materials_blurb: 簡報簡介的一句話
 materials_generated_at: 簡報簡介生成時間 ISO timestamp
 materials_applied_headings: [頂層段落標題]（summary 中含簡報內容的頂層段落，通常是「營運綜覽」與被取代的「業務概況」，前端據此標「簡報」chip；整份重新生成 summary 時會清空）

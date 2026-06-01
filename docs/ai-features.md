@@ -47,7 +47,7 @@ source_repo: ~/taiwan-company
 
 ### 2b. 補充資料 → 增強公司簡介（materials，`routers/materials.py` + `report_generator.generate_summary_from_materials`）
 - **統一「📎 補充資料」側欄**：把原本分開的「簡報摘要」與「訪談備忘錄」併成單一面板，集中所有補充來源：①上傳檔案（簡報/介紹/照片，落地 `data/uploads/{id}/`、`/uploads` serve、可點開）②訪談備忘錄（24 欄可手動 key，或上傳逐字稿/錄音自動填，保留 DOCX 匯出）
-- 點「✦ 用 Opus 4.7 更新公司簡介」後（前端 spinner + 計時動畫），後端把 PDF/圖片交給 `ask_with_files`、office/txt 抽文字內嵌、訪談備忘錄由 `serialize_memo` 組成訪談文字，一起用 `claude-opus-4-7`（`_DEEP_MODEL`）讀過，生成整合版簡介，存 `materials_summary` / `materials_blurb`
+- 點「✦ 用 Opus 更新公司簡介」後（前端 spinner + 計時動畫），後端把 PDF/圖片交給 `ask_with_files`、office/txt 抽文字內嵌、訪談備忘錄由 `serialize_memo` 組成訪談文字，一起用最新 Opus（`_DEEP_MODEL = "opus"`，CLI 別名自動跟最新）讀過，生成整合版簡介，存 `materials_summary` / `materials_blurb`
 - **依來源標註補充**：prompt 要求新增/補充內容依來源標「（簡報補充）」（上傳檔案）或「（訪談補充）」（訪談備忘錄）；前端 `renderSummary` 把這些補充渲染成**可摺疊的 callout 區塊、依來源著色**（簡報 teal / 訪談 紫 / 介紹 琥珀 / 筆記 灰）
 - 生成完跳出**逐段審核框**：把簡報版按 `##` 拆段，使用者勾選後 `POST /materials/apply` 合併進公開的 `summary`。合併規則：deck 段落若同名於公開 DD 段落（業務概況/競業分析/主要風險）→ 就地取代該段（標「修改」）；其餘 deck 主題（產品與服務、商業模式、團隊、財務、觀察…）→ 一律收進單一上層 `## 營運綜覽`，各為 `### 子段`（標「歸入營運綜覽」）
 - 被套用的頂層段落（營運綜覽、被取代的業務概況）記在 `materials_applied_headings`，前端 `renderSummary` 據此把標題用 teal 字 + 尾綴 📎 標示（不再用 teal 盒子）
