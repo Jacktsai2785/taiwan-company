@@ -1,7 +1,7 @@
 ---
 title: AI 功能清單
 status: living
-last_updated: 2026-05-29
+last_updated: 2026-06-05
 source_repo: ~/taiwan-company
 ---
 
@@ -9,27 +9,28 @@ source_repo: ~/taiwan-company
 
 ## TL;DR
 
-平台幾乎每個寫入動作背後都有 AI：抽取公司名、分產業、產簡介、寫摘要、抽 call memo 欄位、整理新聞、推趨勢。AI 呼叫統一走 `services/claude_client.ask()`，由它決定打 Anthropic / OpenAI / Gemini / 本機 CLI。
+平台幾乎每個寫入動作背後都有 AI：抽取公司名、分產業、產簡介、寫摘要、抽 call memo 欄位、整理新聞、推趨勢。AI 呼叫統一走 `services/claude_client.ask()`，由 `engine` 字串決定打哪個**本機引擎**。全部地端執行，**不需 API Key**。
 
 ## 核心統一入口
 
-`services/claude_client.py` 提供三個公開函式：
+`services/claude_client.py` 提供三個公開函式，皆以 `engine` 選引擎：
 
-- `ask(prompt, allowed_tools, api_key, provider, model)` — 文字 prompt
-- `ask_with_image(prompt, image_content, suffix, api_key, provider)` — 單張圖多模態（Vision）
-- `ask_with_files(prompt, file_paths, api_key, provider, model)` — 多檔多模態（PDF + 多張圖）。本機 CLI 模式用 `--add-dir` + Read tool 原生讀取；API 模式把 PDF 當 document block、圖片當 image block 一次送出。Office/txt 文件由呼叫端先抽文字內嵌進 prompt。
+- `ask(prompt, timeout, allowed_tools, engine, max_turns, model)` — 文字 prompt
+- `ask_with_image(prompt, image_content, suffix, timeout, engine)` — 單張圖多模態（Vision）
+- `ask_with_files(prompt, file_paths, timeout, engine, model)` — 多檔多模態（PDF + 多張圖）
 
-呼叫優先順序：
+四個引擎（`KNOWN_ENGINES`）：
 
-1. 若沒帶 `api_key`，讀 env `ANTHROPIC_API_KEY`
-2. 若仍沒有 → 走本機 `claude` CLI（`subprocess.run`）
-3. 若有 key → 依 `provider` 分支：`anthropic` / `openai` / `gemini`
+1. `claude`（預設）— 本機 `claude` CLI；多模態用 `--add-dir` + Read tool 原生讀取
+2. `codex` — OpenAI 官方 `codex exec` CLI；圖片走 `--image`
+3. `gemini` — Google 官方 `gemini -p` CLI；檔案/圖片走 prompt 內 `@路徑`
+4. `ollama` — 本機 OpenAI 相容端點（`OLLAMA_BASE_URL`，預設 `localhost:11434`）；圖片需 `OLLAMA_VISION_MODEL`
 
-`allowed_tools` 含 `WebSearch` / `WebFetch` 時，Anthropic 走 web search tool（`web_search_20250305`），OpenAI 切到 `gpt-4o-search-preview`，Gemini 啟用 `google_search`。
+引擎來源：請求帶 `X-AI-Engine` header / `?engine=`（見 `services/ai_deps.py`），沒帶則用 env `AI_ENGINE`（預設 `claude`）。引擎不認得或對應 CLI/服務未就緒時回可行動錯誤訊息。
 
-預設模型透過環境變數覆寫：`CLAUDE_MODEL` / `OPENAI_MODEL` / `GEMINI_MODEL`。
+**多模態退路**：能力不足時（ollama 未設 vision model 的圖片、codex/ollama 的 PDF）自動退到 `_ask_with_local_extraction`（`file_parser` 抽文字 + tesseract OCR），再以選定引擎做純文字補完，行為可預期。
 
-錯誤訊息特別處理：401/403 給「Key 無效」、429 給「達流量上限」、Gemini blockReason 也轉成中文提示，前端能直接顯示給使用者。
+預設模型透過環境變數覆寫：`CLAUDE_MODEL` / `CODEX_MODEL` / `GEMINI_MODEL` / `OLLAMA_MODEL`。`allowed_tools` 含 `WebSearch` / `WebFetch` 時，claude CLI 透過 `--allowedTools` 啟用對應工具。
 
 ## AI 用在哪些地方
 
@@ -73,12 +74,12 @@ source_repo: ~/taiwan-company
 - 法人董事辨識本身是 rule-based（看 `representative_of` 欄），但**圖摘要**與**法人關係解讀**走 AI
 - 結合 `mops_investee` 反查結果做交叉驗證
 
-## 雙模式切換邏輯
+## 引擎選擇邏輯
 
-- 平台啟動時先看 `ANTHROPIC_API_KEY` 環境變數（雲端部署必設）
-- UI 右上角 ⚙ 開設定面板，使用者可選 provider + 輸入 Key，存 `localStorage`
-- 每次 API 請求由 `ai_from_headers` 從 `X-API-Key` / `X-AI-Provider` 取出，傳進 router → service
-- 若兩者都沒，走本機 CLI；CLI 也找不到時回友善訊息「請設 Key 或安裝 Claude Desktop」
+- 預設引擎由 env `AI_ENGINE` 決定（預設 `claude`）
+- UI 右上角 ⚙ 開設定面板，使用者選引擎（claude / codex / gemini / ollama），存 `localStorage.ai_engine`
+- 每次 API 請求由 `ai_from_headers` 從 `X-AI-Engine` header 取出（SSE / EventSource 走 `?engine=` query），傳進 router → service
+- 引擎對應的 CLI 未安裝 / Ollama 未啟動時，回可行動的中文錯誤訊息（提示安裝/登入或改選其他引擎）
 
 ## 本機 CLI 探尋路徑（`_find_cli`）
 
@@ -93,9 +94,9 @@ source_repo: ~/taiwan-company
 
 ## 已知限制
 
-- Claude CLI 模式單次呼叫最長 timeout 預設 120 秒，長 prompt 容易超時
-- Gemini 在某些 prompt 下會回 `finishReason=SAFETY`，已有對應錯誤訊息處理
-- 圖片格式不在 `{jpg, jpeg, png, gif, webp}` 內會用 PIL 轉 PNG 再送
+- CLI 引擎單次呼叫有 timeout（文字預設 120 秒、多檔 300 秒），長 prompt 易超時；逾時以 `killpg` 整組終止子 process
+- codex / ollama 對 PDF 無原生支援，走本機文字抽取退路
+- ollama 處理圖片需設定 `OLLAMA_VISION_MODEL`（如 `llava`），否則退到本機 OCR
 
 ## 相關
 

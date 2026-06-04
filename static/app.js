@@ -31,68 +31,38 @@ const state = {
 
 let _modalCompanyId = null;
 
-/* ── AI settings (localStorage) ── */
-let _deployMode = "local";   // "local" | "cloud" — set by boot() from /api/config/deploy-mode
+/* ── AI engine selection (localStorage) ── */
+const AI_ENGINE_LABELS = {
+  claude: "本機 Claude",
+  codex:  "GPT (Codex)",
+  gemini: "Gemini",
+  ollama: "開源模型 (Ollama)",
+};
 
-function getAiKey()      { return localStorage.getItem("ai_api_key") || ""; }
-function getAiProvider() {
-  const stored = localStorage.getItem("ai_provider");
-  if (stored) return stored;
-  return _deployMode === "cloud" ? "gemini" : "local";
+function getAiEngine() {
+  return localStorage.getItem("ai_engine") || "claude";
 }
-function isLocalMode()   { return getAiProvider() === "local"; }
-function isCloudDeploy() { return _deployMode === "cloud"; }
 
 function _updateAiModeLabel() {
   const el = document.getElementById("ai-mode-label");
   if (!el) return;
-  const prov = getAiProvider();
-  const labels = { local: "本機 Claude", anthropic: "Claude API", openai: "OpenAI", gemini: "Gemini" };
-  el.textContent = labels[prov] || prov;
+  const eng = getAiEngine();
+  el.textContent = AI_ENGINE_LABELS[eng] || eng;
 }
 
 function openSettings() {
-  const prov = getAiProvider();
-  const key  = getAiKey();
-  // In cloud deploy, prevent re-selecting the local mode (binary not on server)
-  const localRadio = document.querySelector('input[name="ai-provider"][value="local"]');
-  if (localRadio) localRadio.disabled = isCloudDeploy();
-  const radio = document.querySelector(`input[name="ai-provider"][value="${prov}"]`);
+  const eng = getAiEngine();
+  const radio = document.querySelector(`input[name="ai-engine"][value="${eng}"]`);
   if (radio) radio.checked = true;
-  const keyInp = document.getElementById("settings-api-key");
-  if (keyInp) keyInp.value = key;
-  document.getElementById("settings-key-section").style.display = prov === "local" ? "none" : "";
-  document.getElementById("settings-error").textContent = "";
   document.getElementById("settings-overlay").classList.add("open");
 }
 
-function toggleSettingsKeyVisibility() {
-  const inp = document.getElementById("settings-api-key");
-  inp.type = inp.type === "password" ? "text" : "password";
-}
-
-function onAiProviderChange(radio) {
-  const needsKey = radio.value !== "local";
-  document.getElementById("settings-key-section").style.display = needsKey ? "" : "none";
-  document.getElementById("settings-error").textContent = "";
-}
-
 function saveSettings() {
-  const prov = document.querySelector('input[name="ai-provider"]:checked')?.value || "local";
-  if (prov !== "local") {
-    const key = document.getElementById("settings-api-key").value.trim();
-    if (!key) {
-      document.getElementById("settings-error").textContent = "請輸入 API Key";
-      return;
-    }
-    localStorage.setItem("ai_api_key", key);
-  } else {
-    localStorage.removeItem("ai_api_key");
-  }
-  localStorage.setItem("ai_provider", prov);
+  const eng = document.querySelector('input[name="ai-engine"]:checked')?.value || "claude";
+  localStorage.setItem("ai_engine", eng);
   document.getElementById("settings-overlay").classList.remove("open");
   _updateAiModeLabel();
-  toast(prov === "local" ? "已切換為本機 Claude 模式" : "API Key 已儲存");
+  toast(`已切換為「${AI_ENGINE_LABELS[eng] || eng}」引擎`);
 }
 
 function closeSettings() {
@@ -102,11 +72,7 @@ function closeSettings() {
 /* ── API helpers ── */
 async function api(method, path, body) {
   const opts = { method, headers: {} };
-  const key = getAiKey();
-  if (key) {
-    opts.headers["X-API-Key"]      = key;
-    opts.headers["X-AI-Provider"]  = getAiProvider();
-  }
+  opts.headers["X-AI-Engine"] = getAiEngine();
   if (body instanceof FormData) {
     opts.body = body;
   } else if (body) {
@@ -152,19 +118,6 @@ async function dismissArticle(url, title, source, btn) {
 
 /* ── Boot ── */
 async function boot() {
-  // Detect deploy mode FIRST so getAiProvider() default + UI reflect it.
-  try {
-    const r = await fetch("/api/config/deploy-mode");
-    if (r.ok) _deployMode = (await r.json()).mode || "local";
-  } catch (_) { /* default stays "local" on network error */ }
-  if (_deployMode === "cloud") {
-    document.body.classList.add("deploy-cloud");
-    const sub = document.getElementById("settings-subtitle");
-    if (sub) sub.innerHTML = "雲端版推薦使用 <strong>Gemini</strong>，可申請免費 Key。<br>「本機 Claude」僅在自行下載專案到本機執行時可用。";
-    document.querySelectorAll(".badge-free").forEach(el => el.hidden = false);
-    document.querySelectorAll(".badge-local-only").forEach(el => el.hidden = false);
-  }
-
   await Promise.all([loadIndustries(), loadCompanies(), loadLabels(), loadLabelGroups()]);
   computeGroups();
   renderSidebar();
@@ -180,8 +133,8 @@ async function boot() {
       stopTitleFlash();
     }
   });
-  // Show settings only on very first visit (localStorage never set)
-  if (localStorage.getItem("ai_provider") === null) openSettings();
+  // Show engine picker only on very first visit (localStorage never set)
+  if (localStorage.getItem("ai_engine") === null) openSettings();
 }
 
 /* ── Notify helper ── */
@@ -1023,19 +976,6 @@ function _updateIndustryMapToolbarBtn() {
 }
 
 async function _fetchDigest(industry, forceRefresh) {
-  // News digests need AI to summarise. On cloud without a key, surface a
-  // friendly message instead of leaving the loading spinner forever.
-  if (isCloudDeploy() && !getAiKey()) {
-    _digestCache[industry] = {
-      error: "尚未設定 AI。請點右上角 ⚙ 選擇 AI 提供者並輸入 API Key。",
-      fetchedAt: Date.now(),
-    };
-    if (state.activeIndustry === industry && state.activeTab === "all") {
-      const panel = document.getElementById("industry-panel");
-      if (panel) _doRenderIndustryPanel(panel, industry);
-    }
-    return;
-  }
   _digestLoading.add(industry);
   try {
     const qs = forceRefresh ? "?refresh=true" : "";
@@ -1951,11 +1891,6 @@ let _matGenTimer = null;
 async function generateFromMaterials() {
   const id = _modalCompanyId;
   if (!id) return;
-  if (isCloudDeploy() && !getAiKey()) {
-    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
-    openSettings();
-    return;
-  }
   // Persist the 訪談備忘錄 fields first so the backend reads the latest content.
   await saveMemo(true);
 
@@ -2527,7 +2462,6 @@ async function submitAddCompetitor(btn) {
   const type = form.querySelector(".add-comp-type").value;
   const status = form.querySelector(".add-comp-status");
   if (!name) { status.textContent = "請輸入公司名稱"; status.className = "add-comp-status err"; return; }
-  if (isCloudDeploy() && !getAiKey()) { toast("請先在設定中輸入 API Key"); openSettings(); return; }
 
   btn.disabled = true;
   status.innerHTML = `🔍 AI 分析中（約 30–60 秒）<span class="dots-anim"><span>.</span><span>.</span><span>.</span></span>`;
@@ -3103,9 +3037,7 @@ function _showBatchWebsitePrompt(companyIds) {
     companyIds.forEach((id, i) => {
       const c = state.companies.find(x => x.id === id);
       if (c?.website) return; // already known
-      const key = getAiKey();
-      const findUrl = `/api/companies/${id}/find-website` +
-        (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+      const findUrl = `/api/companies/${id}/find-website?engine=${encodeURIComponent(getAiEngine())}`;
       fetch(findUrl)
         .then(r => r.json())
         .then(data => {
@@ -3267,9 +3199,7 @@ function _showWebsitePrompt(companyId, opts = {}) {
         input.placeholder = "https://example.com";
       };
 
-      const key = getAiKey();
-      const findUrl = `/api/companies/${companyId}/find-website` +
-        (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+      const findUrl = `/api/companies/${companyId}/find-website?engine=${encodeURIComponent(getAiEngine())}`;
       fetch(findUrl)
         .then(r => r.json())
         .then(data => {
@@ -3380,7 +3310,7 @@ async function regenSummary() {
   const summaryEl = document.getElementById("modal-summary");
   if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">⏳ 重新生成中，請稍候（約 3–7 分鐘）…</p>";
   _expandSummarySection();
-  _subscribeSummarize(id);
+  _subscribeSummarize(id, true);
 }
 
 function deepEnrich() {
@@ -3631,15 +3561,11 @@ function _updateSummaryInModal(company) {
   showModalSection("summary");   // jump to 公司簡介 page to show the result
 }
 
-function _subscribeSummarize(companyId) {
-  if (isCloudDeploy() && !getAiKey()) {
-    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
-    openSettings();
-    return Promise.resolve();
-  }
-  const key = getAiKey();
-  const sseUrl = `/api/companies/${companyId}/summarize` +
-    (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+function _subscribeSummarize(companyId, reset = false) {
+  const params = new URLSearchParams();
+  if (reset) params.set("reset", "true");
+  params.set("engine", getAiEngine());
+  const sseUrl = `/api/companies/${companyId}/summarize?${params}`;
 
   state.enrichingIds.add(companyId);
   renderGrid();
@@ -3679,9 +3605,7 @@ function _subscribeSummarize(companyId) {
 }
 
 function _subscribeDeepEnrich(companyId) {
-  const key = getAiKey();
-  const sseUrl = `/api/companies/${companyId}/deep-enrich` +
-    (key ? `?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}` : "");
+  const sseUrl = `/api/companies/${companyId}/deep-enrich?engine=${encodeURIComponent(getAiEngine())}`;
 
   state.enrichingIds.add(companyId);
   renderGrid();
@@ -4287,6 +4211,9 @@ document.getElementById("name-review-ok").addEventListener("click", async () => 
       });
     }
     openConfirmDialog(valid, uncertainCandidates, newExcluded, suggestedLabel);
+    if (valid.some(c => c.is_api_error && c.tax_id)) {
+      setTimeout(() => _reverifyTimeouts(1), 2500);
+    }
   };
 
   if (ambiguousItems.length > 0) {
@@ -4328,6 +4255,58 @@ function selectNotFoundSuggestion(i, suggestion) {
       if (el) el.value = val;
     });
   }, 0);
+}
+
+/* ── 背景自動重查「驗證逾時」項目 ── */
+// is_api_error 的公司是 GCIS 驗證逾時（多半被 rate limit 擋），不是真有問題。
+// 辨識結果開啟後，背景靜默對這些統編重打 reverify-status；後端有退避 + 12h 快取，
+// 通常一兩輪就轉成正常狀態，使用者不必手動重查。最多 3 輪、間隔遞增、dialog 關了就停。
+async function _reverifyTimeouts(attempt = 1) {
+  const MAX_ATTEMPTS = 3;
+  const overlay = document.getElementById("confirm-overlay");
+  if (!overlay || !overlay.classList.contains("open")) return;   // dialog 已關，停手
+  const cands = state.pendingCandidates || [];
+  const pending = cands.filter(c => c.is_api_error && c.tax_id);
+  if (!pending.length) return;
+
+  const taxIds = [...new Set(pending.map(c => c.tax_id))];
+  let res;
+  try {
+    res = await api("POST", "/api/companies/reverify-status", { tax_ids: taxIds });
+  } catch (_) {
+    if (attempt < MAX_ATTEMPTS) setTimeout(() => _reverifyTimeouts(attempt + 1), 4000 * attempt);
+    return;
+  }
+
+  let changed = false, stillPending = false;
+  for (const c of cands) {
+    if (!c.is_api_error || !c.tax_id) continue;
+    const r = res[c.tax_id];
+    if (!r || r.is_api_error) { stillPending = true; continue; }   // 還是逾時 → 下一輪再試
+    c.is_api_error = false;
+    if (r.is_dissolved) c.rejected = true;            // 已廢止 → 不予儲存
+    else c.is_unverified = !!r.is_unverified;         // 查無 → 待確認；否則正常
+    changed = true;
+  }
+
+  if (changed && overlay.classList.contains("open")) {
+    const labelVals = {};   // 重渲染前保存使用者已輸入的標籤
+    cands.forEach((_, idx) => {
+      const el = document.getElementById(`label-v${idx}`);
+      if (el) labelVals[idx] = el.value;
+    });
+    openConfirmDialog(cands, state.pendingUncertain, state.pendingExcluded, state.pendingLabel);
+    setTimeout(() => {
+      Object.entries(labelVals).forEach(([idx, val]) => {
+        const el = document.getElementById(`label-v${idx}`);
+        if (el) el.value = val;
+      });
+    }, 0);
+  }
+
+  if (stillPending && attempt < MAX_ATTEMPTS) {
+    setTimeout(() => _reverifyTimeouts(attempt + 1), 4000 * attempt);
+  }
 }
 
 /* ── Confirm Dialog ── */
@@ -5027,22 +5006,11 @@ function _startEnrichPoll() {
 function subscribeEnrichment(companyId) {
   // On cloud deploy, AI features require a key. Prompt the user before firing
   // the SSE call so they don't see "簡介生成失敗" with a cryptic message.
-  if (isCloudDeploy() && !getAiKey()) {
-    toast("請先在設定中輸入 API Key（建議 Gemini，免費）");
-    openSettings();
-    state.enrichingIds.delete(companyId);
-    renderGrid();
-    return Promise.resolve();
-  }
-
   state.enrichingIds.add(companyId);
   _startEnrichPoll();
   renderGrid();
 
-  const key = getAiKey();
-  const sseUrl = key
-    ? `/api/companies/enrich/${companyId}?api_key=${encodeURIComponent(key)}&provider=${encodeURIComponent(getAiProvider())}`
-    : `/api/companies/enrich/${companyId}`;
+  const sseUrl = `/api/companies/enrich/${companyId}?engine=${encodeURIComponent(getAiEngine())}`;
 
   return new Promise(resolve => {
     const es = new EventSource(sseUrl);
@@ -5672,15 +5640,7 @@ async function generateIndustryMap() {
   statusEl.innerHTML = `<div class="im-progress">準備中…</div>`;
   document.getElementById("industry-map-canvas").innerHTML = "";
 
-  const params = new URLSearchParams({ breadth: _imState.breadth });
-  if (typeof getAiKey === "function") {
-    const k = getAiKey();
-    if (k) params.set("api_key", k);
-  }
-  if (typeof getAiProvider === "function") {
-    const p = getAiProvider();
-    if (p) params.set("provider", p);
-  }
+  const params = new URLSearchParams({ breadth: _imState.breadth, engine: getAiEngine() });
   const url = `/api/industry-map/${encodeURIComponent(industry)}/generate?${params.toString()}`;
 
   await new Promise(resolve => {

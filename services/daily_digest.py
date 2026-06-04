@@ -65,8 +65,7 @@ def _prune(cache: dict, industry: str) -> None:
 
 async def get_digest(
     industry: str,
-    api_key: str = "",
-    provider: str = "anthropic",
+    engine: str = "claude",
     force_refresh: bool = False,
 ) -> dict:
     today = cache_date()
@@ -74,7 +73,7 @@ async def get_digest(
         entry = _load().get(industry, {}).get(today)
         if entry:
             return entry
-    return await _generate(industry, today, api_key, provider)
+    return await _generate(industry, today, engine)
 
 
 async def refresh_all_digests() -> None:
@@ -83,7 +82,7 @@ async def refresh_all_digests() -> None:
     for ind in get_industries():
         try:
             log.info("Scheduler: refreshing digest for %s", ind)
-            digest = await _generate(ind, cache_date(), api_key="", provider="anthropic")
+            digest = await _generate(ind, cache_date(), engine="claude")
             try:
                 export_industry_digest_to_jk_nb(ind, digest)
             except Exception:
@@ -94,14 +93,13 @@ async def refresh_all_digests() -> None:
 
 async def get_trends(
     industry: str,
-    api_key: str = "",
-    provider: str = "anthropic",
+    engine: str = "claude",
     force_refresh: bool = False,
 ) -> dict:
     existing = _load_trends().get(industry)
     if existing and not force_refresh:
         return existing
-    return await _generate_trends(industry, api_key, provider)
+    return await _generate_trends(industry, engine)
 
 
 async def refresh_all_trends() -> None:
@@ -109,12 +107,12 @@ async def refresh_all_trends() -> None:
     for ind in get_industries():
         try:
             log.info("Scheduler: refreshing trends for %s", ind)
-            await _generate_trends(ind, api_key="", provider="anthropic")
+            await _generate_trends(ind, engine="claude")
         except Exception as exc:
             log.warning("Scheduler: trends failed for %s: %s", ind, exc)
 
 
-async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
+async def _generate_trends(industry: str, engine: str) -> dict:
     if industry in _TRENDS_GENERATING:
         for _ in range(60):
             await asyncio.sleep(2)
@@ -225,7 +223,7 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
         loop = asyncio.get_event_loop()
         raw = await loop.run_in_executor(
             None,
-            lambda: ask(prompt, timeout=180, api_key=api_key, provider=provider),
+            lambda: ask(prompt, timeout=180, engine=engine),
         )
 
         m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -278,8 +276,7 @@ async def _generate_trends(industry: str, api_key: str, provider: str) -> dict:
 
 async def generate_industry_keywords(
     industry: str,
-    api_key: str = "",
-    provider: str = "anthropic",
+    engine: str = "claude",
 ) -> list[str]:
     """Ask Claude to suggest 5-8 search keywords for the industry, then persist them."""
     from services.data_store import save_industry_keywords
@@ -294,7 +291,7 @@ async def generate_industry_keywords(
     try:
         raw = await loop.run_in_executor(
             None,
-            lambda: ask(prompt, timeout=60, api_key=api_key, provider=provider),
+            lambda: ask(prompt, timeout=60, engine=engine),
         )
         import re
         m = re.search(r"\[.*?\]", raw, re.DOTALL)
@@ -314,7 +311,7 @@ async def generate_industry_keywords(
 
 # ── Internal ───────────────────────────────────────────────────────────────────
 
-async def _generate(industry: str, today: str, api_key: str, provider: str) -> dict:
+async def _generate(industry: str, today: str, engine: str) -> dict:
     if industry in _GENERATING:
         for _ in range(60):
             await asyncio.sleep(2)
@@ -344,7 +341,7 @@ async def _generate(industry: str, today: str, api_key: str, provider: str) -> d
             result = _empty_result(industry, today, has_watchlist=bool(watchlist_names))
         else:
             result = await _summarize(
-                industry, industry_only, company_arts, today, api_key, provider
+                industry, industry_only, company_arts, today, engine
             )
 
         cache = _load()
@@ -374,8 +371,7 @@ async def _summarize(
     industry_arts: list[dict],
     company_arts: list[dict],
     today: str,
-    api_key: str,
-    provider: str,
+    engine: str,
 ) -> dict:
     sections: list[str] = []
     if industry_arts:
@@ -412,7 +408,7 @@ async def _summarize(
     loop = asyncio.get_event_loop()
     raw = await loop.run_in_executor(
         None,
-        lambda: ask(prompt, timeout=120, api_key=api_key, provider=provider),
+        lambda: ask(prompt, timeout=120, engine=engine),
     )
 
     m = re.search(r"\{.*\}", raw, re.DOTALL)

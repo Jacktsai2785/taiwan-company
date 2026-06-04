@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>官網手動補填 Portal</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--bd:#2a2f3a;--fg:#e6e8eb;--mut:#9aa3b2;--ok:#2ecc71;--warn:#e0b341;--acc:#4a9eff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Noto Sans TC",Segoe UI,sans-serif}
+  header{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--bd);padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;z-index:10}
+  header h1{font-size:16px;margin:0}
+  .stat{color:var(--mut);font-size:13px}
+  .stat b{color:var(--fg)}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px 20px 80px}
+  .toolbar{display:flex;gap:10px;margin:10px 0 16px;flex-wrap:wrap;align-items:center}
+  input[type=text],input[type=url]{background:#11141a;border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:7px 10px;font-size:13px}
+  input.q{width:240px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}
+  button.ghost{background:transparent;border:1px solid var(--bd);color:var(--fg)}
+  button:disabled{opacity:.4;cursor:default}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:9px 10px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;position:sticky;top:60px;background:var(--bg)}
+  td .nm{font-weight:600}
+  td .sub{color:var(--mut);font-size:12px}
+  td.note{color:var(--warn);font-size:12px;max-width:300px}
+  td.url input{width:100%}
+  td.act{white-space:nowrap}
+  .row-saved{opacity:.45}
+  .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:#222834;color:var(--mut)}
+  .msg{font-size:12px;margin-left:8px}
+  .msg.ok{color:var(--ok)} .msg.err{color:#ff6b6b}
+  .hint{color:var(--mut);font-size:12px;margin-bottom:8px}
+  a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌐 官網手動補填 Portal</h1>
+  <span class="stat">仍無官網 <b id="cntLeft">…</b> 家 · 本次已存 <b id="cntSaved">0</b> 家</span>
+  <span style="flex:1"></span>
+  <button class="ghost" onclick="load()">↻ 重新整理</button>
+</header>
+<div class="wrap">
+  <div class="hint">資料即時來自 <code>/api/companies</code>;存檔走 <code>PUT /api/companies/{id}</code> 直接寫回 companies.json。存好的列會變灰並沉到底部。貼上網址後按 Enter 或「存」即可。</div>
+  <div class="toolbar">
+    <input class="q" id="q" type="text" placeholder="篩選公司名 / 統編…" oninput="render()">
+    <select id="indFilter" onchange="render()" style="background:#11141a;border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:7px"></select>
+    <span style="flex:1"></span>
+    <button id="saveAll" class="ghost" onclick="saveAll()">全部儲存有填的</button>
+  </div>
+  <table>
+    <thead><tr><th style="width:26%">公司</th><th style="width:13%">產業</th><th style="width:28%">查無原因</th><th style="width:33%">官網 URL</th></tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+<script>
+const NOTES = {"de84c4b4-77a2-4a82-a3b9-53d5e6c42a85": "僅查到公司登記資料，無獨立官網", "ea636747-5b37-4844-a296-26a74a8eeaa5": "Tetanti AgriBiotech，統編相符", "124b67c7-691c-4609-b73e-585db3dbd16b": "TR 台灣若美科技，統編90368415相符", "fc6f3d2e-ce47-42e6-a024-7553df4d008f": "皓準科技官網，統編90281564相符", "b98eceb5-5503-445a-b695-3060b332999a": "ANSWave/Ancillary Power，統編83224580相符", "687990b3-876a-4455-a724-4c5e7fb6d734": "Vernus AI，統編60796415相符（與睿驊生技為不同公司）", "d185c759-0bfe-416c-84d5-7efa707b8d4c": "DeepRad.AI，統編94243590相符", "8f7e784a-567f-4c9a-898f-a6ea61362047": "僅查到公司登記資料，無獨立官網", "f36e88ba-9074-4491-9b07-31acc6d6f951": "CarbonClean Energy，統編90180600相符", "d7addfeb-9bb4-4084-9e7d-dc478947ce04": "Ohmplus Technology，統編90879394相符", "7567a297-8915-40e9-8192-65f9491bc512": "Taiwan Microgrid，統編94145063相符", "812be944-d6e0-4816-98fc-383568c4d5d0": "Asia Pathogenomics，統編83495078相符", "27cec965-5098-4ab9-8029-692cb577c1df": "為清大團隊新創，網路僅見媒體報導與展會頁，未查到獨立官網", "a0e54cae-fbdb-43de-8973-f8a22abe598b": "Goodfoodeveryday，統編83438794相符", "783effa2-ad48-4b93-96dc-cbb097fd2a8b": "GuangTai Green，統編94118360相符", "d2e3f8f7-6f14-4bfb-95d1-15a8d71e9fab": "YUN-X Tek，統編90543244相符", "534282ba-edb7-4a53-bf4a-80660ce8f514": "BacuNova BioTech，獸用疫苗新創（中興大學衍生），僅見公司目錄/FINDIT 頁，無獨立官網", "76f26520-51fd-4e53-8944-35937a77d1cb": "Holon Robotics，工業機器人 OS（HolonOS），官網確認", "9acbe3b9-49f4-47a7-b0b8-920792e84be4": "Astron Medtech，微創醫材新創，僅 FB 粉專，無獨立官網", "1588efa0-dcbc-4342-93e5-10a9c9172e8a": "SparkGen，AI x BIM 平台，官網確認", "5e246852-66de-48b9-a1b7-259340b48e4b": "BuggiPro，生物農藥（核多角體病毒），僅 FB 粉專，無獨立官網", "02c9e2c6-c8a8-4e37-a90b-28752402e4e9": "Sophie's BioNutrients 台灣子公司，此為集團官網（微藻蛋白）", "3de92b67-a003-48fe-a187-87dd61874220": "Phasetrum，RF IC 設計（衛星通訊/相控雷達），官網確認", "cba510ca-c2d0-4b87-89d2-0a7a494b48c7": "XMIGHT，電動車充電/能源管理平台，官網確認", "fca4d7e0-ac72-4cfb-a1de-23156d1789c5": "BATT. CYCLE MATERIALS，電池回收材料，僅見公司目錄站，無獨立官網", "c04cee95-235e-4bb9-a987-5709e5bd9192": "FENRI，AIoT 污水監測，官網確認（統編相符）", "b32922a6-8733-4469-839f-3c22639c1cea": "NextDrive，能源物聯網平台，官網確認", "0c119bf5-a3db-4410-814b-0d0761fa3f92": "Frontier Env. & Resources，高溫電漿汽化廢棄物處理，官網確認（email info@f-ert.com 同域）", "29b078a6-46b3-446e-b594-c3acab03b1e6": "PADE，紡織品智能分選/回收，官網確認（統編相符）", "5b1993f3-3609-4259-9a47-2cd1e397533a": "DIGI-TRIUMPH，儲能系統整合，官網確認", "00590e35-d586-44cb-bfac-758d4a9e9a91": "Wishes Technology，廢鋰電池回收/石墨烯，官網確認", "990725c5-954d-431f-8679-5906e2a05ab5": "綠色技術/永續商品，官網確認", "60760b01-0ec2-415e-a749-45f2ab4c373a": "KiWi New Energy 綠電零售平台官網，內容與公司一致", "49b40826-ba13-45cf-ae59-1cb52ed7f83a": "公司自有 BIPV 品牌 Pixasolar 官網（含荷蘭子公司）", "0dd52f71-4988-4f96-846c-1e0cb13e3cde": "統編82879913、代表人簡立揚、南港、綠電充電樁儲能，皆吻合", "de7289e8-1437-4971-9017-524b216bef73": "苗栗銅鑼廢光電板/廢電池回收，信箱hs@horngsheng-env.com吻合", "df990a3a-ce66-4f8e-be1d-42ada5cb6e9f": "PowerWin 廢電池回收處理廠，統編53594157吻合", "00e20b13-b372-45bb-be0a-fefc73cf4fe8": "GREAT 台中大里儲能系統，統編50849120吻合", "d7a99886-0ced-4ea8-933c-3472837268cc": "統編94197060確認為本公司「恆水綠電股份有限公司」（GCIS核准設立）；恆水創電(統編83540257)是另一家；查無官網", "4036f573-dbec-49e7-8036-005e21345eba": "WeMo Scooter 共享電動機車官網，公司即威摩科技", "6fb3beed-10af-4b73-b9f5-3bd3c275a2b6": "OSENSE 室內定位/AR，統編52605851吻合", "a950b8d9-1f86-4165-9a81-25d7e692d50b": "3JTech 物聯網/探勘儀器，統編23031315、股票代號7602吻合", "b31a4db3-d895-4405-9c87-46f3c39b56bd": "Truewin 半導體UPS鋰鐵電池/儲能，統編56609668吻合", "9c3f0667-c975-4927-bfa1-520bca06b883": "公司存在(findbiz有登記,核准設立),僅查無官網——綠能電廠投資型公司多無網路足跡", "72c9d3af-184b-4456-8e24-20d3410bb36f": "HOTCAKE 美業預約會員系統，夯客股份有限公司(台北大安)官網", "f04eee0d-d64e-409b-9149-a14771d0365a": "RANICTEK IC設計(5G/6G/衛星晶片)，統編90049829吻合", "3276a2f9-66bc-4eb5-a801-4a7cbce6a323": "統編89164498確認為本公司「越創科技股份有限公司」（GCIS核准設立）；web66黃頁非官網；查無官網", "cba610d1-3a5e-4fe3-b34e-b83e9127970c": "eCloudEdge 邊緣運算協作平台NeoEdge，統編00100089吻合", "f3b22876-0ef2-4914-936c-1374ddf56e11": "FM&G Biomed，成大衍生膠原蛋白生醫新創，官網確認", "598879b8-2d8c-4687-9c86-1f855b232c9c": "統編93483115確認為本公司「日美資訊股份有限公司」（GCIS核准設立）；nimei.com.tw為不同公司；查無官網", "71b1870f-43ce-46dc-8f4b-be673cf239b3": "Symmetry Info，旗下面試趣，創櫃板7684，官網確認", "1daf2097-ad10-4694-8af9-b7dfbb478126": "成家驗屋，房屋檢驗服務，官網確認", "6334b132-c752-4382-8617-8b9a8700e6b0": "EnkiBio，大樹藥局與台大食科所合作保健食品，官網確認", "3c3963f2-91da-4a61-895a-3194327990cd": "統編90686586正確就是本公司;『鼎橙國際』是更名前舊名(第三方站舊資料,統編不變、同一間),非不同公司;仍查無官網", "818b9350-f93f-497c-8f61-ca4be9285c5d": "Kai Kombucha 康普茶品牌，官網確認", "fb98ec99-ccf7-4998-98d8-578e58d842f2": "LOOP 共享汽車平台，統編96777964相符，官網確認", "fd4f9da6-f0aa-4d2a-9d02-30b9883a3256": "MIDWAY 職場健康促進，官網確認", "0176f1dc-63ed-454a-9190-9c34a429aa00": "品牌為媽爹講故事(有聲書APP)，僅查到登記站與CMoney著陸頁，無確認獨立官網", "4413e482-f182-4b0e-9270-41e0f46fb24b": "統編97576260確認為本公司「索力星球股份有限公司」（GCIS核准設立）；GravaStar為深圳另一家公司；查無官網", "8ec25553-059c-4a54-a007-034e80a829ff": "呼叫KOL 網紅媒合平台，Cake登記為呼叫網紅股份有限公司，官網確認", "eaee19bf-e27c-462b-a05e-4d0a468431ca": "FunCrowd，raingo共享傘，統編83074560相符，官網確認", "278f3331-85f4-4034-be28-54220d0ecfc9": "統編90031314，僅查到登記站，無獨立官網", "eb667cd5-f3cf-4c21-a69c-1e4b869139f9": "統編90832390，僅查到登記站，無確認官網", "1adcfe29-a986-4feb-870c-a72cd0dddfdf": "Morale AI，清大衍生智慧製造AI，統編94262272相符，官網確認", "87020064-76f0-44bc-8b40-bd1dc419ce15": "Kopherbit，僅查到104徵才頁與募資新聞，無獨立官網", "2303b900-7907-4b72-ab10-0a1563632af8": "統編93585226確認為本公司（GCIS核准設立）；搜尋到的威特運動(winsports)為不同公司；本公司查無獨立官網", "0d816499-425d-43ed-a328-2fcf68dc1b8c": "品牌露酪RuralChees松露橄欖油豆腐乳，關於我們頁確認", "8ce3f688-74c2-4acd-861d-34a4f9dec471": "品牌Bebop冰淇淋官方購物網站", "a9109d1b-d73c-44d9-ae15-dc1232f194ac": "僅查到公司登記資料，無確定官網", "6e1deef1-7d79-4f38-8690-03a01e059d14": "ChoozMo AIGV，AI擬真人應用公司", "41770673-8e47-48e2-876c-efd366aaddc4": "LanCore智慧養殖節能系統", "646e13eb-9adc-4df2-895a-669b1a7f5846": "Longwalk社企，嘉義蘆筍全株利用", "777fb12d-a853-458c-ade4-8324a6c741e4": "Heryee Biotech，僅查到公司登記資料，無官網", "af70bc5b-065a-4304-a37a-3882a4b0b087": "統編60793901確認為本公司（GCIS核准設立）；USPACE為悠勢科技(統編52492792)不同公司；本公司查無獨立官網", "11b68c90-4d73-4d6e-a4a8-1c2f6d379451": "Formosagoose鵝舖子，FB確認同公司", "a37ce31b-13ea-4ca9-983c-48f2bfc6d913": "LINGBO瓦斯智慧管理平台，統編相符", "89d94867-15bc-42fd-99d1-3b10e97ce86d": "PCB再利用，僅母公司菖順集團有頁面，菖鼎本身無獨立官網", "020e09be-9dbb-4a6e-b18a-4d09321e749c": "親子天下子公司，僅母公司parenting.com.tw頁面，無獨立官網", "993e0d36-dea1-484e-b276-cddc7409106f": "Taiwan Carbon Shuttle，綠色技術污染物吸附分離，統編相符", "2f8cea9c-18ff-4b3b-a560-6373d283d5ad": "Unilite循環經濟綠建材輕質粒料，統編相符", "666fe932-df47-4d85-9aa7-41b55f00ebe6": "Foxgreen 官網，微生物應用/環保設備，與公司業務相符", "7e445369-1da8-4e81-96e3-cfb6bbfdf624": "TCHAR 官網，生物炭負碳技術", "f061c576-181a-4862-afd4-dec2014f42ce": "Flexwave 官網，太陽能採集/AIoT", "e901d133-5dda-4dc6-8aab-20aceadfe1d5": "ColorPark 官網，碳管理/循環照明租賃", "5968d283-ed72-48d5-892f-b30f1f04588e": "LeeLink 官網，廢鑄砂循環再利用", "1bbcf30e-ebb4-4e1e-990e-e63e619d5197": "YC Synergy 官網，燃料電池系統", "e80f4ec5-1d60-410a-a15e-384060a80e75": "僅查到公司登記資料（twincn），未找到獨立官網", "17f0bacd-6468-4a86-981e-af0974248309": "Blue Ocean Vision 官網，循環杯/減塑", "710d0767-cb89-48e4-b9d2-ada03864bdc8": "Yi Chun 官網，循環經濟/尿布回收，統編相符", "3ce37fa2-b29a-4309-8768-a2429a8381ab": "官網，智慧建築/系統整合，統編與地址相符", "8d472e06-57fb-446e-94e1-689ad4e17516": "僅查到公司登記資料，未找到獨立官網", "cc56f620-20b6-4f0a-8d94-b70e710db4fe": "hying 官網，新竹，統編相符", "a6dc69ae-00de-42fd-a41a-9b3d3e961f70": "Lawsnote 七法官網，法學資料庫/法律科技，統編相符", "f7a900ae-b606-4d80-a9e7-b842a6cd7467": "HydroTron 官網，小水力綠能，地址相符", "18ea17a2-18e6-4c2b-b346-967dd2fe1148": "Ecofirst 官網，AI 空調節能軟體，email/地址相符", "76d32d33-5710-48db-9aa8-ef0a8f34ecc4": "HengHung/iHH 官網，IOEX/Arctos 區塊鏈通訊，統編相符", "f4b64a10-45e8-48bd-98f8-c8fd955b2d29": "IsCoolLab 視覺RPA 自動化軟體，官網確認", "2f8d75fa-cf05-4c43-a96f-cb26c5693051": "KiWi New Energy 綠電訂閱平台，官網確認", "f08f49f1-ec1a-4519-980f-b37de45113fc": "SeaLand 汽車訂閱平台，冰宇科技營運（客服 02-8665-4040 與登記電話一致）", "d9d17c42-f73b-408b-8b8d-dd8c2f72b0a7": "Smart Tag Inc. 工業4.0 智慧貼紙，官網確認", "c82b3c70-0373-499c-90d7-e7b83ba4565e": "Valtec 漁業AI無人機，官網確認", "d5335def-a1a4-4829-bcf8-7922bb9b6d52": "LargitData AI輿情大數據，官網確認", "4656c201-2557-445c-9fe6-0bbbe1de0ea0": "化工/電子特氣製造商，僅有公司登記資料站，無獨立官網", "61dcb1e3-2438-4a95-95a9-a830f278f9a9": "AsWater 水處理工程，官網確認", "6b3b3a1f-8ba0-438d-8413-897eb05d6049": "餐飲集團（Miacucina/Miopane等），此為品牌官網；客服電話與企業一致", "7fa9658a-5908-4d80-922a-57365e01642c": "Pilot 鉛酸/鋰鐵電池與太陽能，官網確認", "a4359f7e-d211-4a59-b1e8-6c5d2357214c": "PADE 紡織循環智能分選，官網確認", "a9f4f3c0-fe54-425e-8900-4a009807ef38": "Eastern Union Interactive 移工跨境匯兌（興櫃7738），官網確認", "ba32195c-6a9d-4973-bb2e-60f2972f9798": "統編93787264確認為本公司（GCIS核准設立）；益得生技為不同公司；查無官網", "2a5273e1-91de-4292-8963-754b6466bc08": "WonderGreener 蒲草環保吸管，官網確認", "72ffe834-4bcd-424d-899f-5ea5de25fd57": "LegalSign.ai 法律科技/合約管理，官網確認", "cbcad233-8138-4eb0-9e92-f9da0922bb7a": "EcoFin 環保可分解吸管，登記地址電話一致，官網確認", "f32efa75-f3c6-480a-80dd-bfdffd4533e4": "Maideax，統編42735341相符，宗教祈福數位轉型平台", "4fa88272-2e0c-44fb-8c0d-c1b35a623a1d": "桃園觀音廢棄物處理/SRF再生能源，統編80141354相符", "a7886745-dcc5-41f0-aef8-a3feae848a77": "CCILU循環經濟鞋類品牌官網/官方商店", "075ec378-2bd2-4864-9194-36a229da1b2a": "REAS.ai 企業級AI Agent平台", "9f59fd78-0dc2-46e6-a5ee-6996297e956e": "LEDA Technology，AI影像辨識/數位轉型，桃園平鎮", "fcef8823-7d9d-478f-9c16-b46f3ead4d59": "氨氮廢水資源再利用設備，同名公司官網（搜尋另見統編72196366，台灣公司網42789850指向同名公司）", "4320b533-a972-4257-9456-07c60928ee6d": "Ubiik，LPWAN能源物聯網，統編45074293相符；另有ubiqconn.com品牌站", "993c3370-6c9a-4ead-a380-2791941d4cf6": "AV LINK Pro AV影像處理，統編22992829相符", "353e20e2-4f55-44ca-9830-9c4410e1fc8c": "K-JET雷射加工設備，統編70697924相符", "c9309f79-bb60-4f9f-9a56-4fd8d3551560": "CASTEC自動化設備上市6998，統編27635744相符", "7ac7ac8c-92ed-4230-a9b7-519a0e134f1d": "MTM直流馬達上市4589，統編13055739相符", "80b396c8-c369-4a32-a632-646ab35b37f3": "HDRE智慧能源上市6873，統編45877096相符", "5a0eb634-72bd-4cf8-903a-bc9d32f0f630": "Upbeat Technology，超低功耗AI晶片/MEMS，統編66396242相符", "f876e7a3-9bb0-4838-ba5b-77fcf10bb0df": "MABOW高齡科技，台中", "af06ae1b-7d26-4acf-a17d-8df373dc00d5": "ChangingTec資安/身分認證上櫃8272，統編16325089相符", "98bf279e-4d53-4461-ac83-7b16594002f3": "LIANYOU METALS鎢鈷金屬循環上市7610，統編50802223相符", "cc1589a2-09f3-429f-91bf-48bf96603c6b": "上市6865 WebComm官網，統編相符", "e0419691-6cec-4387-9f97-184f67e6cb67": "焚化處理/廢熱回收，循環經濟業務相符", "7e320c36-bde9-4a44-a8c8-cb7f94ef6377": "苗栗銅鑼廢棄物回收，信箱hs@horngsheng-env.com相符", "1f6c0815-9684-420f-a7b8-9e7f93d8a8c3": "TAIL電動車充電，統編相符", "a78a54c7-53f1-4f42-bad9-c091dcbf5a63": "HydroIonic環境檢測，代表人廖學賢相符", "39be7b6a-e020-4987-8c5a-6960207ee5d0": "上市6906 Groundhog電信大數據官網", "5207abc4-b4ca-4472-bfcb-e24e59e9b7dd": "ProLogium固態電池官網，統編相符", "868d2f89-9de7-4ac0-87db-86d73668c774": "Shihlien Fine Chemicals，觀音廠電子級矽烷相符", "b6f0dfd8-04fc-44d5-b362-3b415fd169a6": "上市6869 J&V Energy太陽能官網", "3dfb945c-93c5-4a70-999a-e98f870ff80d": "AIWIN AI解決方案，統編相符", "adfdaa90-68a4-45fc-a24d-a2ed6d4a65e4": "統編85013054確認為本公司（GCIS核准設立）；ginten.com.tw為不同公司；查無獨立官網", "8c619411-c90a-4920-9bf8-548820a32c47": "CHOCOLABS App發行商，代表人劉于遜相符", "8f5ae419-8e09-4d47-bb7e-8bf8a9021a57": "Integration Sports，統編相符", "031c86d1-733b-4729-afb0-e7880b12acfc": "Changee共享空間，官網changee.tw已關閉", "b16cb71d-7872-4c68-8bad-34c9f375b3fd": "癌友營養餐外送，代表人王品喬相符", "81801c82-8b5f-4cdc-8cc3-3b1eddeb3aff": "KUNNEX小家電，僅taiwantrade平台頁，無自有獨立官網", "c37dfb68-4d98-428f-9553-f5929160e7cb": "CoolBitX 庫幣科技官網，區塊鏈安全/CoolWallet 冷錢包", "740c3a00-990f-4a04-8718-3332f9357fa9": "自營品牌 Ann Smile 微笑安安官方商店，Yahoo 商城登記公司名即安絲邁爾國際", "e6d8039c-df03-462a-b399-82bf2a816de0": "統編24479994確認為本公司（GCIS核准設立）；StorySense品牌仍在台灣登記；查無獨立台灣官網", "3f79f2a2-7c08-4a12-b2b1-031de9510162": "Dcard 匿名社群平台，公司官網 about.dcard.tw", "03ba84f8-99b6-4b1f-8079-076fbbf32e3d": "UNICORNSKINCARE 男性保養品(Bffect)，統編對應，創辦人施凱鈞", "719edf25-501e-43b1-8e28-3c9375c48725": "成真文創官方網站，壁貼/文創設計", "8907ff42-dafb-4849-996d-b2b86716f39e": "查無官網，搜尋結果均為其他同類綠能公司", "9c35dda3-0845-43ff-a091-e093ad6ceb97": "查無官網，僅見公司登記/黃頁資料", "45ab760d-3ac1-478c-be07-5e5d743ca503": "InfuseAI Taiwan，MLOps 平台 PrimeHub，統編對應", "27b1db0f-e310-45ca-8fd6-00f2f4f8cf90": "Hugreen 善農科技，精準農業/設施農業智慧控制，統編對應", "81c2aec9-fc88-4017-b805-095c86c636b3": "KenKone Medical，醫護 AI 語音助理 EVAS，統編對應", "03080800-c927-4430-ad23-4fb0b4ca46ac": "查無官網，無把握的品牌站皆排除", "1c095df1-538e-447d-988d-040739081998": "查無官網，僅見公司登記資料(嘉義縣)", "b229956a-6845-4a84-bd55-e9053b0a8d09": "EZAQUACULTURE 智慧養殖無人船，僅有 FB 粉專與報導，無自有官網"};
+let companies = [];      // 仍無官網的
+let savedCount = 0;
+const hasSite = c => c.website && String(c.website).trim();
+
+async function load(){
+  const r = await fetch('/api/companies?sort_by=name');
+  const all = await r.json();
+  companies = all.filter(c=>!hasSite(c));
+  document.getElementById('cntLeft').textContent = companies.length;
+  // 產業下拉
+  const inds = [...new Set(companies.map(c=>c.industry||'其他'))].sort();
+  const sel = document.getElementById('indFilter');
+  sel.innerHTML = '<option value="">全部產業</option>'+inds.map(i=>`<option>${i}</option>`).join('');
+  render();
+}
+
+function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const ind = document.getElementById('indFilter').value;
+  const tb = document.getElementById('tb');
+  let rows = companies.filter(c=>{
+    if(ind && (c.industry||'其他')!==ind) return false;
+    if(q){ return (c.name||'').toLowerCase().includes(q) || (c.tax_id||'').includes(q); }
+    return true;
+  });
+  tb.innerHTML = rows.map(c=>{
+    const note = NOTES[c.id] || '';
+    return `<tr id="row-${c.id}">
+      <td><div class="nm">${esc(c.name)}</div><div class="sub">統編 ${esc(c.tax_id||'—')}</div></td>
+      <td><span class="badge">${esc(c.industry||'其他')}</span></td>
+      <td class="note">${esc(note)}</td>
+      <td class="url">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="url" id="in-${c.id}" placeholder="https://…"
+                 onkeydown="if(event.key==='Enter')save('${c.id}')">
+          <button onclick="save('${c.id}')">存</button>
+          <span class="msg" id="msg-${c.id}"></span>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function save(id){
+  const inp = document.getElementById('in-'+id);
+  let url = (inp.value||'').trim();
+  const msg = document.getElementById('msg-'+id);
+  if(!url){ msg.className='msg err'; msg.textContent='請先填網址'; return; }
+  if(!/^https?:\/\//i.test(url)) url='https://'+url;
+  msg.className='msg'; msg.textContent='儲存中…';
+  try{
+    const r = await fetch('/api/companies/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({website:url})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    msg.className='msg ok'; msg.textContent='✓ 已存 '+url;
+    const row=document.getElementById('row-'+id); row.classList.add('row-saved');
+    inp.disabled=true; row.querySelector('button').disabled=true;
+    savedCount++; document.getElementById('cntSaved').textContent=savedCount;
+    // 從待辦移除(下次 render/refresh 不再出現)
+    companies = companies.filter(c=>c.id!==id);
+    document.getElementById('cntLeft').textContent = companies.length;
+  }catch(e){ msg.className='msg err'; msg.textContent='✗ 失敗 '+e.message; }
+}
+
+async function saveAll(){
+  const ids = companies.map(c=>c.id);
+  for(const id of ids){
+    const inp=document.getElementById('in-'+id);
+    if(inp && inp.value.trim()) await save(id);
+  }
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+load();
+</script>
+</body>
+</html>

@@ -19,17 +19,23 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
    playwright Chromium + 系統庫、claude CLI、建 `.env`、設定並啟動 systemd service、healthcheck。
    需 `sudo` 的步驟會自動帶；過程中若 apt / sudo 需要密碼，請提醒使用者輸入。
 2. 跑完回報 http://localhost:8003 是否 healthcheck 通過。
-3. 提醒使用者**唯一的手動步驟**：本機 AI 引擎需執行一次 `claude` 登入授權；
-   或在 `.env` 填 `ANTHROPIC_API_KEY` 改走雲端。
+3. 提醒使用者**唯一的手動步驟**：預設 AI 引擎需執行一次 `claude` 登入授權；
+   或在 `.env` 設 `AI_ENGINE` 改用 codex / gemini CLI / ollama（各引擎需各自登入或啟動）。
 4. 若 healthcheck 失敗：讀 `logs/app-error.log` 或 `journalctl --user -u taiwan-company -n 50`，
    定位後直接修，不要停在「請你自己看 log」。
 
 > 純人類操作（不透過 agent）的等價指令見 [README.md](README.md)。
 
-## AI 模式說明
+## AI 引擎說明
 
-- **本機 Claude（預設）**：自動偵測已安裝的 Claude Desktop / `claude` CLI，無需 API Key
-- **雲端 API**：點側邊欄 ⚙ 按鈕，輸入 Anthropic / OpenAI / Gemini API Key
+全部在本機執行，使用各平台的 CLI 登入 / 本機端點，**不需 API Key**。引擎以 `engine` 字串選擇：
+
+- **claude（預設）**：本機 `claude` CLI（多模態走 Read tool）
+- **codex**：OpenAI 官方 `codex exec` CLI（圖片走 `--image`）
+- **gemini**：Google 官方 `gemini -p` CLI（檔案/圖片走 `@路徑`）
+- **ollama**：本機 OpenAI 相容端點（預設 `localhost:11434`，圖片需 vision model）
+
+預設引擎由 `.env` 的 `AI_ENGINE` 決定；側邊欄 ⚙ 可臨時切換（存 localStorage，透過 `X-AI-Engine` header / `?engine=` 傳給後端）。引擎不認得或對應 CLI/服務未就緒時，後端回可行動錯誤訊息。能力不足的多模態（如 ollama 無 vision model、codex/ollama 的 PDF）自動退到本機文字抽取（`file_parser` + tesseract OCR）。
 
 ## 專案結構
 
@@ -53,7 +59,7 @@ data/                執行時資料（不在 git 追蹤範圍）
 | `docs/index.md` | 平台一句話 + 模組總覽 |
 | `docs/architecture.md` | 後端 / 前端 / 部署架構 |
 | `docs/data-flow.md` | 公司資料的生命週期 + companies.json schema |
-| `docs/ai-features.md` | AI 用在哪、雙模式邏輯、provider 切換 |
+| `docs/ai-features.md` | AI 用在哪、多引擎（claude/codex/gemini/ollama）選擇邏輯 |
 | `docs/integration.md` | 與 mops_investee / GCIS / TWSE 的串接 |
 | `docs/glossary.md` | 業務 + 技術術語表 |
 
@@ -81,14 +87,14 @@ data/                執行時資料（不在 git 追蹤範圍）
 - **不要加認證**。本平台預設單人單機，CORS `*`。要加 auth 是大改動，請先討論。
 - **不要加前端框架**（React / Vue 之類）。`static/app.js` 是純 JS，刻意保持「打開就能改」。
 - **不要在 service 層直接依賴外部 DB**。需要 MOPS 資料時，走 `mops_investee_client` 之類的 HTTP client，符合使用者「禁止直連 PostgreSQL」全域指令。
-- **不要把 API Key 寫進 source**。BYOK 流程已經建好，使用者透過 UI 帶 header。
+- **不要加回雲端 API Key 機制**。平台定案純地端，全部走本機引擎（claude / codex / gemini CLI、ollama 端點），不收 API Key、不呼叫雲端 API。
 - **不要刪 `companies.json` 的欄位**（或重新命名）。前端 + AI 抽取流程都依賴現有 schema，加欄位 OK，刪欄位需先檢查所有讀取點。
 
 ## 常見任務速查
 
 | 任務 | 該改哪 |
 |---|---|
-| 加新的 AI provider | `services/claude_client.py`（加 `_ask_xxx` + `ask` 分支） |
+| 加新的 AI 引擎 | `services/claude_client.py`（加 `_ask_xxx` + `_ask_text`/`ask*` dispatch 分支 + `KNOWN_ENGINES`） |
 | 加新的公司資料來源 | `services/gcis_client.py` 或新開一個 client |
 | 改 call memo 範本 | `data/call_memo_template.docx`（DOCX 直接改） |
 | 加新的 enrich 步驟 | `routers/companies.py` 的 `_enrich_company` / `_deep_enrich_company` |

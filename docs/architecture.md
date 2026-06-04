@@ -1,7 +1,7 @@
 ---
 title: 技術架構
 status: living
-last_updated: 2026-05-13
+last_updated: 2026-06-05
 source_repo: ~/taiwan-company
 ---
 
@@ -9,7 +9,7 @@ source_repo: ~/taiwan-company
 
 ## TL;DR
 
-單一 FastAPI process 同時供 API 與靜態前端，資料用 JSON 檔存，AI 走「本機 Claude CLI 優先、雲端 API 作備援」的雙模式。地端部署，Linux 上以 systemd user service 跑。
+單一 FastAPI process 同時供 API 與靜態前端，資料用 JSON 檔存，AI 走純本機多引擎（claude / codex / gemini CLI、ollama 端點），不需 API Key。地端部署，Linux 上以 systemd user service 跑。
 
 ## 後端（FastAPI）
 
@@ -34,7 +34,7 @@ source_repo: ~/taiwan-company
 - `static/index.html` + `static/app.js` + `static/style.css`，由 `main.py` 的 `/static` 與 `/` 直接服務。
 - **無前端框架**（沒有 React / Vue），原生 JS。`app.js` 約 131 KB，所有互動都在裡面。
 - 唯一 CDN 依賴：`cytoscape@3.30.2`（畫母子公司關係圖）。
-- AI 設定靠 `localStorage` 存使用者輸入的 API Key，每次請求帶 `X-API-Key` / `X-AI-Provider` header（見 `services/ai_deps.py`）。
+- AI 引擎選擇靠 `localStorage.ai_engine`，每次請求帶 `X-AI-Engine` header（SSE 走 `?engine=`，見 `services/ai_deps.py`）。無 API Key。
 
 ## 資料儲存（JSON 檔，無 DB）
 
@@ -49,13 +49,13 @@ source_repo: ~/taiwan-company
 
 **並發策略**：`update_companies_industry` 用 single read-modify-write 規避 race，但整體仍是「全讀全寫」模式，**不適合多人同時寫**。
 
-## AI 整合（雙模式）
+## AI 整合（純本機多引擎）
 
 詳見 [[ai-features]]。簡述：
 
-- **本機優先**：未設定 API Key 時走 `subprocess` 叫本機 `claude` CLI（自動探尋路徑）。
-- **雲端 BYOK**：使用者在 UI 輸入 Anthropic / OpenAI / Gemini Key，存 localStorage、每次請求帶 header。
-- 圖片辨識（`extract_companies_from_image`、OCR fallback 之上的 Vision）三家 API 都支援。
+- **四個引擎**：`claude`（預設，本機 CLI）/ `codex`（`codex exec`）/ `gemini`（`gemini -p`）/ `ollama`（本機端點），由 `engine` 字串選擇，全部 `subprocess` 或本機 HTTP，不打雲端 API。
+- **無 API Key**：引擎只需各自先安裝並登入對應 CLI，或啟動 ollama 服務。
+- 圖片辨識（`extract_companies_from_image`）各引擎用自己的多模態能力；能力不足時退到本機 OCR + 文字抽取。
 
 ## 部署
 

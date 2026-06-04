@@ -14,6 +14,7 @@ data/blacklist.json
 data/migrate_progress.json
 data/temp/
 data/uploads/
+data/*.bak.*
 
 # Keep the template file
 !data/call_memo_template.docx

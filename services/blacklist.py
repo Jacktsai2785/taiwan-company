@@ -2,7 +2,6 @@
 import asyncio
 import json
 import logging
-import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,17 +99,8 @@ def load_all() -> dict:
 
 
 async def analyze_with_ai() -> dict:
-    """Call Claude Haiku to extract title-pattern rules from dismissed articles."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        log.info("ANTHROPIC_API_KEY not set — skipping AI analysis")
-        return {"skipped": True, "reason": "ANTHROPIC_API_KEY not configured"}
-
-    try:
-        import anthropic
-    except ImportError:
-        log.warning("anthropic package not installed")
-        return {"skipped": True, "reason": "anthropic not installed"}
+    """Use the local AI engine to extract title-pattern rules from dismissed articles."""
+    from . import claude_client
 
     bl = _load()
     dismissed = bl.get("dismissed", [])
@@ -146,14 +136,9 @@ async def analyze_with_ai() -> dict:
 }}"""
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        msg = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = msg.content[0].text.strip()
-        data = json.loads(raw)
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 60, None, "claude")
+        start, end = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[start:end + 1] if start != -1 and end > start else raw)
     except Exception as exc:
         log.warning("AI analysis failed: %s", exc)
         return {"skipped": True, "reason": str(exc)}

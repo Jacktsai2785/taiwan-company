@@ -617,45 +617,40 @@
 <div id="settings-overlay">
   <div id="settings-dialog">
     <div id="settings-header">
-      <h3>選擇 AI 模式</h3>
-      <p id="settings-subtitle">在本機執行時，建議使用「本機 Claude」，不需要 API Key。<br>如需在其他環境使用，可改選雲端 API 模式。</p>
+      <h3>選擇 AI 引擎</h3>
+      <p id="settings-subtitle">全部在本機執行，使用各平台的 CLI 登入或本機端點，不需要 API Key。<br>切換前請先安裝並登入對應的 CLI，或啟動 Ollama。</p>
     </div>
     <div id="settings-body">
       <div class="settings-providers">
-        <label class="settings-provider-opt" data-provider="local">
-          <input type="radio" name="ai-provider" value="local" checked onchange="onAiProviderChange(this)" />
+        <label class="settings-provider-opt" data-provider="claude">
+          <input type="radio" name="ai-engine" value="claude" checked />
           <div class="provider-card">
-            <strong>本機 Claude<span class="provider-badge badge-local-only" hidden>本機限定</span></strong>
-            <small class="provider-desc">使用此裝置已安裝的 Claude Desktop / CLI，不需 API Key</small>
+            <strong>本機 Claude</strong>
+            <small class="provider-desc">使用此裝置已安裝並登入的 <code>claude</code> CLI（預設）</small>
+          </div>
+        </label>
+        <label class="settings-provider-opt" data-provider="codex">
+          <input type="radio" name="ai-engine" value="codex" />
+          <div class="provider-card">
+            <strong>GPT · Codex</strong>
+            <small>OpenAI 官方 <code>codex</code> CLI，需先安裝並 <code>codex login</code></small>
           </div>
         </label>
         <label class="settings-provider-opt" data-provider="gemini">
-          <input type="radio" name="ai-provider" value="gemini" onchange="onAiProviderChange(this)" />
+          <input type="radio" name="ai-engine" value="gemini" />
           <div class="provider-card">
-            <strong>Gemini<span class="provider-badge badge-free" hidden>免費</span></strong>
-            <small>Google · 取得 Key：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></small>
+            <strong>Gemini</strong>
+            <small>Google 官方 <code>gemini</code> CLI，需先安裝並登入</small>
           </div>
         </label>
-        <label class="settings-provider-opt" data-provider="anthropic">
-          <input type="radio" name="ai-provider" value="anthropic" onchange="onAiProviderChange(this)" />
+        <label class="settings-provider-opt" data-provider="ollama">
+          <input type="radio" name="ai-engine" value="ollama" />
           <div class="provider-card">
-            <strong>Claude API</strong>
-            <small>Anthropic · 取得 Key：<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>（需付費）</small>
-          </div>
-        </label>
-        <label class="settings-provider-opt" data-provider="openai">
-          <input type="radio" name="ai-provider" value="openai" onchange="onAiProviderChange(this)" />
-          <div class="provider-card">
-            <strong>ChatGPT</strong>
-            <small>OpenAI · 取得 Key：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>（需付費）</small>
+            <strong>開源模型 · Ollama</strong>
+            <small>本機 <code>ollama</code> 端點（預設 localhost:11434），需先啟動服務</small>
           </div>
         </label>
       </div>
-      <div class="settings-key-row" id="settings-key-section" style="display:none">
-        <input type="password" id="settings-api-key" placeholder="貼上 API Key…" autocomplete="off" spellcheck="false" />
-        <button class="key-toggle-btn" onclick="toggleSettingsKeyVisibility()" title="顯示 / 隱藏">👁</button>
-      </div>
-      <div id="settings-error"></div>
     </div>
     <div id="settings-footer">
       <button class="btn btn-ghost" onclick="closeSettings()">取消</button>

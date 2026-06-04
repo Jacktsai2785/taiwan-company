@@ -35,13 +35,14 @@ curl -fsSL https://raw.githubusercontent.com/Jacktsai2785/taiwan-company/main/sc
 
 ### 唯一的手動步驟
 
-本機 AI 引擎需登入一次（無法自動化）：
+本機 AI 引擎需登入一次（無法自動化）。預設引擎為 claude：
 
 ```bash
 claude          # 完成 OAuth 授權
 ```
 
-或在 `.env` 填入 `ANTHROPIC_API_KEY` 改走雲端 API。
+要改用其他引擎，可在 `.env` 設 `AI_ENGINE`（`claude` / `codex` / `gemini` / `ollama`），
+或在側邊欄 ⚙ 臨時切換。各引擎需各自先安裝並登入對應 CLI（codex / gemini）或啟動 Ollama 服務。
 
 ---
 

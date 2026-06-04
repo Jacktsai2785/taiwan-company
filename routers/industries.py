@@ -19,8 +19,7 @@ async def get_industry_daily(
     try:
         return await get_digest(
             industry,
-            api_key=ai["api_key"],
-            provider=ai["provider"],
+            engine=ai["engine"],
             force_refresh=refresh,
         )
     except RuntimeError as e:
@@ -40,8 +39,7 @@ async def get_industry_trends(
     try:
         return await get_trends(
             industry,
-            api_key=ai["api_key"],
-            provider=ai["provider"],
+            engine=ai["engine"],
             force_refresh=refresh,
         )
     except RuntimeError as e:

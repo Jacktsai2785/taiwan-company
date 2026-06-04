@@ -88,13 +88,13 @@ if have claude; then
   ok "claude CLI 已安裝（$(command -v claude)）"
 else
   warn "未偵測到 claude CLI，嘗試安裝官方版本…"
-  curl -fsSL https://claude.ai/install.sh | bash || warn "claude 自動安裝失敗，可改用 ANTHROPIC_API_KEY 模式"
+  curl -fsSL https://claude.ai/install.sh | bash || warn "claude 自動安裝失敗，可改用其他引擎（codex / gemini CLI 或 ollama）"
   export PATH="$HOME/.local/bin:$PATH"
   if have claude; then
     ok "claude CLI 安裝完成"
     warn "首次使用需登入：請執行  claude  並完成授權（一次即可）"
   else
-    warn "claude CLI 不可用。平台仍可運作，但本機 AI 模式需 claude；或在 .env 設 ANTHROPIC_API_KEY 走雲端。"
+    warn "claude CLI 不可用。平台仍可運作，但預設引擎需 claude；可在 ⚙ 改選 codex / gemini CLI 或 ollama。"
   fi
 fi
 
@@ -104,7 +104,7 @@ if [ -f .env ]; then
   ok ".env 已存在（保留現有設定）"
 else
   cp .env.example .env
-  warn "已從 .env.example 建立 .env —— 如需雲端 AI 或 mops 串接，請填入對應 key"
+  warn "已從 .env.example 建立 .env —— 如需切換 AI 引擎或 mops 串接，請填入對應設定"
 fi
 
 # ── 7. 執行時目錄 ─────────────────────────────────────────────────────────────

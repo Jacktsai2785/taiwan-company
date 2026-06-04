@@ -40,7 +40,7 @@ FIELDS: list[tuple[str, str, str]] = [
 FIELD_KEYS = [f[0] for f in FIELDS]
 
 
-async def extract_from_transcript(company_name: str, transcript: str, api_key: str = "", provider: str = "anthropic") -> dict:
+async def extract_from_transcript(company_name: str, transcript: str, engine: str = "claude") -> dict:
     """Use Claude to extract all 20 Call Memo fields from a transcript."""
     fields_desc = "\n".join(
         f'  "{key}": "{label}（{desc}）"'
@@ -66,7 +66,7 @@ async def extract_from_transcript(company_name: str, transcript: str, api_key: s
 
 請直接回傳 JSON 物件。"""
 
-    raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, api_key, provider)
+    raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, engine)
 
     # Strip markdown fences if present
     raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)

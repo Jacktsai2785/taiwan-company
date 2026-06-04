@@ -69,6 +69,10 @@ class NameLookupRequest(BaseModel):
     names: list[str]
 
 
+class ReverifyRequest(BaseModel):
+    tax_ids: list[str]
+
+
 class FromGraphRequest(BaseModel):
     name: str
     tax_id: str | None = None
@@ -157,6 +161,18 @@ async def lookup_company_names(req: NameLookupRequest):
         }
         for n, r in zip(names, results)
     ]
+
+
+@router.post("/reverify-status")
+async def reverify_status(req: ReverifyRequest):
+    """Re-check GCIS registration status for tax_ids that timed out (驗證逾時).
+
+    Called by the frontend in the background after name-lookup so 「驗證逾時」
+    rows resolve on their own without the user manually retrying.
+    Returns tax_id -> {status, is_dissolved, is_api_error, is_unverified}.
+    """
+    tax_ids = [t.strip() for t in req.tax_ids if t and t.strip()]
+    return await gcis_client.reverify_statuses(tax_ids)
 
 
 @router.post("/suggest-industries")
@@ -416,8 +432,10 @@ async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query))
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-async def _summarize_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
-    """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation."""
+async def _summarize_company(company_id: str, engine: str = "claude", reset: bool = False) -> None:
+    """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation.
+    reset=True clears existing summary/competitors and ignores known competitor context,
+    producing a true from-scratch rewrite."""
     events: list[dict] = []
     _summarize_progress[company_id] = events
 
@@ -433,13 +451,20 @@ async def _summarize_company(company_id: str, api_key: str = "", provider: str =
             events.append({"type": "done"})
             return
 
-        push("正在生成公司簡介（約 3–7 分鐘）…")
-        try:
+        if reset:
+            data_store.update_company(company_id, {"summary": "", "blurb": "", "competitors": []})
+            company = data_store.get_company(company_id)
+            push("已清除舊資料，從零重新生成（約 3–7 分鐘）…")
+            ctx = None
+        else:
+            push("正在生成公司簡介（約 3–7 分鐘）…")
             ctx = _gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
                 push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+
+        try:
             result = await report_generator.generate_summary(
-                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+                company, engine=engine, competitor_context=ctx
             )
             saved = _save_summary_result(company_id, result)
             push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
@@ -453,8 +478,9 @@ async def _summarize_company(company_id: str, api_key: str = "", provider: str =
 
 
 @router.get("/{company_id}/summarize")
-async def summarize_stream(company_id: str, ai: dict = Depends(ai_from_query)):
-    """SSE: regenerate AI summary only, without re-fetching GCIS data."""
+async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depends(ai_from_query)):
+    """SSE: regenerate AI summary only, without re-fetching GCIS data.
+    reset=true clears existing data and skips injecting known competitors."""
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -462,7 +488,7 @@ async def summarize_stream(company_id: str, ai: dict = Depends(ai_from_query)):
     async def event_generator():
         if company_id not in _summarize_running:
             _summarize_running.add(company_id)
-            asyncio.create_task(_summarize_company(company_id, **ai))
+            asyncio.create_task(_summarize_company(company_id, **ai, reset=reset))
         sent = 0
         for _ in range(3600):
             events = _summarize_progress.get(company_id, [])
@@ -499,7 +525,7 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
         result = await asyncio.to_thread(
             claude_client.ask,
             prompt, 60, ["WebSearch"],
-            ai.get("api_key", ""), ai.get("provider", "anthropic"), 6,
+            ai.get("engine", "claude"), 6,
         )
         url = result.strip().split("\n")[0].strip()
         if not url.startswith("http"):
@@ -1305,7 +1331,7 @@ async def add_competitor(company_id: str, req: AddCompetitorRequest, ai: dict = 
     return {"summary": new_summary, "competitors": competitors}
 
 
-async def _enrich_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
+async def _enrich_company(company_id: str, engine: str = "claude") -> None:
     _running.add(company_id)
     events: list[dict] = []
     _progress[company_id] = events
@@ -1361,7 +1387,7 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
             if ctx["direct"]:
                 push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
             result = await report_generator.generate_summary(
-                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+                company, engine=engine, competitor_context=ctx or None
             )
             saved = _save_summary_result(company_id, result)
             push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
@@ -1382,7 +1408,7 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
         _running.discard(company_id)
 
 
-async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str = "anthropic") -> None:
+async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
     events: list[dict] = []
     _deep_progress[company_id] = events
 
@@ -1404,7 +1430,7 @@ async def _deep_enrich_company(company_id: str, api_key: str = "", provider: str
             if ctx["direct"]:
                 push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
             result = await report_generator.deep_enrich_summary(
-                company, api_key=api_key, provider=provider, competitor_context=ctx or None
+                company, engine=engine, competitor_context=ctx or None
             )
             # Mark that a deep enrich has completed, so the UI can warn before
             # re-running it (distinct from last_updated, which any update touches).

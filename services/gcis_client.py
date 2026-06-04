@@ -10,6 +10,7 @@ Listing status (上市/上櫃/興櫃/創新板/非公發) is resolved from TWSE/
 創櫃板: TPEX 尚未提供公開 JSON API，暫不支援自動辨識。
 """
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -368,6 +369,106 @@ _DISSOLVED_STATUSES = {"解散", "廢止", "撤銷", "命令解散", "廢止認�
 _DISSOLVED_KEYWORDS = ("解散", "撤銷", "廢止", "命令解散", "歇業", "廢止認許", "撤回認許")
 
 
+# ── GCIS App1 throttle + status cache ──────────────────────────────────────────
+# data.gcis.nat.gov.tw rate-limits anonymous requests (429). Without backoff, a
+# batch of 20+ companies hammers it and most come back as 「驗證逾時」(_api_error),
+# because 429 was treated as a non-retryable 4xx. We coordinate all by-tax_id
+# status lookups through one gate:
+#   - global concurrency cap + min interval (spaces requests across batches/calls)
+#   - 12h TTL cache keyed by tax_id (registration status barely changes; the user's
+#     "稍後重查" then hits cache instead of re-hammering GCIS)
+#   - 429/5xx/timeout backoff with jitter (honours Retry-After)
+_GCIS_SEM = asyncio.Semaphore(3)
+_GCIS_MIN_INTERVAL = 0.34          # ≤ ~3 req/s kick-off rate
+_gcis_last_call = 0.0
+_gcis_pace_lock = asyncio.Lock()
+
+_gcis_status_cache: dict[str, tuple[str, datetime]] = {}
+_GCIS_STATUS_TTL = timedelta(hours=12)
+
+
+async def _gcis_pace() -> None:
+    """Serialise request kick-off so calls are spaced ≥ _GCIS_MIN_INTERVAL apart."""
+    global _gcis_last_call
+    async with _gcis_pace_lock:
+        loop = asyncio.get_running_loop()
+        wait = _gcis_last_call + _GCIS_MIN_INTERVAL - loop.time()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _gcis_last_call = loop.time()
+
+
+async def _gcis_status_by_tax_id(client: httpx.AsyncClient, tax_id: str) -> str | None:
+    """GCIS Company_Status_Desc for a tax_id, throttled + cached + 429-aware.
+
+    Returns: status string | "" (found-but-no-status / not found) | None (error
+    after retries). Caches only on success — a transient 429/timeout must never
+    stick, or a company would stay 「驗證逾時」forever.
+    """
+    cached = _gcis_status_cache.get(tax_id)
+    if cached and datetime.now() < cached[1]:
+        return cached[0]
+
+    for attempt in range(4):
+        await _gcis_pace()
+        try:
+            async with _GCIS_SEM:
+                resp = await client.get(
+                    GCIS_APP1,
+                    params={
+                        "$format": "json",
+                        "$filter": f"Business_Accounting_NO eq '{tax_id}'",
+                        "$skip": "0", "$top": "1",
+                    },
+                    timeout=12.0,
+                )
+            if resp.status_code == 429:
+                raise httpx.HTTPStatusError(
+                    "rate limited", request=resp.request, response=resp
+                )
+            resp.raise_for_status()
+            rows = resp.json()
+            status = rows[0].get("Company_Status_Desc", "") if rows else ""
+            _gcis_status_cache[tax_id] = (status, datetime.now() + _GCIS_STATUS_TTL)
+            return status
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code != 429 and code < 500:
+                return None  # genuine 4xx (bad request) — not retryable, not cached
+            retry_after = e.response.headers.get("Retry-After", "")
+            backoff = float(retry_after) if retry_after.isdigit() else min(8.0, 0.5 * 2 ** attempt)
+        except (httpx.TimeoutException, httpx.NetworkError):
+            backoff = min(8.0, 0.5 * 2 ** attempt)
+        except Exception:
+            return None  # malformed JSON etc. — give up, don't cache
+        if attempt < 3:
+            await asyncio.sleep(backoff + random.uniform(0, 0.4))
+    return None  # all retries exhausted (429/5xx/timeout) → caller marks _api_error
+
+
+async def reverify_statuses(tax_ids: list[str]) -> dict[str, dict]:
+    """Re-check GCIS registration status for given tax_ids (throttled + cached).
+
+    Used by the frontend to silently retry companies that came back as
+    「驗證逾時」. Returns tax_id -> {status, is_dissolved, is_api_error, is_unverified}.
+    A cache hit (from the original batch or a prior retry) means zero new requests.
+    """
+    out: dict[str, dict] = {}
+    if not tax_ids:
+        return out
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as gc:
+        statuses = await asyncio.gather(*[_gcis_status_by_tax_id(gc, t) for t in tax_ids])
+    for t, st in zip(tax_ids, statuses):
+        if st is None:
+            out[t] = {"status": "", "is_dissolved": False, "is_api_error": True, "is_unverified": False}
+        elif st == "":
+            out[t] = {"status": "", "is_dissolved": False, "is_api_error": False, "is_unverified": True}
+        else:
+            dissolved = any(kw in st for kw in _DISSOLVED_KEYWORDS)
+            out[t] = {"status": st, "is_dissolved": dissolved, "is_api_error": False, "is_unverified": False}
+    return out
+
+
 async def is_company_active(name: str) -> bool | None:
     """Quick check: is this company active?
     Returns True (active), False (dissolved), or None (unknown / not found in Ronny).
@@ -490,38 +591,14 @@ async def search_company_matches(name: str) -> list[dict]:
     # 廢止 in GCIS. Verify every candidate so stale Ronny records don't slip through.
     to_verify = [h for h in candidates if h.get("統一編號")]
     if to_verify:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as gc:
-            sem = asyncio.Semaphore(5)
-
-            async def _gcis_status(tax_id: str) -> str | None:
-                # Returns: status string | "" (not found) | None (API error after retries)
-                async with sem:
-                    for attempt in range(3):
-                        try:
-                            resp = await gc.get(
-                                GCIS_APP1,
-                                params={
-                                    "$format": "json",
-                                    "$filter": f"Business_Accounting_NO eq '{tax_id}'",
-                                    "$skip": "0", "$top": "1",
-                                },
-                            )
-                            resp.raise_for_status()
-                            rows = resp.json()
-                            return rows[0].get("Company_Status_Desc", "") if rows else ""
-                        except (httpx.TimeoutException, httpx.NetworkError):
-                            pass  # retryable
-                        except httpx.HTTPStatusError as e:
-                            if e.response.status_code < 500:
-                                return None  # 4xx — not retryable
-                        except Exception:
-                            return None
-                        if attempt < 2:
-                            await asyncio.sleep(0.5 * (attempt + 1))
-                    return None  # all retries exhausted
-
+        # Status lookups go through _gcis_status_by_tax_id: globally throttled,
+        # 429-aware backoff, 12h cache. This is what stops a 20+ company batch
+        # from tripping GCIS rate limits and coming back as 「驗證逾時」.
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as gc:
             tax_ids = [h.get("統一編號", "") for h in to_verify]
-            gcis_statuses = await asyncio.gather(*[_gcis_status(tid) for tid in tax_ids])
+            gcis_statuses = await asyncio.gather(
+                *[_gcis_status_by_tax_id(gc, tid) for tid in tax_ids]
+            )
 
         gcis_map = dict(zip(tax_ids, gcis_statuses))
         for h in to_verify:

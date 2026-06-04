@@ -143,7 +143,7 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 步驟 3：用 WebSearch 搜尋「{short_name} 報導 OR 新聞 OR 採訪 OR 入選 OR 獲獎 OR 媒體 OR 創業」，
         找媒體報導、政府補助入選名單、育成中心、加速器等第三方資訊。
 
-步驟 4：根據前面搜尋所掌握的業務性質，搜尋台灣競爭者——**請涵蓋以下四種競業類型**。其中「正面競業」請盡量找滿 3 家（若確實只找得到 1-2 家，據實呈現即可，不要硬湊）；其餘三類各至少 1 家：
+步驟 4：根據前面搜尋所掌握的業務性質，搜尋台灣競爭者——**請涵蓋以下四種競業類型**。其中「正面競業」**只填搜尋結果中能佐證的公司**（官網、媒體報導、公司登記均可）；找不到足夠家數就只填 1-2 家，**嚴格禁止捏造或推測公司名稱**；其餘三類各至少 1 家：
   - 正面競業：同產品／服務，直接搶相同客戶或標案
   - 替代路徑：客戶解決相同問題的不同技術或商業模式
   - 側翼潛入：現在不在此市場，但有能力、有誘因跨入的鄰近業者（如大型集團、跨國廠商）
@@ -167,7 +167,7 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 | 公司名稱 | 核心業務 | 主要差異化特點 | 上市狀態 | 競業類型 |
 |------|------|------|------|------|
 | {full_name}（本案）| （填入） | （填入） | {listing} | — |
-{known_table_rows}（正面競業列 1-3 家、其餘三類各至少 1 家；正面競業若僅找到 1-2 家，據實呈現即可，不要硬湊）
+{known_table_rows}（正面競業僅填有搜尋佐證者，1-3 家皆可；其餘三類各至少 1 家；**禁止捏造或推測公司名稱**）
 
 （表格後以條列說明：本案在市場中的相對優勢 2-3 點、相對劣勢或挑戰 2-3 點。若有已知專利或技術壁壘請一併提及。）
 
@@ -229,7 +229,7 @@ def _build_deep_prompt(company: dict, competitor_context: dict | None = None) ->
 步驟 2：若找到相關資訊，用 WebFetch 讀取最有參考價值的 1-2 篇文章全文。{known_hint}
 
 完成搜尋後，輸出修訂版完整備忘錄（格式：## 業務概況、## 競業分析、## 主要風險）。
-競業分析表格使用五欄：公司名稱 ｜ 核心業務 ｜ 主要差異化特點 ｜ 上市狀態 ｜ 競業類型（正面競業盡量列 3 家、不足則 1-2 家；其餘三類各至少 1 家）。
+競業分析表格使用五欄：公司名稱 ｜ 核心業務 ｜ 主要差異化特點 ｜ 上市狀態 ｜ 競業類型（正面競業僅填有搜尋佐證者，1-3 家皆可；其餘三類各至少 1 家；**禁止捏造或推測公司名稱**）。
 
 【競業表填寫規則（請遵循，但這些規則文字**禁止輸出到備忘錄裡**，只輸出填好的表格與分析）】
 - 競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合。
@@ -257,7 +257,7 @@ def _grab_field(raw: str, label: str) -> str:
 
 
 async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
-                             api_key: str = "", provider: str = "anthropic") -> dict:
+                             engine: str = "claude") -> dict:
     """Research a single named competitor (WebSearch) in the context of the case
     company, and return {core_biz, differentiation, listing}. 競業類型 is supplied
     by the user, not the model."""
@@ -279,7 +279,7 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
 
 若完全查無此公司資料，核心業務與差異化請據實標「——（查無公開資料）」。"""
     raw = await asyncio.to_thread(
-        claude_client.ask, prompt, 180, _WEB_TOOLS, api_key, provider, 8, _NORMAL_MODEL
+        claude_client.ask, prompt, 180, _WEB_TOOLS, engine, 8, _NORMAL_MODEL
     )
     full_name = _grab_field(raw, "正式登記名稱") or comp_name
     listing_ai = _grab_field(raw, "上市狀態")
@@ -303,7 +303,7 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
     }
 
 
-async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = "anthropic",
+async def deep_enrich_summary(company: dict, engine: str = "claude",
                               competitor_context: dict | None = None) -> dict:
     """Search news/media and refine the existing summary. Returns {summary, blurb}.
     Uses the latest Opus (via the CLI "opus" alias) for higher-quality deep analysis."""
@@ -313,11 +313,11 @@ async def deep_enrich_summary(company: dict, api_key: str = "", provider: str = 
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
-                claude_client.ask, prompt, 480, _WEB_TOOLS, api_key, provider, 15, model
+                claude_client.ask, prompt, 480, _WEB_TOOLS, engine, 15, model
             )
             summary, blurb = _split_blurb(raw)
             if not blurb and len(summary.strip()) > 100:
-                blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
+                blurb = await _generate_blurb_fallback(summary, name, engine)
             async with httpx.AsyncClient() as client:
                 await _ensure_listing_cache(client)
             summary = _fix_competitor_listing(summary)
@@ -492,7 +492,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "", interview_t
 
 async def generate_summary_from_materials(
     company: dict, file_paths: list[str], materials_text: str = "",
-    interview_text: str = "", api_key: str = "", provider: str = "anthropic",
+    interview_text: str = "", engine: str = "claude",
 ) -> dict:
     """Scan uploaded supplementary material (slides/intro/photos + interview memo)
     with the latest Opus and produce a company profile that integrates them, tagging
@@ -509,20 +509,20 @@ async def generate_summary_from_materials(
             log.info("Generating materials summary for %s (%d files, interview=%s)",
                      name, len(file_paths), bool(interview_text.strip()))
             raw = await asyncio.to_thread(
-                claude_client.ask_with_files, prompt, file_paths, 420, api_key, provider, model
+                claude_client.ask_with_files, prompt, file_paths, 420, engine, model
             )
             summary, blurb = _split_blurb(raw)
             if not summary.strip():
                 raise RuntimeError("模型未回傳任何內容")
             if not blurb and len(summary.strip()) > 100:
-                blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
+                blurb = await _generate_blurb_fallback(summary, name, engine)
             log.info("Materials summary done for %s (%d chars, blurb=%r)", name, len(summary), blurb)
             return {"summary": summary, "blurb": blurb}
         except Exception as e:
             raise RuntimeError(f"簡報生成失敗：{e}") from e
 
 
-async def generate_summary(company: dict, api_key: str = "", provider: str = "anthropic",
+async def generate_summary(company: dict, engine: str = "claude",
                            competitor_context: dict | None = None) -> dict:
     """
     Returns a due-diligence memo in Traditional Chinese Markdown.
@@ -538,14 +538,14 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
             try:
                 log.info("Generating DD memo for %s (attempt %d)", name, attempt + 1)
                 raw = await asyncio.to_thread(
-                    claude_client.ask, prompt, 420, _WEB_TOOLS, api_key, provider, 12, model
+                    claude_client.ask, prompt, 420, _WEB_TOOLS, engine, 12, model
                 )
                 summary, blurb = _split_blurb(raw)
 
                 # Fallback: if blurb missing but summary has real content, generate quickly
                 if not blurb and len(summary.strip()) > 100:
                     log.info("Blurb missing for %s, running fallback generation", name)
-                    blurb = await _generate_blurb_fallback(summary, name, api_key, provider)
+                    blurb = await _generate_blurb_fallback(summary, name, engine)
 
                 # Correct AI-hallucinated listing status using TWSE/TPEX API
                 async with httpx.AsyncClient() as client:
@@ -567,7 +567,7 @@ async def generate_summary(company: dict, api_key: str = "", provider: str = "an
     raise RuntimeError(f"公司簡介生成失敗：{last_error}") from last_error
 
 
-async def _generate_blurb_fallback(summary: str, name: str, api_key: str = "", provider: str = "anthropic") -> str:
+async def _generate_blurb_fallback(summary: str, name: str, engine: str = "claude") -> str:
     """Quick fallback: generate ≤10-char blurb from existing summary text."""
     import re
     prompt = (
@@ -576,7 +576,7 @@ async def _generate_blurb_fallback(summary: str, name: str, api_key: str = "", p
         f"{summary[:500]}"
     )
     try:
-        raw = await asyncio.to_thread(claude_client.ask, prompt, 30, None, api_key, provider)
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 30, None, engine)
         blurb = raw.strip().split("\n")[0].strip()
         m = re.match(r'^\[blurb:\s*(.+?)\]\s*$', blurb)
         if m:

@@ -250,8 +250,7 @@ async def generate(
     industry: str,
     breadth: str = "medium",
     *,
-    api_key: str = "",
-    provider: str = "anthropic",
+    engine: str = "claude",
     progress_cb: Callable[[str], None] | None = None,
 ) -> dict:
     """生成產業地圖。progress_cb(message) 用於 SSE 推進度。"""
@@ -271,7 +270,7 @@ async def generate(
     if n_in_db == 0:
         raise ValueError(f"產業「{industry}」沒有已收錄公司，無法生成地圖")
 
-    emit(f"呼叫 AI 生成（{breadth} 廣度 / provider={provider}）…可能需 30-90 秒")
+    emit(f"呼叫 AI 生成（{breadth} 廣度 / engine={engine}）…可能需 30-90 秒")
     prompt = _build_prompt(industry, seed, preset)
 
     loop = asyncio.get_event_loop()
@@ -280,8 +279,7 @@ async def generate(
         lambda: claude_client.ask(
             prompt,
             timeout=300,
-            api_key=api_key,
-            provider=provider,
+            engine=engine,
         ),
     )
 
@@ -305,7 +303,7 @@ async def generate(
         "sections": sections,
         "breadth": breadth,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "provider": provider,
+        "engine": engine,
         "stats": {
             "in_db_count": n_in_db,
             "expansion_pool_count": n_pool,

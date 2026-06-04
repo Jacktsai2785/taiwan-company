@@ -23,7 +23,7 @@ def _classify(name: str) -> str:
     return "uncertain"
 
 
-def extract_companies_from_text(text: str, source_label: str, api_key: str = "", provider: str = "anthropic") -> dict:
+def extract_companies_from_text(text: str, source_label: str, engine: str = "claude") -> dict:
     """
     Returns:
     {
@@ -33,7 +33,7 @@ def extract_companies_from_text(text: str, source_label: str, api_key: str = "",
     }
     candidate_dict keys: name, is_new, existing_id, existing_labels, suggested_label
     """
-    all_names = _ask_claude(text, api_key=api_key, provider=provider)
+    all_names = _ask_claude(text, engine=engine)
     log.info("Total unique names found: %d (claude=%d)", len(all_names), len(all_names))
 
     result: dict[str, list] = {"valid": [], "excluded": [], "uncertain": []}
@@ -57,7 +57,7 @@ def extract_companies_from_text(text: str, source_label: str, api_key: str = "",
     return result
 
 
-async def extract_companies_from_image(image_content: bytes, image_ext: str, source_label: str, api_key: str = "", provider: str = "anthropic") -> dict:
+async def extract_companies_from_image(image_content: bytes, image_ext: str, source_label: str, engine: str = "claude") -> dict:
     """
     Pass image to Claude CLI for visual recognition.
     If the image contains a 統一編號 column, use GCIS to get the authoritative company name
@@ -76,7 +76,7 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
 
     raw_items: list[dict] = []
     try:
-        raw = claude_client.ask_with_image(prompt, image_content, image_ext, timeout=120, api_key=api_key, provider=provider)
+        raw = claude_client.ask_with_image(prompt, image_content, image_ext, timeout=120, engine=engine)
         log.info("Claude image raw response:\n%s", raw)
         start = raw.find("[")
         end = raw.rfind("]")
@@ -135,7 +135,7 @@ async def _resolve_names(items: list[dict]) -> list[str]:
     return list(await asyncio.gather(*[resolve_one(i) for i in items]))
 
 
-async def suggest_companies_for_industry(industry: str, companies: list[dict], api_key: str = "", provider: str = "anthropic") -> list[str]:
+async def suggest_companies_for_industry(industry: str, companies: list[dict], engine: str = "claude") -> list[str]:
     """Ask Claude which companies belong to the given industry. Returns list of matching company IDs."""
     if not companies:
         return []
@@ -155,7 +155,7 @@ async def suggest_companies_for_industry(industry: str, companies: list[dict], a
     )
 
     try:
-        raw = await asyncio.to_thread(claude_client.ask, prompt, 60, None, api_key, provider)
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 60, None, engine)
         log.info("Industry suggest raw: %s", raw[:200])
         start = raw.find("[")
         end = raw.rfind("]")
@@ -171,8 +171,7 @@ async def suggest_companies_for_industry(industry: str, companies: list[dict], a
 async def suggest_industries_for_companies(
     companies: list[dict],
     industries: list[str],
-    api_key: str = "",
-    provider: str = "anthropic",
+    engine: str = "claude",
 ) -> dict[str, str]:
     """For each company, pick the best-fit industry from the given list.
 
@@ -209,7 +208,7 @@ async def suggest_industries_for_companies(
     valid_ids = {c["id"] for c in companies}
     valid_inds = set(industries)
     try:
-        raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, api_key, provider)
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, engine)
         log.info("Industry classify raw: %s", raw[:300])
         start = raw.find("{")
         end = raw.rfind("}")
@@ -237,7 +236,7 @@ def build_candidate(name: str, source_label: str) -> dict:
     }
 
 
-def _ask_claude(text: str, api_key: str = "", provider: str = "anthropic") -> list[str]:
+def _ask_claude(text: str, engine: str = "claude") -> list[str]:
     """Ask Claude to extract all company-like names from text."""
     if not text or len(text.strip()) < 5:
         log.info("Claude skipped: text too short")
@@ -257,7 +256,7 @@ def _ask_claude(text: str, api_key: str = "", provider: str = "anthropic") -> li
     )
 
     try:
-        raw = claude_client.ask(prompt, timeout=90, api_key=api_key, provider=provider)
+        raw = claude_client.ask(prompt, timeout=90, engine=engine)
         log.info("Claude response: %s", raw[:300])
 
         start = raw.find("[")

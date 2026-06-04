@@ -53,8 +53,7 @@ async def generate_industry_map(
             result = await industry_map.generate(
                 industry,
                 breadth=breadth,
-                api_key=ai["api_key"],
-                provider=ai["provider"],
+                engine=ai["engine"],
                 progress_cb=on_progress,
             )
             _progress[industry].append({"type": "done", "data": result})
