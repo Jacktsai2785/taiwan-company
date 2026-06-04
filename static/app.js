@@ -2081,8 +2081,9 @@ function _buildModalInfoHTML(c) {
   const fmt = n => n ? `NT$ ${Number(n).toLocaleString()} 元` : "—";
   const websiteRow = c.website
     ? `<span class="info-label">官方網站</span>
-       <span class="info-value"><a href="${escAttr(c.website)}" target="_blank" rel="noopener noreferrer">${escHtml(c.website.replace(/\/$/, ""))}</a></span>`
-    : "";
+       <span class="info-value website-value"><a href="${escAttr(c.website)}" target="_blank" rel="noopener noreferrer">${escHtml(c.website.replace(/\/$/, ""))}</a><button class="edit-website-btn" onclick="editWebsite()" title="編輯官方網站">✏️ 編輯</button></span>`
+    : `<span class="info-label">官方網站</span>
+       <span class="info-value website-value"><span class="muted">—</span><button class="edit-website-btn" onclick="editWebsite()" title="新增官方網站">＋ 新增</button></span>`;
   return `
     <span class="info-label">統一編號</span><span class="info-value">${escHtml(c.tax_id || "—")}</span>
     <span class="info-label">公司代表人</span><span class="info-value">${escHtml(c.representative || "—")}</span>
@@ -3091,10 +3092,11 @@ function _showBatchWebsitePrompt(companyIds) {
   });
 }
 
-function _showWebsitePrompt(companyId) {
+function _showWebsitePrompt(companyId, opts = {}) {
   return new Promise(resolve => {
     const c = state.companies.find(x => x.id === companyId);
     const overlay    = document.getElementById("website-prompt-overlay");
+    const titleEl    = document.getElementById("website-prompt-title");
     const nameEl     = document.getElementById("website-prompt-company-name");
     const input      = document.getElementById("website-prompt-input");
     const skipBtn    = document.getElementById("website-prompt-skip");
@@ -3103,6 +3105,18 @@ function _showWebsitePrompt(companyId) {
     const progressEl   = document.getElementById("website-prompt-progress");
     const progressFill = document.getElementById("website-prompt-progress-fill");
     const progressPctEl= document.getElementById("website-prompt-progress-pct");
+
+    if (!overlay || !nameEl || !input || !skipBtn || !confirmBtn) {
+      resolve(undefined);
+      return;
+    }
+
+    // opts: { autoSearch=true, title, confirmText, skipText, prefillValue }
+    const autoSearch  = opts.autoSearch !== false;
+    const existing    = opts.prefillValue !== undefined ? opts.prefillValue : (c?.website || "");
+    if (titleEl) titleEl.textContent = opts.title || "生成公司簡介";
+    skipBtn.textContent    = opts.skipText || "略過，直接生成";
+    confirmBtn.textContent = opts.confirmText || "確認並生成";
 
     nameEl.textContent = c?.name || "";
     if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
@@ -3139,15 +3153,22 @@ function _showWebsitePrompt(companyId) {
     confirmBtn.onclick = () => close(input.value.trim());
     input.onkeydown    = e => { if (e.key === "Enter") close(input.value.trim()); };
 
-    if (c?.website) {
-      input.value = c.website;
+    if (existing) {
+      input.value = existing;
       input.disabled = false;
       confirmBtn.disabled = false;
       input.placeholder = "https://example.com";
       setTimeout(() => input.focus(), 50);
+    } else if (!autoSearch) {
+      // 手動填入模式：不自動搜尋，給空輸入框讓使用者自行輸入
+      input.value = "";
+      input.disabled = false;
+      confirmBtn.disabled = false;
+      input.placeholder = "https://example.com";
+      if (hintEl) hintEl.textContent = "請手動填入公司官網（或留空後按略過）。";
+      setTimeout(() => input.focus(), 50);
     } else {
       // 搜尋期間：input 與確認按鈕均 disabled，shimmer 動畫 + 動態省略號告知使用者等待中
-      input.value = "";
       input.value = "";
       input.disabled = true;
       confirmBtn.disabled = true;
@@ -3209,27 +3230,88 @@ function _showWebsitePrompt(companyId) {
   });
 }
 
+// 沒官網時先問使用者：搜尋 / 填入 / 略過。resolve 'search' | 'manual' | 'skip' | null（取消）
+function _showWebsiteChoice(c) {
+  return new Promise(resolve => {
+    const overlay   = document.getElementById("website-choice-overlay");
+    const nameEl    = document.getElementById("website-choice-company-name");
+    const searchBtn = document.getElementById("website-choice-search");
+    const manualBtn = document.getElementById("website-choice-manual");
+    const skipBtn   = document.getElementById("website-choice-skip");
+    const cancelBtn = document.getElementById("website-choice-cancel");
+
+    if (!overlay || !nameEl || !searchBtn || !manualBtn || !skipBtn || !cancelBtn) {
+      resolve(null);
+      return;
+    }
+
+    nameEl.textContent = c?.name || "";
+    overlay.classList.add("open");
+
+    const close = (choice) => {
+      overlay.classList.remove("open");
+      searchBtn.onclick = manualBtn.onclick = skipBtn.onclick = cancelBtn.onclick = null;
+      overlay.onclick = null;
+      resolve(choice);
+    };
+    searchBtn.onclick = () => close("search");
+    manualBtn.onclick = () => close("manual");
+    skipBtn.onclick   = () => close("skip");
+    cancelBtn.onclick = () => close(null);
+    overlay.onclick   = (e) => { if (e.target === overlay) close(null); };
+  });
+}
+
+// 存官網到後端並同步 state + modal 基本資訊
+async function _persistWebsite(id, website) {
+  try {
+    const updated = await api("PUT", `/api/companies/${id}`, { website });
+    const idx = state.companies.findIndex(x => x.id === id);
+    if (idx !== -1) {
+      state.companies[idx] = updated;
+      const infoEl = document.getElementById("modal-info");
+      if (infoEl) infoEl.innerHTML = _buildModalInfoHTML(updated);
+    }
+    return updated;
+  } catch (_) { return null; }
+}
+
+// modal 內「編輯/新增官網」按鈕：只更新官網，不觸發重新生成
+async function editWebsite() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const c = state.companies.find(x => x.id === id);
+  const website = await _showWebsitePrompt(id, {
+    autoSearch: false,
+    title: c?.website ? "編輯官方網站" : "新增官方網站",
+    confirmText: "儲存",
+    skipText: "取消",
+    prefillValue: c?.website || "",
+  });
+  if (website === undefined) return;            // 取消
+  if (website === (c?.website || "")) return;   // 沒變動
+  const updated = await _persistWebsite(id, website);
+  if (updated) toast(website ? "已更新官方網站" : "已清除官方網站");
+}
+
 async function regenSummary() {
   const id = _modalCompanyId;
   if (!id) return;
+  const c = state.companies.find(x => x.id === id);
 
-  const website = await _showWebsitePrompt(id);
-
-  // undefined = 使用者按「略過」，不動 website 欄位
-  // "" = 使用者清空網址
-  // "https://..." = 使用者填入網址
-  if (website !== undefined) {
-    const c = state.companies.find(x => x.id === id);
-    if (website !== (c?.website || "")) {
-      try {
-        const updated = await api("PUT", `/api/companies/${id}`, { website });
-        const idx = state.companies.findIndex(x => x.id === id);
-        if (idx !== -1) {
-          state.companies[idx] = updated;
-          document.getElementById("modal-info").innerHTML = _buildModalInfoHTML(updated);
-        }
-      } catch (_) {}
+  // 有官網 → 直接生成（官網可在 modal 用「✏️ 編輯」隨時調整）
+  // 沒官網 → 先問使用者：搜尋 / 填入 / 略過
+  if (!c?.website) {
+    const choice = await _showWebsiteChoice(c);
+    if (choice === null) return;   // 使用者取消，中止整個流程
+    if (choice === "search" || choice === "manual") {
+      const website = await _showWebsitePrompt(id, { autoSearch: choice === "search" });
+      // undefined = 略過；"" = 清空；"https://..." = 填入
+      if (website !== undefined && website !== (c?.website || "")) {
+        await _persistWebsite(id, website);
+      }
     }
+    // skip → 不動官網，直接生成
   }
 
   const summaryEl = document.getElementById("modal-summary");
@@ -5813,6 +5895,12 @@ function renderSummary(raw, matHeadings) {
 
     // 「競業類型定義：…」改用頁籤 tooltip 呈現，這裡直接濾掉避免重複佔版面
     if (/^競業類型定義[：:]/.test(line)) continue;
+
+    // 洩漏的競業表「填寫規則」prompt echo（見 services/report_generator.py），
+    // 模型有時會把教它怎麼填表的指示連同表格一起輸出，落地存進 summary。
+    // 比照競業類型定義一併濾掉，避免在表格上方顯示一大段指示文字。
+    if (/^\**「公司名稱」\s*欄一律填/.test(line)) continue;
+    if (/^\**一列只填一家公司/.test(line)) continue;
 
     // Table row
     if (line.startsWith("|") && line.endsWith("|")) {

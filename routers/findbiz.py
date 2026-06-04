@@ -398,16 +398,19 @@ async def stream_session(session_id: str):
 
     async def generate() -> AsyncGenerator[str, None]:
         queue: asyncio.Queue = session["queue"]
-        while True:
-            try:
-                msg = await asyncio.wait_for(queue.get(), timeout=60.0)
-                yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
-                if msg.get("type") in ("done", "error"):
-                    break
-            except asyncio.TimeoutError:
-                yield 'data: {"type":"heartbeat"}\n\n'
-                if session.get("done"):
-                    break
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=60.0)
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    if msg.get("type") in ("done", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield 'data: {"type":"heartbeat"}\n\n'
+                    if session.get("done"):
+                        break
+        finally:
+            _sessions.pop(session_id, None)
 
     return StreamingResponse(
         generate(),

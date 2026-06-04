@@ -3983,6 +3983,59 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   display: flex; justify-content: flex-end; gap: 10px;
 }
 
+/* ── Website Choice Dialog (沒官網時先問) ── */
+#website-choice-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(14,26,46,.65);
+  z-index: 1100;
+  align-items: center; justify-content: center;
+  padding: 20px;
+}
+#website-choice-overlay.open { display: flex; }
+#website-choice-dialog {
+  background: var(--card);
+  border-radius: 12px;
+  width: 100%; max-width: 420px;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(14,26,46,.25);
+}
+#website-choice-header {
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--border);
+}
+#website-choice-header h3 { font-size: 16px; font-weight: 700; }
+#website-choice-header p { font-size: 12px; color: var(--muted); margin-top: 4px; }
+#website-choice-body { padding: 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+.website-choice-hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 2px; }
+.website-choice-opt {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.website-choice-opt:hover { border-color: var(--accent); background: var(--card); }
+.website-choice-opt-icon { font-size: 20px; flex-shrink: 0; }
+.website-choice-opt-text { display: flex; flex-direction: column; gap: 2px; }
+.website-choice-opt-text strong { font-size: 13px; font-weight: 600; color: var(--text); }
+.website-choice-opt-text small { font-size: 11px; color: var(--muted); }
+#website-choice-footer {
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end;
+}
+
+/* ── Modal 官網欄位編輯按鈕 ── */
+.info-value.website-value { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edit-website-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 1px 8px; font-size: 11px; cursor: pointer; color: var(--muted);
+  line-height: 1.6; transition: border-color .15s, color .15s;
+}
+.edit-website-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 /* ── Batch Website Prompt Dialog ── */
 #batch-wp-overlay {
   display: none;

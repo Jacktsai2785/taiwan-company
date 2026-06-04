@@ -28,7 +28,8 @@ _NATIVE_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp"}
 # Files we pre-extract to text (office docs + OCR-only images)
 _TEXT_EXTS = {".pptx", ".docx", ".xlsx", ".xls", ".txt", ".tiff", ".tif", ".bmp"}
 _ACCEPTED_EXTS = _NATIVE_EXTS | _TEXT_EXTS
-_MAX_BYTES = 30 * 1024 * 1024  # 30 MB per file
+_MAX_MB = 30
+_MAX_BYTES = _MAX_MB * 1024 * 1024
 
 
 def _safe_name(filename: str) -> str:
@@ -39,6 +40,8 @@ def _safe_name(filename: str) -> str:
 
 
 def _company_dir(company_id: str) -> Path:
+    if not company_id or Path(company_id).name != company_id:
+        raise HTTPException(status_code=400, detail="Invalid company_id")
     d = UPLOADS_DIR / company_id
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -76,7 +79,7 @@ async def upload_materials(company_id: str, files: list[UploadFile] = File(...))
             raise HTTPException(status_code=422, detail=f"不支援的檔案格式：{ext or '（無副檔名）'}")
         content = await f.read()
         if len(content) > _MAX_BYTES:
-            raise HTTPException(status_code=422, detail=f"檔案過大（>30MB）：{f.filename}")
+            raise HTTPException(status_code=422, detail=f"檔案過大（>{_MAX_MB}MB）：{f.filename}")
 
         stored = _safe_name(f.filename or f"file{ext}")
         # de-dup stored filename

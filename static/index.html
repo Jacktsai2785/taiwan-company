@@ -668,7 +668,7 @@
 <div id="website-prompt-overlay">
   <div id="website-prompt-dialog">
     <div id="website-prompt-header">
-      <h3>生成公司簡介</h3>
+      <h3 id="website-prompt-title">生成公司簡介</h3>
       <p id="website-prompt-company-name"></p>
     </div>
     <div id="website-prompt-body">
@@ -685,6 +685,34 @@
     <div id="website-prompt-footer">
       <button class="btn btn-ghost" id="website-prompt-skip">略過，直接生成</button>
       <button class="btn btn-primary" id="website-prompt-confirm">確認並生成</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Website Choice Dialog (沒官網時先問：搜尋 / 填入 / 略過) ── -->
+<div id="website-choice-overlay">
+  <div id="website-choice-dialog">
+    <div id="website-choice-header">
+      <h3>這間公司尚無官方網站</h3>
+      <p id="website-choice-company-name"></p>
+    </div>
+    <div id="website-choice-body">
+      <p class="website-choice-hint">提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。你想怎麼做？</p>
+      <button class="website-choice-opt" id="website-choice-search">
+        <span class="website-choice-opt-icon">🔍</span>
+        <span class="website-choice-opt-text"><strong>讓 AI 幫我搜尋官網</strong><small>自動搜尋後可確認或修改</small></span>
+      </button>
+      <button class="website-choice-opt" id="website-choice-manual">
+        <span class="website-choice-opt-icon">✏️</span>
+        <span class="website-choice-opt-text"><strong>我自己填入官網</strong><small>手動輸入網址</small></span>
+      </button>
+      <button class="website-choice-opt" id="website-choice-skip">
+        <span class="website-choice-opt-icon">⏭️</span>
+        <span class="website-choice-opt-text"><strong>略過，直接生成</strong><small>不提供官網，直接重新生成</small></span>
+      </button>
+    </div>
+    <div id="website-choice-footer">
+      <button class="btn btn-ghost" id="website-choice-cancel">取消</button>
     </div>
   </div>
 </div>

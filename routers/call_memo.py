@@ -1,11 +1,8 @@
-import io
-import tempfile
-import os
 from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from services import data_store, memo_extractor
@@ -121,13 +118,8 @@ def download_memo(company_id: str):
     safe_name = company["name"].replace("/", "-").replace("\\", "-")
     filename = f"Call Memo-{safe_name}_{interview_date.replace('/', '')}.docx"
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
-    tmp.write(docx_bytes)
-    tmp.close()
-
-    return FileResponse(
-        tmp.name,
+    return Response(
+        content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=filename,
-        background=None,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

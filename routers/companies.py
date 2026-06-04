@@ -323,7 +323,7 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
         else:
             if item.existing_id:
                 updated = data_store.add_label_to_company(item.existing_id, item.label)
-                if updated:
+                if updated is not None:
                     saved_ids.append(item.existing_id)
                     if req.enrich and item.existing_id not in _running:
                         enriching.append(item.existing_id)
@@ -1353,6 +1353,9 @@ async def _enrich_company(company_id: str, api_key: str = "", provider: str = "a
 
         push("正在生成公司簡介（約 3–7 分鐘）…")
         company = data_store.get_company(company_id)
+        if not company:
+            events.append({"type": "done"})
+            return
         try:
             ctx = _gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
