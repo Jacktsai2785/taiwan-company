@@ -1508,6 +1508,18 @@ function startAddLabel(id) {
 
   const dropdown = document.createElement("div");
   dropdown.className = "label-add-dropdown";
+  document.body.appendChild(dropdown);
+
+  function positionDropdown() {
+    const rect = inp.getBoundingClientRect();
+    dropdown.style.top = `${rect.bottom + 4}px`;
+    dropdown.style.left = `${rect.left}px`;
+    dropdown.style.minWidth = `${Math.max(rect.width, 140)}px`;
+  }
+
+  function removeDropdown() {
+    dropdown.remove();
+  }
 
   function renderDropdown(filter) {
     const matches = filter
@@ -1522,14 +1534,15 @@ function startAddLabel(id) {
       dropdown.appendChild(item);
     });
     dropdown.style.display = matches.length ? "block" : "none";
+    positionDropdown();
   }
 
   inp.oninput = () => renderDropdown(inp.value.trim());
   inp.onfocus = () => renderDropdown(inp.value.trim());
-  inp.onblur = () => { setTimeout(() => { dropdown.style.display = "none"; }, 150); };
+  inp.onblur = () => { setTimeout(() => { removeDropdown(); }, 150); };
   inp.onkeydown = e => {
-    if (e.key === "Enter") { e.stopPropagation(); confirmAddLabel(id, inp.value); }
-    if (e.key === "Escape") { e.stopPropagation(); renderGrid(); }
+    if (e.key === "Enter") { e.stopPropagation(); removeDropdown(); confirmAddLabel(id, inp.value); }
+    if (e.key === "Escape") { e.stopPropagation(); removeDropdown(); renderGrid(); }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       const first = dropdown.querySelector(".label-add-dropdown-item");
@@ -1542,18 +1555,17 @@ function startAddLabel(id) {
     const idx = items.indexOf(document.activeElement);
     if (e.key === "ArrowDown") { e.preventDefault(); items[idx + 1]?.focus(); }
     if (e.key === "ArrowUp") { e.preventDefault(); idx > 0 ? items[idx - 1].focus() : inp.focus(); }
-    if (e.key === "Enter") { e.preventDefault(); if (idx >= 0) confirmAddLabel(id, items[idx].textContent); }
-    if (e.key === "Escape") { e.stopPropagation(); renderGrid(); }
+    if (e.key === "Enter") { e.preventDefault(); if (idx >= 0) { removeDropdown(); confirmAddLabel(id, items[idx].textContent); } }
+    if (e.key === "Escape") { e.stopPropagation(); removeDropdown(); renderGrid(); }
   };
 
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "label-add-confirm-btn";
   confirmBtn.textContent = "✔";
-  confirmBtn.onmousedown = e => { e.preventDefault(); confirmAddLabel(id, inp.value); };
+  confirmBtn.onmousedown = e => { e.preventDefault(); removeDropdown(); confirmAddLabel(id, inp.value); };
 
   wrap.appendChild(inp);
   wrap.appendChild(confirmBtn);
-  wrap.appendChild(dropdown);
   labelsEl.appendChild(wrap);
   inp.focus();
   renderDropdown("");
@@ -2518,7 +2530,7 @@ async function submitAddCompetitor(btn) {
   if (isCloudDeploy() && !getAiKey()) { toast("請先在設定中輸入 API Key"); openSettings(); return; }
 
   btn.disabled = true;
-  status.textContent = "🔍 AI 分析中（約 30–60 秒）…";
+  status.innerHTML = `🔍 AI 分析中（約 30–60 秒）<span class="dots-anim"><span>.</span><span>.</span><span>.</span></span>`;
   status.className = "add-comp-status info";
   try {
     const res = await api("POST", `/api/companies/${id}/competitors/add`, { name, competition_type: type });

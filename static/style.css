@@ -593,17 +593,14 @@ body {
 }
 .label-add-dropdown {
   display: none;
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 120px;
+  position: fixed;
   max-height: 200px;
   overflow-y: auto;
   background: #fff;
   border: 1px solid var(--accent);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,.12);
-  z-index: 200;
+  z-index: 9999;
   padding: 4px 0;
 }
 .label-add-dropdown-item {
@@ -950,6 +947,9 @@ body {
 .add-comp-status { font-size: 12px; }
 .add-comp-status.info { color: var(--accent); }
 .add-comp-status.err { color: #e05a5a; }
+.dots-anim span { animation: mat-dot 1.2s ease-in-out infinite; opacity: .2; }
+.dots-anim span:nth-child(2) { animation-delay: .2s; }
+.dots-anim span:nth-child(3) { animation-delay: .4s; }
 .modal-section { margin-bottom: 22px; }
 .modal-section h4 {
   font-size: 15px;
