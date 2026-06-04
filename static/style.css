@@ -585,6 +585,40 @@ body {
   color: var(--accent);
   padding: 0 2px;
 }
+.label-add-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.label-add-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 120px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  z-index: 200;
+  padding: 4px 0;
+}
+.label-add-dropdown-item {
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+  outline: none;
+}
+.label-add-dropdown-item:hover,
+.label-add-dropdown-item:focus {
+  background: var(--accent-light);
+  color: var(--accent);
+}
 .card-meta {
   font-size: 12px;
   color: var(--muted);

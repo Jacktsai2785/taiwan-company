@@ -1490,22 +1490,73 @@ function startAddLabel(id) {
   if (!labelsEl) return;
   const addBtn = labelsEl.querySelector(".label-add-btn");
   if (addBtn) addBtn.style.display = "none";
+
+  const c = state.companies.find(x => x.id === id);
+  const currentLabels = new Set(c?.labels || []);
+  const allLabels = (state.labels || [])
+    .filter(l => !currentLabels.has(l))
+    .sort((a, b) => a.localeCompare(b, "zh-TW"));
+
+  const wrap = document.createElement("div");
+  wrap.className = "label-add-wrap";
+  wrap.onclick = e => e.stopPropagation();
+
   const inp = document.createElement("input");
   inp.className = "label-add-input";
   inp.placeholder = "新增標籤";
   inp.maxLength = 20;
-  inp.onclick = e => e.stopPropagation();
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "label-add-dropdown";
+
+  function renderDropdown(filter) {
+    const matches = filter
+      ? allLabels.filter(l => l.includes(filter))
+      : allLabels;
+    dropdown.innerHTML = "";
+    matches.forEach(label => {
+      const item = document.createElement("div");
+      item.className = "label-add-dropdown-item";
+      item.textContent = label;
+      item.onmousedown = e => { e.preventDefault(); confirmAddLabel(id, label); };
+      dropdown.appendChild(item);
+    });
+    dropdown.style.display = matches.length ? "block" : "none";
+  }
+
+  inp.oninput = () => renderDropdown(inp.value.trim());
+  inp.onfocus = () => renderDropdown(inp.value.trim());
+  inp.onblur = () => { setTimeout(() => { dropdown.style.display = "none"; }, 150); };
   inp.onkeydown = e => {
     if (e.key === "Enter") { e.stopPropagation(); confirmAddLabel(id, inp.value); }
     if (e.key === "Escape") { e.stopPropagation(); renderGrid(); }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const first = dropdown.querySelector(".label-add-dropdown-item");
+      if (first) first.focus();
+    }
   };
+
+  dropdown.onkeydown = e => {
+    const items = [...dropdown.querySelectorAll(".label-add-dropdown-item")];
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); items[idx + 1]?.focus(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); idx > 0 ? items[idx - 1].focus() : inp.focus(); }
+    if (e.key === "Enter") { e.preventDefault(); if (idx >= 0) confirmAddLabel(id, items[idx].textContent); }
+    if (e.key === "Escape") { e.stopPropagation(); renderGrid(); }
+  };
+
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "label-add-confirm-btn";
   confirmBtn.textContent = "✔";
-  confirmBtn.onclick = e => { e.stopPropagation(); confirmAddLabel(id, inp.value); };
-  labelsEl.appendChild(inp);
-  labelsEl.appendChild(confirmBtn);
+  confirmBtn.onmousedown = e => { e.preventDefault(); confirmAddLabel(id, inp.value); };
+
+  wrap.appendChild(inp);
+  wrap.appendChild(confirmBtn);
+  wrap.appendChild(dropdown);
+  labelsEl.appendChild(wrap);
   inp.focus();
+  renderDropdown("");
 }
 
 async function confirmAddLabel(id, label) {
