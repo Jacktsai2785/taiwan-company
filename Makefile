@@ -1,4 +1,4 @@
-.PHONY: bootstrap setup start start-bg stop restart logs enable disable status
+.PHONY: bootstrap setup start start-bg stop restart logs enable disable status backup
 
 SERVICE := taiwan-company.service
 LOG_FILE := $(CURDIR)/logs/app.log
@@ -76,3 +76,11 @@ disable:
 
 status:
 	@systemctl --user status $(SERVICE) --no-pager
+
+# ── 資料備份 ───────────────────────────────────────────────────────────────────
+# 立刻備份一次使用者資料（companies.json 等）。內容沒變會自動跳過。
+# 平時由 taiwan-company-backup.timer 每日自動跑，這個給你手動補一份。
+backup:
+	@bash scripts/backup_data.sh
+	@echo "── 備份清單（~/taiwan-company-backups）──"
+	@ls -1t $(HOME)/taiwan-company-backups/taiwan-company-data_*.tar.gz 2>/dev/null | head -5 || echo "（尚無備份）"

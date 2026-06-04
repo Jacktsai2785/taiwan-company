@@ -1,0 +1,14 @@
+# systemd user timer 模板（每日觸發備份 service）。
+# 由 scripts/bootstrap.sh 安裝到 ~/.config/systemd/user/taiwan-company-backup.timer
+# 後 enable --now。改排程改這份 template 再重跑 bootstrap。
+[Unit]
+Description=台灣產業商情平台 — 每日資料備份排程
+
+[Timer]
+# 每天 03:30 跑一次；OnCalendar 語法見 systemd.time(7)
+OnCalendar=*-*-* 03:30:00
+# 開機後若錯過了預定時間（關機/未開機），補跑一次
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -163,6 +163,27 @@ tail -f logs/regen_progress.log         # 即時進度
 
 > 改了排除/優先規則（`scripts/regen_summaries.sh` 內的 `EXCLUDE_LABELS` / `PRIORITY_*`）後 `systemctl --user restart taiwan-regen` 生效。
 
+### 資料自動備份（`taiwan-company-backup.timer`）
+
+`data/companies.json` 等使用者資料不在 git 追蹤範圍、也沒有雲端同步，所以掛了一個每日備份 timer 當安全網。
+
+- **腳本**：`scripts/backup_data.sh` — 打包 `companies.json` / `config.json` / `industry_keywords.json` / `blacklist.json`（快取類不備），gzip 壓縮存到 `~/taiwan-company-backups/`。
+- **不堆重複檔**：用 `companies.json` 的 sha256 比對上次，內容沒變就跳過。
+- **壞檔保護**：落地前先驗證 JSON 可解析（`data_store` 是非原子寫），避免把寫到一半的檔存成備份。
+- **輪替**：只留最近 30 份（`BACKUP_KEEP` 可覆寫）；存放目錄可用 `BACKUP_DIR` 覆寫。
+- **排程**：每天 03:30 跑，`Persistent=true` 會補跑錯過的時段。範本 `deploy/taiwan-company-backup.{service,timer}.template`，由 bootstrap 安裝。
+
+```bash
+make backup                                    # 立刻手動備份一次（內容沒變會跳過）
+systemctl --user list-timers taiwan-company-backup.timer   # 看下次何時跑
+tail -f logs/backup.log                        # 看備份日誌
+
+# 還原：解壓回 data/（先停 service 避免寫入打架）
+systemctl --user stop taiwan-company
+tar -xzf ~/taiwan-company-backups/taiwan-company-data_<時間戳>.tar.gz -C data/
+systemctl --user start taiwan-company
+```
+
 ## 注意事項
 
 - `data/companies.json` 和 `data/config.json` 不在 git 追蹤範圍，每台裝置獨立儲存

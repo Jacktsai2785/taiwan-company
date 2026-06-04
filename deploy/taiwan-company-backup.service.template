@@ -1,0 +1,14 @@
+# systemd user service 模板（oneshot，由 timer 觸發）。
+# 由 scripts/bootstrap.sh 將 __REPO_DIR__ 替換成實際路徑後，
+# 安裝到 ~/.config/systemd/user/taiwan-company-backup.service。
+# 不要直接編輯安裝後的檔案——改這份 template 再重跑 bootstrap。
+[Unit]
+Description=台灣產業商情平台 — 使用者資料自動備份
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+# 覆寫存放目錄 / 保留份數可在此加：Environment=BACKUP_DIR=... BACKUP_KEEP=...
+ExecStart=/usr/bin/bash __REPO_DIR__/scripts/backup_data.sh
+StandardOutput=append:__REPO_DIR__/logs/backup.log
+StandardError=append:__REPO_DIR__/logs/backup.log
