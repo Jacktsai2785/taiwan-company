@@ -9,7 +9,7 @@ source_repo: ~/taiwan-company
 
 ## TL;DR
 
-單一 FastAPI process 同時供 API 與靜態前端，資料用 JSON 檔存，AI 走「本機 Claude CLI 優先、雲端 API 作備援」的雙模式。Linux 上以 systemd user service 跑，Railway 用 Docker 部署。
+單一 FastAPI process 同時供 API 與靜態前端，資料用 JSON 檔存，AI 走「本機 Claude CLI 優先、雲端 API 作備援」的雙模式。地端部署，Linux 上以 systemd user service 跑。
 
 ## 後端（FastAPI）
 
@@ -61,7 +61,9 @@ source_repo: ~/taiwan-company
 
 - **本機開發**：`make start`（前景 + hot reload）/ `make start-bg`（背景 nohup）
 - **本機常駐**：`systemd --user` service（`~/.config/systemd/user/taiwan-company.service`），`Restart=always`、`WantedBy=default.target`，登入後自動跑、crash 自動重啟。
-- **雲端**：Railway 走 Dockerfile（`python:3.12-slim` + tesseract），雲端 build 會剝掉 `openai-whisper`（PyTorch ~2GB），音檔轉文字僅本機可用。Healthcheck `/health`。
+- **Healthcheck**：`GET /health` 回 `{"status": "ok"}`，bootstrap / `make` 用它確認服務起來。
+
+> 本專案為地端部署，不含雲端 hosting 設定。
 
 ## 相關
 

@@ -13,8 +13,8 @@ def _transcribe_sync(file_bytes: bytes, suffix: str, model_name: str) -> str:
         import whisper
     except ImportError:
         raise RuntimeError(
-            "音訊轉文字功能需要 openai-whisper 套件，但雲端版未安裝。"
-            "請於本機執行專案使用此功能，或在伺服器額外安裝 openai-whisper + ffmpeg。"
+            "音訊轉文字功能需要 openai-whisper 套件，但目前未安裝。"
+            "請執行 make setup 重裝依賴，或手動 pip install openai-whisper（並確認系統有 ffmpeg）。"
         )
 
     if model_name not in _model_cache:

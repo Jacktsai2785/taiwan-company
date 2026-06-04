@@ -33,7 +33,6 @@ source_repo: ~/taiwan-company
   - 預設模型：`claude-sonnet-4-6` / `gpt-4o` / `gemini-2.5-flash`，可用環境變數覆寫。
 - **BYOK（Bring Your Own Key）** — 雲端部署模式下，使用者自帶 API Key，伺服器不留 Key（commit f217149 加入）。
 - **systemd user service** — Linux 的 user-level systemd unit（`~/.config/systemd/user/`），登入後自動啟動，crash 自動重啟。本平台 unit 名 `taiwan-company.service`。
-- **Railway 部署** — 用 `railway.json` 指定 Dockerfile builder，healthcheck `/health`，最多 retry 3 次。
 - **SSE（Server-Sent Events）** — 補資料、深度補資料、關係圖、專利爬取四個長任務都用 SSE 串流回報進度（避免 WebSocket 複雜度，用一條單向 HTTP 就夠）。
 - **g0v ronnywang API** — 民間整理的台灣公司登記資料免費 API（`company.g0v.ronny.tw`），補基本登記資料的主來源。
 - **GCIS App1 API** — 經濟部商工登記公示資料開放介面，用統編查時可補設立日、最後異動、登記機關。
