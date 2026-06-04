@@ -53,6 +53,7 @@ claude          # 完成 OAuth 授權
 | `make setup` | 只重建 Python 環境（系統依賴已就緒） |
 | `make start` | 前景啟動（hot reload） |
 | `make start-bg` | systemd 背景啟動 |
+| `make stop` | 停止背景 server |
 | `make restart` | 套用新 code（`git pull` 後執行） |
 | `make logs` | 追蹤日誌 |
 | `make status` | 查看 service 狀態 |

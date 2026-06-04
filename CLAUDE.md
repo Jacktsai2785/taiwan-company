@@ -24,37 +24,7 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
 4. 若 healthcheck 失敗：讀 `logs/app-error.log` 或 `journalctl --user -u taiwan-company -n 50`，
    定位後直接修，不要停在「請你自己看 log」。
 
-> 純人類操作（不透過 agent）的等價指令見下方「快速建立環境」。
-
-## 快速建立環境
-
-### 全新裝置：一鍵部署（推薦）
-
-從零開始（連 repo 都還沒 clone），在新裝置貼一行即可裝完所有環境並啟動：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Jacktsai2785/taiwan-company/main/scripts/install.sh | bash
-```
-
-它會：裝 git → clone 到 `~/taiwan-company` → 跑 `scripts/bootstrap.sh` 裝齊
-**系統套件**（tesseract 繁中、ffmpeg）、**uv** + Python 套件、**playwright Chromium + 系統庫**、
-偵測/安裝 **claude CLI**、建立 `.env`、設定並啟動 **systemd service**，最後 healthcheck。
-腳本是**冪等**的，可重複執行。需 `sudo` 的步驟會自動帶；無 sudo 時改印出手動指令。
-
-> 唯一無法全自動的：claude CLI 首次需手動 `claude` 登入授權（一次即可）；或在 `.env` 填 `ANTHROPIC_API_KEY` 走雲端。
-
-已 clone 過的裝置，等價指令：`make bootstrap`。
-
-### 只重建 Python 環境（系統依賴已就緒）
-
-```bash
-make setup      # 建 .venv + 裝套件 + 下載 playwright Chromium
-make start      # 啟動（hot reload）
-```
-
-開啟瀏覽器至 http://localhost:8003
-
-> Port 分配統一見 `~/PORTS.md`。本專案佔 8003（與其他本機服務切開，避開 mops cluster 的 8080–8086）。
+> 純人類操作（不透過 agent）的等價指令見 [README.md](README.md)。
 
 ## AI 模式說明
 
@@ -72,16 +42,6 @@ data/                執行時資料（不在 git 追蹤範圍）
   companies.json     公司資料
   config.json        產業別設定
   call_memo_template.docx  訪談備忘錄範本
-```
-
-## 常用指令
-
-```bash
-make setup     # 建立環境（第一次或切換裝置後執行）
-make start     # 前景啟動（含 hot reload，關 terminal 會掉）
-make start-bg  # 背景啟動（與 terminal 解耦，關 VSCode 不會掉）
-make stop      # 停止背景 server
-make logs      # 追蹤背景 server 的日誌（/tmp/taiwan-company.log）
 ```
 
 ## 對外文件（`docs/`）
