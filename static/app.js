@@ -6090,19 +6090,29 @@ function _supSpan(str, idx) {
   return { inner: str.slice(innerStart, j - 1), end: j };
 }
 
-// If a list item is itself a supplement note — marker at the start, possibly
-// inside a leading **bold** (risks: "**（訪談補充）標題**：…") — return the bullet
-// text with just the marker token removed + its source. Otherwise null.
+// A list item is a supplement note if it contains a「（XX補充…）」marker ANYWHERE
+// — start (risks: "（訪談補充）標題：…"), mid ("三層收入結構（簡報補充）：…") or
+// end ("…可擴展性（簡報補充）。"). The whole bullet is treated as one source's note
+// and rendered as a green callout block (matching 主要風險 / 業務概況), with every
+// marker token stripped: inline「（XX補充：payload）」keeps its payload, standalone
+// /trailing「（XX補充）」is removed. Returns {inner, src} or null.
 function _bulletSupInner(raw) {
-  const m = /^(\*\*)?（(簡報|訪談|介紹|筆記)補充[）：]/.exec(raw);
-  if (!m) return null;
-  const src = m[2];
-  const idx = raw.indexOf("（" + src + "補充");
-  if (raw[idx + _SUP_MARKLEN] === "）") {
-    return { inner: raw.slice(0, idx) + raw.slice(idx + _SUP_MARKLEN + 1), src };
+  const first = _findSup(raw, 0);
+  if (!first) return null;
+  let inner = "", i = 0;
+  for (;;) {
+    const f = _findSup(raw, i);
+    if (!f) { inner += raw.slice(i); break; }
+    inner += raw.slice(i, f.idx);
+    if (raw[f.idx + _SUP_MARKLEN] === "）") {
+      i = f.idx + _SUP_MARKLEN + 1;            // drop standalone「（XX補充）」
+    } else {
+      const { inner: payload, end } = _supSpan(raw, f.idx);
+      inner += payload;                        // keep「（XX補充：payload）」content
+      i = end;
+    }
   }
-  const { inner, end } = _supSpan(raw, idx);
-  return { inner: raw.slice(0, idx) + inner + raw.slice(end), src };
+  return { inner: inner.trim(), src: first.src };
 }
 
 // Inline highlight for supplements inside list items (kept inline so the bullet
