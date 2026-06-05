@@ -4,23 +4,9 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
 
 ---
 
-## 🤖 如果你是 AI Agent（Claude Code）正在讀這份 repo
+## 🚀 新裝置一鍵安裝（從這裡開始）
 
-使用者的部署習慣是：**在新裝置裝好 `claude` → 把本 repo URL 貼給你 → 其餘不自己操作**。
-
-若你剛 clone 完、或使用者要你「部署 / 裝起來」，請**直接執行**並全程自動完成：
-
-```bash
-bash scripts/bootstrap.sh
-```
-
-完整協議（觸發條件、回報內容、失敗處理）見 [`CLAUDE.md`](CLAUDE.md) 最上方的「首次部署協議」。
-
----
-
-## 🚀 新裝置一鍵部署（人類操作）
-
-連 repo 都還沒 clone 時，貼這一行即可裝完所有環境並啟動：
+**第一次拿到這個 repo？把下面這一整行複製、貼到終端機（Terminal / WSL），按 Enter 就好：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jacktsai2785/taiwan-company/main/scripts/install.sh | bash
@@ -43,6 +29,20 @@ claude          # 完成 OAuth 授權
 
 要改用其他引擎，可在 `.env` 設 `AI_ENGINE`（`claude` / `codex` / `gemini` / `ollama`），
 或在側邊欄 ⚙ 臨時切換。各引擎需各自先安裝並登入對應 CLI（codex / gemini）或啟動 Ollama 服務。
+
+---
+
+## 🤖 如果你是 AI Agent（Claude Code）正在讀這份 repo
+
+使用者的部署習慣是：**在新裝置裝好 `claude` → 把本 repo URL 貼給你 → 其餘不自己操作**。
+
+若你剛 clone 完、或使用者要你「部署 / 裝起來」，請**直接執行**並全程自動完成：
+
+```bash
+bash scripts/bootstrap.sh
+```
+
+完整協議（觸發條件、回報內容、失敗處理）見 [`CLAUDE.md`](CLAUDE.md) 最上方的「首次部署協議」。
 
 ---
 
