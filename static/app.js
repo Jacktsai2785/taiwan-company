@@ -4,6 +4,8 @@ const state = {
   industries: [],
   labels: [],
   groups: {},                    // {industry: [group, ...]}
+  industryTree: {},              // {parentName: [childName, ...]} from config
+  expandedTreeNodes: new Set(), // parents expanded in side panel
   expandedIndustries: new Set(),
   activeIndustry: null,          // null = all
   activeGroup: null,
@@ -118,7 +120,7 @@ async function dismissArticle(url, title, source, btn) {
 
 /* ── Boot ── */
 async function boot() {
-  await Promise.all([loadIndustries(), loadCompanies(), loadLabels(), loadLabelGroups()]);
+  await Promise.all([loadIndustries(), loadIndustryTree(), loadCompanies(), loadLabels(), loadLabelGroups()]);
   computeGroups();
   renderSidebar();
   renderGrid();
@@ -174,6 +176,15 @@ async function loadIndustries() {
   state.industries = await api("GET", "/api/config/industries");
 }
 
+async function loadIndustryTree() {
+  state.industryTree = await api("GET", "/api/config/industry-tree");
+}
+
+function _industryFilterSet(name) {
+  const children = (state.industryTree[name] || []).filter(c => state.industries.includes(c));
+  return new Set([name, ...children]);
+}
+
 async function loadLabels() {
   state.labels = await api("GET", "/api/config/labels");
 }
@@ -196,12 +207,13 @@ function updateWatchCount() {
   } else if (state.activeLabel) {
     pool = pool.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
-      pool = pool.filter(c => !c.industry);
+      pool = pool.filter(c => !(c.industries || []).length);
     } else if (state.activeLabelIndustry) {
-      pool = pool.filter(c => c.industry === state.activeLabelIndustry);
+      pool = pool.filter(c => (c.industries || []).includes(state.activeLabelIndustry));
     }
   } else if (state.activeIndustry) {
-    pool = pool.filter(c => c.industry === state.activeIndustry);
+    const _fset = _industryFilterSet(state.activeIndustry);
+    pool = pool.filter(c => (c.industries || []).some(i => _fset.has(i)));
     if (state.activeGroup === "__ungrouped__") {
       pool = pool.filter(c => !c.labels || c.labels.length === 0);
     } else if (state.activeGroup) {
@@ -216,10 +228,11 @@ function updateWatchCount() {
 function computeGroups() {
   const g = {};
   for (const c of state.companies) {
-    const ind = c.industry || "";
-    if (!g[ind]) g[ind] = [];
-    for (const label of (c.labels || [])) {
-      if (!g[ind].includes(label)) g[ind].push(label);
+    for (const ind of (c.industries && c.industries.length ? c.industries : [""])) {
+      if (!g[ind]) g[ind] = [];
+      for (const label of (c.labels || [])) {
+        if (!g[ind].includes(label)) g[ind].push(label);
+      }
     }
   }
   state.groups = g;
@@ -234,7 +247,7 @@ function renderSidebar() {
   document.getElementById("sb-all-count").textContent = state.companies.length;
 
   // 未分類警示
-  const unclassifiedCount = state.companies.filter(c => !c.industry).length;
+  const unclassifiedCount = state.companies.filter(c => !(c.industries || []).length).length;
   const uncWrap = document.getElementById("sb-unclassified-wrap");
   if (unclassifiedCount > 0) {
     uncWrap.innerHTML = `
@@ -316,16 +329,58 @@ function renderSidebar() {
       </div>`;
     }
 
-    // Industry pinned rows
+    // Industry pinned rows — tree-aware
     if (pinnedIndustries.length > 0) {
       html += `<div class="sb-section-label">產業別</div>`;
-      for (const name of pinnedIndustries) {
-        const count = state.companies.filter(c => c.industry === name).length;
+
+      const _childSet = new Set(Object.values(state.industryTree).flat());
+      const _pinnedSet = new Set(pinnedIndustries);
+
+      // Auto-expand parent when a child is the active filter
+      if (state.activeIndustry && _childSet.has(state.activeIndustry)) {
+        for (const [_p, _kids] of Object.entries(state.industryTree)) {
+          if ((_kids || []).includes(state.activeIndustry)) state.expandedTreeNodes.add(_p);
+        }
+      }
+
+      // Top-level: not a child, OR is a child whose parent is not pinned (show standalone)
+      const topLevelPinned = pinnedIndustries.filter(i => {
+        if (!_childSet.has(i)) return true;
+        for (const [_p, _kids] of Object.entries(state.industryTree)) {
+          if ((_kids || []).includes(i) && _pinnedSet.has(_p)) return false;
+        }
+        return true;
+      });
+
+      for (const name of topLevelPinned) {
+        const pinnedKids = (state.industryTree[name] || []).filter(c => state.industries.includes(c) && _pinnedSet.has(c));
+        const hasKids = pinnedKids.length > 0;
+        const fset = _industryFilterSet(name);
+        const count = hasKids
+          ? state.companies.filter(c => (c.industries || []).some(i => fset.has(i))).length
+          : state.companies.filter(c => (c.industries || []).includes(name)).length;
         const isActive = state.activeIndustry === name && state.activeGroup === null;
+        const isExpanded = state.expandedTreeNodes.has(name);
+
+        const toggleBtn = hasKids
+          ? `<button class="sb-tree-toggle" data-toggle="${escHtml(name)}">${isExpanded ? "▼" : "▶"}</button>`
+          : `<span class="sb-tree-spacer"></span>`;
+
         html += `<div class="sb-row ${isActive ? "active" : ""}" data-pinned="${escHtml(name)}" data-is-label="false">
-          <span class="sb-label">${escHtml(name)}</span>
+          ${toggleBtn}<span class="sb-label">${escHtml(name)}</span>
           <span class="sb-count">${count}</span>
         </div>`;
+
+        if (hasKids && isExpanded) {
+          for (const child of pinnedKids) {
+            const childCount = state.companies.filter(c => (c.industries || []).includes(child)).length;
+            const isChildActive = state.activeIndustry === child && state.activeGroup === null;
+            html += `<div class="sb-row sb-ind-child ${isChildActive ? "active" : ""}" data-pinned="${escHtml(child)}" data-is-label="false">
+              <span class="sb-label">${escHtml(child)}</span>
+              <span class="sb-count">${childCount}</span>
+            </div>`;
+          }
+        }
       }
     }
 
@@ -369,6 +424,18 @@ function renderSidebar() {
     }
 
     pinnedEl.innerHTML = html;
+
+    // Industry tree toggle in sidebar
+    pinnedEl.querySelectorAll(".sb-tree-toggle").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const name = btn.dataset.toggle;
+        if (state.expandedTreeNodes.has(name)) state.expandedTreeNodes.delete(name);
+        else state.expandedTreeNodes.add(name);
+        renderSidebar();
+        renderSidePanel();
+      });
+    });
 
     // Suggestion banner buttons
     pinnedEl.querySelectorAll(".lgs-accept").forEach(btn => {
@@ -507,9 +574,6 @@ function closeSidePanel() {
 }
 
 function _renderSidePanelToolbar() {
-  const isPinned = state.sidePanelTab === "pinned";
-  document.getElementById("sp-search").style.display = isPinned ? "none" : "";
-  document.getElementById("sp-sort").style.display = isPinned ? "none" : "";
   const addBtn = document.getElementById("sp-add-btn");
   addBtn.classList.toggle("visible", state.sidePanelTab === "industry");
 }
@@ -518,111 +582,118 @@ function renderSidePanel() {
   const list = document.getElementById("sp-list");
   const q = state.sidePanelSearch.toLowerCase();
 
-  if (state.sidePanelTab === "pinned") {
-    const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
-    const _nat = (a, b) => a.localeCompare(b, "zh-TW", { numeric: true });
-    const pinnedInds = state.industries.filter(i => state.pinnedItems.has(i)).sort(_nat);
-    const pinnedLbls = allLabels.filter(l => state.pinnedItems.has(l)).sort(_nat);
-    if (pinnedInds.length === 0 && pinnedLbls.length === 0) {
-      list.innerHTML = `<div class="sp-empty">尚未釘選任何項目。<br>切到「產業別」或「標籤」分頁，點 ☆ 即可釘選。</div>`;
-      return;
-    }
-    const renderGroup = (items, isLabel) => items.map(name => {
-      const count = isLabel
-        ? state.companies.filter(c => (c.labels || []).includes(name)).length
-        : state.companies.filter(c => c.industry === name).length;
-      return `<div class="sp-item">
-        <span class="sp-name">${escHtml(name)}</span>
-        <span class="sp-count">${count}</span>
-        <button class="sp-pin-btn pinned" data-name="${escHtml(name)}" title="取消釘選">★</button>
-      </div>`;
-    }).join("");
-    list.innerHTML = `
-      ${pinnedInds.length > 0 ? `<div class="sp-section-label">產業別</div>${renderGroup(pinnedInds, false)}` : ""}
-      ${pinnedLbls.length > 0 ? `<div class="sp-section-label">標籤</div>${renderGroup(pinnedLbls, true)}` : ""}
-    `;
-    list.querySelectorAll(".sp-pin-btn").forEach(btn => {
-      btn.addEventListener("click", e => { e.stopPropagation(); toggleSidePin(btn.dataset.name); });
-    });
-    return;
-  }
+
 
   const isIndustryTab = state.sidePanelTab === "industry";
   let items;
+
   if (isIndustryTab) {
-    items = state.industries.map(name => ({
-      name,
-      count: state.companies.filter(c => c.industry === name).length,
-    }));
+    const childSet = new Set(Object.values(state.industryTree).flat());
+
+    // Auto-expand parent when a child is the active filter
+    if (state.activeIndustry && childSet.has(state.activeIndustry)) {
+      for (const [parent, children] of Object.entries(state.industryTree)) {
+        if ((children || []).includes(state.activeIndustry)) state.expandedTreeNodes.add(parent);
+      }
+    }
+
+    if (!q) {
+      const topLevel = state.industries.filter(i => !childSet.has(i));
+      if (state.sidePanelSort === "count") {
+        topLevel.sort((a, b) => {
+          const fa = _industryFilterSet(a), fb = _industryFilterSet(b);
+          return state.companies.filter(c => (c.industries || []).some(i => fb.has(i))).length
+               - state.companies.filter(c => (c.industries || []).some(i => fa.has(i))).length;
+        });
+      } else {
+        topLevel.sort((a, b) => a.localeCompare(b, "zh-TW", { numeric: true }));
+      }
+      items = [];
+      for (const name of topLevel) {
+        const fset = _industryFilterSet(name);
+        const count = state.companies.filter(c => (c.industries || []).some(i => fset.has(i))).length;
+        const children = (state.industryTree[name] || []).filter(c => state.industries.includes(c));
+        const isExpanded = state.expandedTreeNodes.has(name);
+        items.push({ name, count, isChild: false, hasChildren: children.length > 0, isExpanded });
+        if (isExpanded) {
+          for (const child of children) {
+            const childCount = state.companies.filter(c => (c.industries || []).includes(child)).length;
+            items.push({ name: child, count: childCount, isChild: true, hasChildren: false, isExpanded: false });
+          }
+        }
+      }
+    } else {
+      // Search mode: flat display of all matching industries
+      items = state.industries
+        .filter(name => name.toLowerCase().includes(q))
+        .map(name => {
+          const isChild = childSet.has(name);
+          const count = isChild
+            ? state.companies.filter(c => (c.industries || []).includes(name)).length
+            : state.companies.filter(c => { const f = _industryFilterSet(name); return (c.industries || []).some(i => f.has(i)); }).length;
+          return { name, count, isChild: false, hasChildren: false, isExpanded: false };
+        });
+      if (state.sidePanelSort === "count") items.sort((a, b) => b.count - a.count);
+      else items.sort((a, b) => a.name.localeCompare(b.name, "zh-TW", { numeric: true }));
+    }
   } else {
     const allLabels = [...new Set(state.companies.flatMap(c => c.labels || []))];
     items = allLabels.map(name => ({
       name,
       count: state.companies.filter(c => (c.labels || []).includes(name)).length,
+      isChild: false, hasChildren: false, isExpanded: false,
     }));
+    if (q) items = items.filter(x => x.name.toLowerCase().includes(q));
+    if (state.sidePanelSort === "count") items.sort((a, b) => b.count - a.count);
+    else items.sort((a, b) => a.name.localeCompare(b.name, "zh-TW", { numeric: true }));
   }
 
-  if (q) items = items.filter(x => x.name.toLowerCase().includes(q));
-  if (state.sidePanelSort === "count") items.sort((a, b) => b.count - a.count);
-  else items.sort((a, b) => a.name.localeCompare(b.name, "zh-TW", { numeric: true }));
-
-  // 全部公司頂列
-  const isAllActive = state.activeIndustry === null && state.activeLabel === null;
-  const allRow = `<div class="sp-item ${isAllActive ? "active-filter" : ""}" id="sp-all-row">
-    <span class="sp-name" style="font-weight:600">全部公司</span>
-    <span class="sp-count">${state.companies.length}</span>
-  </div>`;
-
   if (items.length === 0) {
-    list.innerHTML = allRow + `<div class="sp-empty">${q ? "無符合的項目" : "尚無資料"}</div>`;
-    list.querySelector("#sp-all-row").addEventListener("click", _clearFilter);
+    list.innerHTML = `<div class="sp-empty">${q ? "無符合的項目" : "尚無資料"}</div>`;
     return;
   }
 
-  list.innerHTML = allRow + items.map(x => {
-    const isActive = isIndustryTab
-      ? state.activeIndustry === x.name
-      : state.activeLabel === x.name;
+  // 右側面板為純管理介面，不顯示 active-filter 狀態，不觸發篩選
+  const pinnedInSidebar = new Set(
+    state.industries.filter(i => state.pinnedItems.has(i))
+      .concat([...state.companies.flatMap(c => c.labels || [])].filter(l => state.pinnedItems.has(l)))
+  );
+
+  list.innerHTML = items.map(x => {
     const pinned = state.pinnedItems.has(x.name);
     const actions = isIndustryTab
       ? `<span class="sp-actions">
+           <button class="sp-scan-btn" data-name="${escHtml(x.name)}" title="掃描遺珠">🔍</button>
            <button class="sp-rename-btn" data-name="${escHtml(x.name)}" title="重新命名">✏️</button>
            <button class="sp-delete-btn" data-name="${escHtml(x.name)}" title="刪除">🗑</button>
          </span>`
       : "";
-    return `<div class="sp-item ${isActive ? (isIndustryTab ? "active-filter" : "active-filter-label") : ""}"
-               data-name="${escHtml(x.name)}" data-is-label="${!isIndustryTab}">
-      <span class="sp-name">${escHtml(x.name)}</span>
+    let treeCtrl = "";
+    if (isIndustryTab) {
+      if (x.hasChildren)
+        treeCtrl = `<button class="sp-tree-toggle" data-toggle="${escHtml(x.name)}" title="${x.isExpanded ? "收合" : "展開子產業"}">${x.isExpanded ? "▼" : "▶"}</button>`;
+      else if (x.isChild)
+        treeCtrl = `<span class="sp-tree-indent"></span>`;
+      else
+        treeCtrl = `<span class="sp-tree-spacer"></span>`;
+    }
+    const childClass = x.isChild ? " sp-child-item" : "";
+    return `<div class="sp-item${childClass}" data-name="${escHtml(x.name)}" data-is-label="${!isIndustryTab}">
+      ${treeCtrl}<span class="sp-name">${escHtml(x.name)}</span>
       <span class="sp-count">${x.count}</span>
       ${actions}
-      <button class="sp-pin-btn ${pinned ? "pinned" : ""}" data-name="${escHtml(x.name)}" title="${pinned ? "取消釘選" : "釘選到側欄"}">${pinned ? "★" : "☆"}</button>
+      <button class="sp-pin-btn ${pinned ? "pinned" : ""}" data-name="${escHtml(x.name)}" title="${pinned ? "從側欄移除" : "釘選到側欄"}">${pinned ? "★" : "☆"}</button>
     </div>`;
   }).join("");
 
-  list.querySelector("#sp-all-row")?.addEventListener("click", _clearFilter);
-
-  list.querySelectorAll(".sp-item:not(#sp-all-row)").forEach(item => {
-    item.addEventListener("click", e => {
-      if (e.target.closest(".sp-pin-btn") || e.target.closest(".sp-actions")) return;
-      const name = item.dataset.name;
-      const isLabel = item.dataset.isLabel === "true";
-      if (isLabel) {
-        state.activeLabel = state.activeLabel === name ? null : name;
-        state.activeLabelIndustry = null;
-        state.activeIndustry = null;
-        state.activeGroup = null;
-        state.activeTab = "all";
-        document.querySelectorAll(".tab-btn").forEach(b =>
-          b.classList.toggle("active", b.dataset.tab === "all"));
-      } else {
-        state.activeIndustry = state.activeIndustry === name ? null : name;
-        state.activeGroup = null;
-        state.activeLabel = null;
-        state.activeLabelIndustry = null;
-      }
-      renderSidebar();
+  // Tree expand/collapse — 純展開，不篩選
+  list.querySelectorAll(".sp-tree-toggle").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const name = btn.dataset.toggle;
+      if (state.expandedTreeNodes.has(name)) state.expandedTreeNodes.delete(name);
+      else state.expandedTreeNodes.add(name);
       renderSidePanel();
-      renderGrid();
     });
   });
 
@@ -653,6 +724,13 @@ function renderSidePanel() {
         renderSidebar();
         renderSidePanel();
         renderGrid();
+      });
+    });
+
+    list.querySelectorAll(".sp-scan-btn").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        e.stopPropagation();
+        await openIndustryScanDialog(btn.dataset.name);
       });
     });
   }
@@ -734,10 +812,50 @@ function startRenameIndustry(div, oldName) {
   });
 }
 
+function _showAddIndustryForm() {
+  return new Promise((resolve, reject) => {
+    const childSet = new Set(Object.values(state.industryTree).flat());
+    const parents = state.industries.filter(i => !childSet.has(i));
+    const overlay = document.createElement("div");
+    overlay.className = "ind-add-overlay";
+    overlay.innerHTML = `
+      <div class="ind-add-box">
+        <div class="ind-add-title">新增產業別</div>
+        <label class="ind-add-label">名稱
+          <input type="text" id="ind-add-name-inp" placeholder="例：AgriTech" autocomplete="off">
+        </label>
+        <label class="ind-add-label">歸屬
+          <select id="ind-add-parent-sel">
+            <option value="">頂層產業（與前瞻科技同層）</option>
+            ${parents.map(p => `<option value="${escHtml(p)}">${escHtml(p)} 的子產業</option>`).join("")}
+          </select>
+        </label>
+        <div class="ind-add-footer">
+          <button class="ind-add-cancel-btn">取消</button>
+          <button class="ind-add-ok-btn">確定</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const inp = overlay.querySelector("#ind-add-name-inp");
+    inp.focus();
+    const close = result => { overlay.remove(); result ? resolve(result) : reject(null); };
+    overlay.querySelector(".ind-add-cancel-btn").onclick = () => close(null);
+    overlay.addEventListener("click", e => { if (e.target === overlay) close(null); });
+    overlay.querySelector(".ind-add-ok-btn").onclick = () => {
+      const n = inp.value.trim(); if (!n) { inp.focus(); return; }
+      close({ name: n, parent: overlay.querySelector("#ind-add-parent-sel").value });
+    };
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") overlay.querySelector(".ind-add-ok-btn").click();
+      if (e.key === "Escape") close(null);
+    });
+  });
+}
+
 document.getElementById("sp-add-btn").addEventListener("click", async () => {
-  const name = prompt("請輸入新產業別名稱：");
-  if (!name || !name.trim()) return;
-  const indName = name.trim();
+  let addChoice;
+  try { addChoice = await _showAddIndustryForm(); } catch (_) { return; }
+  const { name: indName, parent: parentName } = addChoice;
 
   // Show suggest dialog in loading state
   const overlay = document.getElementById("ind-suggest-overlay");
@@ -774,7 +892,7 @@ document.getElementById("sp-add-btn").addEventListener("click", async () => {
         <input type="checkbox" value="${c.id}" ${matchSet.has(c.id) ? "checked" : ""} />
         <span class="suggest-name">${escHtml(c.name.replace(/股份有限公司$/, ""))}</span>
         <span class="suggest-blurb">${escHtml(c.blurb || "—")}</span>
-        ${c.industry ? `<span class="suggest-ind-badge">${escHtml(c.industry)}</span>` : ""}
+        ${(c.industries || []).length ? `<span class="suggest-ind-badge">${escHtml((c.industries || []).join(", "))}</span>` : ""}
       </label>`).join("");
   }
   document.getElementById("ind-suggest-ok").disabled = false;
@@ -788,18 +906,97 @@ document.getElementById("sp-add-btn").addEventListener("click", async () => {
     try {
       await api("POST", "/api/config/industries", { name: indName });
 
+      if (parentName) {
+        const tree = { ...state.industryTree };
+        if (!tree[parentName]) tree[parentName] = [];
+        if (!tree[parentName].includes(indName)) tree[parentName].push(indName);
+        await api("PUT", "/api/config/industry-tree", tree);
+        state.industryTree = tree;
+      }
+
       if (checked.length > 0) {
         await api("PUT", "/api/companies/batch-industry", {
           updates: checked.map(id => ({ id, industry: indName })),
         });
         checked.forEach(id => {
           const idx = state.companies.findIndex(c => c.id === id);
-          if (idx !== -1) state.companies[idx].industry = indName;
+          if (idx !== -1) { const c = state.companies[idx]; if (!(c.industries || []).includes(indName)) { c.industries = [...(c.industries || []), indName]; } }
         });
       }
-      toast(`產業別「${indName}」已新增${checked.length > 0 ? `，${checked.length} 間公司已歸入` : ""}`);
+      const parentNote = parentName ? `（${parentName} 的子產業）` : "";
+      toast(`產業別「${indName}」${parentNote}已新增${checked.length > 0 ? `，${checked.length} 間公司已歸入` : ""}`);
     } catch (e) {
       toast(`新增失敗：${e.message}`, true);
+    } finally {
+      await Promise.all([loadIndustries(), loadIndustryTree()]);
+      computeGroups();
+      renderSidebar();
+      renderSidePanel();
+      renderGrid();
+    }
+  };
+});
+
+/* ── 掃描產業遺珠（對已存在的產業重新比對未歸入的公司）── */
+async function openIndustryScanDialog(indName) {
+  const overlay = document.getElementById("ind-suggest-overlay");
+  document.getElementById("ind-suggest-title").textContent = `掃描「${indName}」遺珠`;
+  document.getElementById("ind-suggest-subtitle").textContent = "Claude 正在比對尚未歸入的公司…";
+  document.getElementById("ind-suggest-loading").style.display = "flex";
+  document.getElementById("ind-suggest-rows").innerHTML = "";
+  document.getElementById("ind-suggest-ok").disabled = true;
+  overlay.classList.add("open");
+
+  // 只列尚未歸入此產業的公司
+  const candidates = state.companies.filter(c => !(c.industries || []).includes(indName));
+
+  let matchedIds = [];
+  try {
+    const res = await api("POST", "/api/config/industries/suggest", { name: indName });
+    // suggest 已排除 already_tagged，回傳的都是新比對到的
+    matchedIds = res.matched_ids || [];
+  } catch (e) {
+    toast(`比對失敗：${e.message}，可手動勾選`, true);
+  }
+
+  document.getElementById("ind-suggest-loading").style.display = "none";
+  document.getElementById("ind-suggest-title").textContent = `掃描「${indName}」遺珠`;
+  const matchSet = new Set(matchedIds);
+  const rows = document.getElementById("ind-suggest-rows");
+
+  if (candidates.length === 0) {
+    rows.innerHTML = `<p class="suggest-empty">所有公司都已歸入此產業別</p>`;
+  } else {
+    document.getElementById("ind-suggest-subtitle").textContent =
+      matchedIds.length > 0
+        ? `Claude 建議以下 ${matchedIds.length} 間公司可能漏歸（可調整勾選）`
+        : "Claude 未發現遺珠，可手動勾選補充";
+    rows.innerHTML = candidates.map(c => `
+      <label class="suggest-row${matchSet.has(c.id) ? " suggested" : ""}">
+        <input type="checkbox" value="${c.id}" ${matchSet.has(c.id) ? "checked" : ""} />
+        <span class="suggest-name">${escHtml(c.name.replace(/股份有限公司$/, ""))}</span>
+        <span class="suggest-blurb">${escHtml(c.blurb || "—")}</span>
+        ${(c.industries || []).length ? `<span class="suggest-ind-badge">${escHtml((c.industries || []).join(", "))}</span>` : ""}
+      </label>`).join("");
+  }
+  document.getElementById("ind-suggest-ok").disabled = false;
+
+  document.getElementById("ind-suggest-cancel").onclick = () => overlay.classList.remove("open");
+  document.getElementById("ind-suggest-ok").onclick = async () => {
+    const checked = [...rows.querySelectorAll("input[type=checkbox]:checked")].map(el => el.value);
+    overlay.classList.remove("open");
+    if (checked.length === 0) { toast("未勾選任何公司，無異動"); return; }
+    try {
+      await api("PUT", "/api/companies/batch-industry", {
+        updates: checked.map(id => ({ id, industry: indName })),
+      });
+      checked.forEach(id => {
+        const idx = state.companies.findIndex(c => c.id === id);
+        if (idx !== -1) state.companies[idx].industry = indName;
+      });
+      toast(`已將 ${checked.length} 間公司歸入「${indName}」`);
+    } catch (e) {
+      toast(`更新失敗：${e.message}`, true);
     } finally {
       await loadIndustries();
       computeGroups();
@@ -807,7 +1004,7 @@ document.getElementById("sp-add-btn").addEventListener("click", async () => {
       renderGrid();
     }
   };
-});
+}
 
 /* ── AI Auto-classify Industry ── */
 async function runClassify() {
@@ -1251,16 +1448,17 @@ function renderGrid() {
   } else if (state.activeLabel) {
     companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
-      companies = companies.filter(c => !c.industry);
+      companies = companies.filter(c => !(c.industries || []).length);
       scopeTitle = `${state.activeLabel} — 未分類`;
     } else if (state.activeLabelIndustry) {
-      companies = companies.filter(c => c.industry === state.activeLabelIndustry);
+      companies = companies.filter(c => (c.industries || []).includes(state.activeLabelIndustry));
       scopeTitle = `${state.activeLabel} — ${state.activeLabelIndustry}`;
     } else {
       scopeTitle = `標籤：${state.activeLabel}`;
     }
   } else if (state.activeIndustry) {
-    companies = companies.filter(c => c.industry === state.activeIndustry);
+    const _fset = _industryFilterSet(state.activeIndustry);
+    companies = companies.filter(c => (c.industries || []).some(i => _fset.has(i)));
     if (state.activeGroup === "__ungrouped__") {
       companies = companies.filter(c => !c.labels || c.labels.length === 0);
       scopeTitle = `${state.activeIndustry} — 未分組`;
@@ -1318,7 +1516,7 @@ function companyCardHtml(c) {
   const isDone = state.doneIds.has(c.id);
 
   const isWatched = c.watched === true;
-  const cardClass = (isEnriching ? " enriching" : isDone ? " enriching-done" : "") + (!c.industry ? " no-industry" : "") + (isWatched ? " watched" : "");
+  const cardClass = (isEnriching ? " enriching" : isDone ? " enriching-done" : "") + (!(c.industries || []).length ? " no-industry" : "") + (isWatched ? " watched" : "");
   const statusBadge = isEnriching
     ? '<span class="enriching-badge">● 生成中</span>'
     : isDone
@@ -1343,8 +1541,14 @@ function companyCardHtml(c) {
   const watchPillBtn = `<button class="watch-pill-btn${isWatched ? " is-watched" : ""}" onclick="event.stopPropagation();toggleWatch('${c.id}')">${isWatched ? "✓ 追蹤中" : "+ 追蹤"}</button>`;
   const nameRowPill = "";
   const labelRowPill = `<span class="watch-pill in-labels">${watchPillBtn}</span>`;
-  const industryTag = c.industry
-    ? `<span class="card-industry-tag">${escHtml(c.industry)}</span>`
+  const industryTag = (c.industries || []).length
+    ? (c.industries || []).map(ind => {
+        let parentHint = "";
+        for (const [par, kids] of Object.entries(state.industryTree)) {
+          if ((kids || []).includes(ind)) { parentHint = `<span class="card-ind-parent">${escHtml(par)} ›</span>`; break; }
+        }
+        return `<span class="card-industry-tag">${parentHint}${escHtml(ind)}</span>`;
+      }).join("")
     : `<span class="card-industry-tag no-ind">未分類</span>`;
 
   return `
@@ -2099,10 +2303,11 @@ function _buildModalInfoHTML(c) {
     <span class="info-label">股份總數</span><span class="info-value">${c.total_shares ? Number(c.total_shares).toLocaleString() + " 股（" + Math.floor(c.total_shares / 1000).toLocaleString() + " 張）" : "—"}</span>
     <span class="info-label">公司所在地</span><span class="info-value">${escHtml(c.address || "—")}</span>
     <span class="info-label">產業別</span>
-    <span class="info-value modal-industry-wrap">
-      <select id="modal-industry-select" onchange="saveModalIndustry()">
-        <option value="">— 未指定 —</option>
-        ${state.industries.map(ind => `<option value="${escHtml(ind)}"${ind === (c.industry || "") ? " selected" : ""}>${escHtml(ind)}</option>`).join("")}
+    <span class="info-value modal-industry-wrap" id="modal-industry-wrap">
+      ${(c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="removeModalIndustry('${escAttr(ind)}')" title="移除">×</button></span>`).join("")}
+      <select id="modal-industry-select" onchange="addModalIndustry()">
+        <option value="">＋ 新增產業別</option>
+        ${state.industries.filter(ind => !(c.industries || []).includes(ind)).map(ind => `<option value="${escHtml(ind)}">${escHtml(ind)}</option>`).join("")}
       </select>
     </span>
     ${websiteRow}
@@ -2653,22 +2858,45 @@ async function findPublicHolders() {
 
 
 
-async function saveModalIndustry() {
+function _modalIndustries() {
+  const c = state.companies.find(x => x.id === _modalCompanyId);
+  return c ? [...(c.industries || [])] : [];
+}
+
+async function _saveModalIndustries(newInds) {
   const id = _modalCompanyId;
   if (!id) return;
-  const sel = document.getElementById("modal-industry-select");
-  const industry = sel ? sel.value : "";
   try {
-    const updated = await api("PUT", `/api/companies/${id}`, { industry });
+    const updated = await api("PUT", `/api/companies/${id}`, { industries: newInds });
     const idx = state.companies.findIndex(c => c.id === id);
     if (idx !== -1) state.companies[idx] = updated;
     computeGroups();
     renderSidebar();
     renderGrid();
-    toast("產業別已更新");
+    // re-render just the industry section
+    const wrap = document.getElementById("modal-industry-wrap");
+    if (wrap) {
+      const c = state.companies[state.companies.findIndex(x => x.id === id)];
+      wrap.innerHTML =
+        (c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="removeModalIndustry('${escAttr(ind)}')" title="移除">×</button></span>`).join("") +
+        `<select id="modal-industry-select" onchange="addModalIndustry()"><option value="">＋ 新增產業別</option>${state.industries.filter(i => !(c.industries || []).includes(i)).map(i => `<option value="${escHtml(i)}">${escHtml(i)}</option>`).join("")}</select>`;
+    }
   } catch (err) {
     toast(`更新失敗：${err.message}`, true);
   }
+}
+
+async function addModalIndustry() {
+  const sel = document.getElementById("modal-industry-select");
+  const ind = sel ? sel.value : "";
+  if (!ind) return;
+  const inds = _modalIndustries();
+  if (!inds.includes(ind)) await _saveModalIndustries([...inds, ind]);
+}
+
+async function removeModalIndustry(ind) {
+  const inds = _modalIndustries().filter(i => i !== ind);
+  await _saveModalIndustries(inds);
 }
 
 function toggleExportDropdown() {
@@ -4199,7 +4427,7 @@ document.getElementById("name-review-ok").addEventListener("click", async () => 
         name: displayName,
         tax_id: match ? (match.tax_id || null) : null,
         suggested_label: suggestedLabel,
-        suggested_industry: existing ? existing.industry : (state.industries[0] || ""),
+        suggested_industry: existing ? ((existing.industries || [])[0] || "") : (state.industries[0] || ""),
         is_new: !existing,
         existing_id: existing ? existing.id : null,
         existing_labels: existing ? (existing.labels || []) : [],
@@ -4823,16 +5051,16 @@ function getScopedCompanies() {
   } else if (state.activeLabel) {
     companies = companies.filter(c => (c.labels || []).includes(state.activeLabel));
     if (state.activeLabelIndustry === "__none__") {
-      companies = companies.filter(c => !c.industry);
+      companies = companies.filter(c => !(c.industries || []).length);
       scopeLabel = `標籤：${state.activeLabel} — 未分類`;
     } else if (state.activeLabelIndustry) {
-      companies = companies.filter(c => c.industry === state.activeLabelIndustry);
+      companies = companies.filter(c => (c.industries || []).includes(state.activeLabelIndustry));
       scopeLabel = `標籤：${state.activeLabel} — ${state.activeLabelIndustry}`;
     } else {
       scopeLabel = `標籤：${state.activeLabel}`;
     }
   } else if (state.activeIndustry) {
-    companies = companies.filter(c => c.industry === state.activeIndustry);
+    companies = companies.filter(c => (c.industries || []).includes(state.activeIndustry));
     if (state.activeGroup === "__ungrouped__") {
       companies = companies.filter(c => !c.labels || c.labels.length === 0);
       scopeLabel = `產業：${state.activeIndustry} — 未分組`;

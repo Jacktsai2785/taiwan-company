@@ -77,7 +77,7 @@ def _extract_one_liner(company: dict) -> str:
 def collect_seed_data(industry: str) -> dict:
     """收集該產業的已收錄公司清單 + 競業擴充池（已去重、去自身）。"""
     all_companies = data_store.get_all_companies()
-    in_industry = [c for c in all_companies if (c.get("industry") or "").strip() == industry]
+    in_industry = [c for c in all_companies if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
 
     seen = {data_store.normalize_company_name(c["name"]) for c in in_industry}
     pool: list[dict] = []

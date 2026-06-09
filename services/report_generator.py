@@ -46,7 +46,8 @@ _WEB_TOOLS = ["WebSearch", "WebFetch"]
 
 def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
     name       = company.get("name", "")
-    industry   = company.get("industry", "") or "不詳"
+    _inds      = company.get("industries") or ([company.get("industry")] if company.get("industry") else [])
+    industry   = ", ".join(_inds) or "不詳"
     address    = company.get("address", "") or "不詳"
     capital    = company.get("capital", 0)
     auth_cap   = company.get("authorized_capital", 0)
@@ -381,7 +382,8 @@ def _extract_section(summary: str, heading: str) -> str:
 
 def _build_materials_prompt(company: dict, materials_text: str = "", interview_text: str = "") -> str:
     name     = company.get("name", "")
-    industry = company.get("industry", "") or "不詳"
+    _inds2   = company.get("industries") or ([company.get("industry")] if company.get("industry") else [])
+    industry = ", ".join(_inds2) or "不詳"
     rep      = company.get("representative", "") or "不詳"
     capital  = company.get("capital", 0)
     address  = company.get("address", "") or "不詳"

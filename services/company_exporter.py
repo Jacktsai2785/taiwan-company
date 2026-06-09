@@ -237,7 +237,7 @@ def _basic_info_rows(company: dict) -> list[tuple[str, str]]:
         ("股份總數",   shares_str),
         ("公司所在地", company.get("address") or "—"),
         ("設立日期",   company.get("setup_date") or "—"),
-        ("產業別",     company.get("industry") or "—"),
+        ("產業別",     ", ".join(company.get("industries") or ([company["industry"]] if company.get("industry") else [])) or "—"),
     ]
     if company.get("website"):
         rows.append(("官方網站", company.get("website")))

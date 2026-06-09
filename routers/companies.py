@@ -85,7 +85,7 @@ class UpdateRequest(BaseModel):
     name: str | None = None
     tax_id: str | None = None
     labels: list[str] | None = None
-    industry: str | None = None
+    industries: list[str] | None = None
     group: str | None = None
     listing_status: str | None = None
     capital: int | None = None
@@ -104,7 +104,7 @@ class UpdateRequest(BaseModel):
 def list_companies(industry: str | None = None, group: str | None = None, sort_by: str = "capital"):
     companies = data_store.get_all_companies()
     if industry:
-        companies = [c for c in companies if c.get("industry") == industry]
+        companies = [c for c in companies if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
     if group:
         if group == "__ungrouped__":
             companies = [c for c in companies if not c.get("group")]
@@ -119,8 +119,15 @@ def list_companies(industry: str | None = None, group: str | None = None, sort_b
 
 @router.put("/batch-industry")
 def batch_update_industry(req: BatchIndustryRequest):
-    """Apply industry updates to multiple companies in a single read-modify-write to avoid races."""
+    """Add an industry to multiple companies (ADD, not replace)."""
     updated = data_store.update_companies_industry({u.id: u.industry for u in req.updates})
+    return {"updated": updated}
+
+
+@router.delete("/batch-industry")
+def batch_remove_industry(req: BatchIndustryRequest):
+    """Remove an industry from multiple companies."""
+    updated = data_store.remove_companies_industry({u.id: u.industry for u in req.updates})
     return {"updated": updated}
 
 
@@ -191,7 +198,7 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
         wanted = set(req.company_ids)
         targets = [c for c in all_companies if c["id"] in wanted]
     else:
-        targets = [c for c in all_companies if not (c.get("industry") or "")]
+        targets = [c for c in all_companies if not (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
 
     if not targets:
         return {"suggestions": {}, "industries": industries, "targets": []}

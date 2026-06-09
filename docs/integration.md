@@ -11,7 +11,7 @@ source_repo: ~/taiwan-company
 
 平台不直連任何 DB，所有外部資料都透過 HTTP API 拿。最重要的整合是 `mops_investee`（同機本地服務）—— 用來反查公發公司股權揭露，補上「誰持有這家公司」的關鍵資訊。
 
-## 與 `~/mops_databases/` 的關係
+## 與 `~/mops_dbs/` 的關係
 
 - **不直連**任何 PostgreSQL / SQLite，符合使用者全域指令「禁止建議直連 PostgreSQL，一律走 API 或 MCP」
 - 唯一接觸點是 `services/mops_investee_client.py` → `http://localhost:8080/reverse-lookup/investee`
@@ -21,7 +21,7 @@ source_repo: ~/taiwan-company
   - `GET /api/companies/investee-lookup?name=...&tax_id=...&fuzzy=...`（按名稱直接查，不限 DB 內公司）
   - `GET /api/companies/{id}/investee-holders`（DB 內已存公司）
   - 深度 enrich / 母子公司關係圖建構過程也會自動呼叫
-- 對應到 `~/mops_databases/mops_investee/`（Jack 自維 7 個 MOPS 子 DB 之一），完整背景見 [`~/mops_databases/docs/mops_investee.md`](~/mops_databases/docs/mops_investee.md)
+- 對應到 `~/mops_dbs/mops_investee/`（Jack 自維 7 個 MOPS 子 DB 之一），完整背景見 [`~/mops_dbs/docs/mops_investee.md`](~/mops_dbs/docs/mops_investee.md)
 
 ## g0v ronnywang API
 

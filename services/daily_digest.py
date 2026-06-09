@@ -324,7 +324,7 @@ async def _generate(industry: str, today: str, engine: str) -> dict:
     try:
         from services.data_store import get_all_companies
         watchlist_names = [
-            c["name"] for c in get_all_companies() if c.get("industry") == industry
+            c["name"] for c in get_all_companies() if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))
         ]
 
         industry_arts, company_arts = await asyncio.gather(

@@ -75,7 +75,7 @@ def export_company_to_jk_nb(company: dict) -> Path | None:
         "type: company-profile\n"
         f"title: {_yaml_quote(name)}\n"
         f"tax_id: {_yaml_quote(company.get('tax_id') or '')}\n"
-        f"industry: {_yaml_quote(company.get('industry') or '')}\n"
+        f"industry: {_yaml_quote(', '.join(company.get('industries') or ([company['industry']] if company.get('industry') else [])))}\n"
         "---\n\n"
     )
 
@@ -95,8 +95,9 @@ def export_company_to_jk_nb(company: dict) -> Path | None:
         facts.append(f"**所在地**: {company['address']}")
     if company.get("setup_date"):
         facts.append(f"**設立日期**: {company['setup_date']}")
-    if company.get("industry"):
-        facts.append(f"**產業**: {company['industry']}")
+    inds = company.get("industries") or ([company["industry"]] if company.get("industry") else [])
+    if inds:
+        facts.append(f"**產業**: {', '.join(inds)}")
     if facts:
         body.extend(facts + [""])
 

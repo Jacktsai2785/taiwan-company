@@ -30,6 +30,16 @@ def get_industries():
     return data_store.get_industries()
 
 
+@router.get("/industry-tree")
+def get_industry_tree():
+    return data_store.get_industry_tree()
+
+
+@router.put("/industry-tree")
+def save_industry_tree(tree: dict):
+    return data_store.save_industry_tree(tree)
+
+
 @router.get("/labels")
 def get_labels():
     return data_store.get_config()["labels"]
@@ -41,20 +51,25 @@ def get_groups():
     companies = data_store.get_all_companies()
     groups: dict[str, list[str]] = {}
     for c in companies:
-        ind = c.get("industry") or ""
-        grp = c.get("group") or ""
-        if ind not in groups:
-            groups[ind] = []
-        if grp and grp not in groups[ind]:
-            groups[ind].append(grp)
+        for ind in (c.get("industries") or []) or ([c.get("industry")] if c.get("industry") else [""]):
+            grp = c.get("group") or ""
+            if ind not in groups:
+                groups[ind] = []
+            if grp and grp not in groups[ind]:
+                groups[ind].append(grp)
     return groups
 
 
 @router.post("/industries/suggest")
 async def suggest_industry_match(req: IndustrySuggest, ai: dict = Depends(ai_from_headers)):
     """Ask Claude which existing companies fit the new industry name."""
+    name = req.name.strip()
     companies = data_store.get_all_companies()
-    matched_ids = await company_extractor.suggest_companies_for_industry(req.name.strip(), companies, **ai)
+    # Companies already tagged with this exact name (e.g. after delete-and-re-add) are always included.
+    already_tagged = {c["id"] for c in companies if name in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))}
+    candidates = [c for c in companies if c["id"] not in already_tagged]
+    claude_matched = await company_extractor.suggest_companies_for_industry(name, candidates, **ai)
+    matched_ids = list(already_tagged) + [i for i in claude_matched if i not in already_tagged]
     return {"matched_ids": matched_ids}
 
 

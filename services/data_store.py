@@ -26,8 +26,24 @@ def _write(path: Path, data: dict) -> None:
 
 # --- Companies ---
 
+def _ensure_industries_field(companies: list[dict]) -> tuple[list[dict], bool]:
+    """One-time migration: industry (str) → industries (list). Returns (companies, changed)."""
+    changed = False
+    for c in companies:
+        if "industries" not in c:
+            old = c.get("industry") or ""
+            c["industries"] = [old] if old else []
+            changed = True
+    return companies, changed
+
+
 def get_all_companies() -> list[dict]:
-    return _read(COMPANIES_FILE, DEFAULT_COMPANIES)["companies"]
+    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+    companies, changed = _ensure_industries_field(store["companies"])
+    if changed:
+        store["companies"] = companies
+        _write(COMPANIES_FILE, store)
+    return companies
 
 
 def get_company(company_id: str) -> dict | None:
@@ -78,13 +94,14 @@ def upsert_company(company: dict) -> dict:
     return company
 
 
-def create_company(name: str, label: str, industry: str, tax_id: str = "") -> dict:
+def create_company(name: str, label: str, industry: str = "", tax_id: str = "") -> dict:
+    inds = [industry] if industry else []
     company = {
         "id": str(uuid.uuid4()),
         "name": name,
         "tax_id": tax_id,
         "labels": [label] if label else [],
-        "industry": industry,
+        "industries": inds,
         "group": "",
         "listing_status": "非公發",
         "capital": 0,
@@ -126,17 +143,39 @@ def update_company(company_id: str, updates: dict) -> dict | None:
 
 
 def update_companies_industry(id_to_industry: dict[str, str]) -> int:
-    """Apply industry updates to many companies atomically (one read + one write)."""
+    """Add an industry to many companies atomically (ADD, not replace)."""
     if not id_to_industry:
         return 0
     store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+    store["companies"], _ = _ensure_industries_field(store["companies"])
     now = datetime.now(timezone.utc).isoformat()
     count = 0
     for c in store["companies"]:
         if c["id"] in id_to_industry:
-            c["industry"] = id_to_industry[c["id"]]
-            c["last_updated"] = now
-            count += 1
+            ind = id_to_industry[c["id"]]
+            if ind and ind not in c["industries"]:
+                c["industries"].append(ind)
+                c["last_updated"] = now
+                count += 1
+    _write(COMPANIES_FILE, store)
+    return count
+
+
+def remove_companies_industry(id_to_industry: dict[str, str]) -> int:
+    """Remove an industry from many companies atomically."""
+    if not id_to_industry:
+        return 0
+    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+    store["companies"], _ = _ensure_industries_field(store["companies"])
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for c in store["companies"]:
+        if c["id"] in id_to_industry:
+            ind = id_to_industry[c["id"]]
+            if ind in c["industries"]:
+                c["industries"].remove(ind)
+                c["last_updated"] = now
+                count += 1
     _write(COMPANIES_FILE, store)
     return count
 
@@ -161,6 +200,17 @@ def get_industries() -> list[str]:
     return get_config()["industries"]
 
 
+def get_industry_tree() -> dict[str, list[str]]:
+    return get_config().get("industry_tree", {})
+
+
+def save_industry_tree(tree: dict[str, list[str]]) -> dict[str, list[str]]:
+    config = get_config()
+    config["industry_tree"] = tree
+    _write(CONFIG_FILE, config)
+    return tree
+
+
 def add_industry(name: str) -> list[str]:
     config = get_config()
     if name not in config["industries"]:
@@ -173,12 +223,17 @@ def rename_industry(old_name: str, new_name: str) -> list[str]:
     config = get_config()
     if old_name in config["industries"]:
         config["industries"] = [new_name if i == old_name else i for i in config["industries"]]
+        # Keep tree in sync
+        tree = config.get("industry_tree", {})
+        config["industry_tree"] = {
+            (new_name if k == old_name else k): [new_name if c == old_name else c for c in v]
+            for k, v in tree.items()
+        }
         _write(CONFIG_FILE, config)
-        # Update companies that used old industry name
         store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        store["companies"], _ = _ensure_industries_field(store["companies"])
         for c in store["companies"]:
-            if c.get("industry") == old_name:
-                c["industry"] = new_name
+            c["industries"] = [new_name if i == old_name else i for i in c["industries"]]
         _write(COMPANIES_FILE, store)
     return config["industries"]
 
@@ -186,6 +241,13 @@ def rename_industry(old_name: str, new_name: str) -> list[str]:
 def delete_industry(name: str) -> list[str]:
     config = get_config()
     config["industries"] = [i for i in config["industries"] if i != name]
+    # Keep tree in sync: remove as parent and as child
+    tree = config.get("industry_tree", {})
+    config["industry_tree"] = {
+        k: [c for c in v if c != name]
+        for k, v in tree.items()
+        if k != name
+    }
     _write(CONFIG_FILE, config)
     return config["industries"]
 
