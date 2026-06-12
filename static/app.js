@@ -1272,7 +1272,7 @@ function _renderDigestContent(panel, data, industry) {
         <a class="daily-news-title" href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
         <span class="daily-news-source">${escHtml(a.source)}</span>
         <a class="daily-news-ext" href="${escHtml(a.url)}" target="_blank" rel="noopener">↗</a>
-        <button class="daily-news-dismiss" title="不想看這篇" onclick="dismissArticle(${JSON.stringify(a.url)},${JSON.stringify(a.title)},${JSON.stringify(a.source)},this)">×</button>
+        <button class="daily-news-dismiss" title="不想看這篇" onclick='dismissArticle(${JSON.stringify(a.url)},${JSON.stringify(a.title)},${JSON.stringify(a.source)},this)'>×</button>
       </div>`;
   // Filter out already-dismissed articles (in-session)
   articles = articles.filter(a => !_dismissedUrls.has(a.url));
