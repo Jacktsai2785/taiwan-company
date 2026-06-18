@@ -1,4 +1,6 @@
 import json
+import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +14,11 @@ KEYWORDS_FILE = DATA_DIR / "industry_keywords.json"
 DEFAULT_COMPANIES = {"companies": []}
 DEFAULT_CONFIG = {"industries": ["前瞻科技", "消費生活", "環保"], "labels": []}
 
+# 序列化「讀整檔→改→寫整檔」的臨界區。FastAPI 的同步(def)路由在 threadpool 跑，
+# 多執行緒會同時 read-modify-write 同一個 JSON，無鎖會 lost update。用 RLock 讓
+# 互相呼叫的 mutator（如 update_company→upsert_company）可重入。
+_LOCK = threading.RLock()
+
 
 def _read(path: Path, default: dict) -> dict:
     if not path.exists():
@@ -21,7 +28,19 @@ def _read(path: Path, default: dict) -> dict:
 
 
 def _write(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    """原子寫：先寫同目錄的 .tmp 再 os.replace（POSIX 保證 rename 原子）。
+    讀者永遠看到完整的舊檔或完整的新檔，不會讀到寫一半的壞 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 # --- Companies ---
@@ -38,20 +57,21 @@ def _ensure_industries_field(companies: list[dict]) -> tuple[list[dict], bool]:
 
 
 def get_all_companies() -> list[dict]:
-    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-    companies, changed = _ensure_industries_field(store["companies"])
-    if changed:
-        store["companies"] = companies
-        _write(COMPANIES_FILE, store)
-    return companies
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        companies, changed = _ensure_industries_field(store["companies"])
+        if changed:
+            store["companies"] = companies
+            _write(COMPANIES_FILE, store)
+        return companies
 
 
 def get_company(company_id: str) -> dict | None:
-    return next((c for c in get_all_companies() if c["id"] == company_id), None)
+    return next((c for c in get_all_companies() if c.get("id") == company_id), None)
 
 
 def find_company_by_name(name: str) -> dict | None:
-    return next((c for c in get_all_companies() if c["name"] == name), None)
+    return next((c for c in get_all_companies() if c.get("name") == name), None)
 
 
 def normalize_company_name(name: str) -> str:
@@ -74,24 +94,23 @@ def find_company_by_name_or_tax_id(name: str, tax_id: str = "") -> dict | None:
         target = normalize_company_name(name)
         if target:
             return next(
-                (c for c in companies if normalize_company_name(c["name"]) == target),
+                (c for c in companies if normalize_company_name(c.get("name") or "") == target),
                 None,
             )
     return None
 
 
-
-
 def upsert_company(company: dict) -> dict:
-    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-    companies = store["companies"]
-    idx = next((i for i, c in enumerate(companies) if c["id"] == company["id"]), None)
-    if idx is not None:
-        companies[idx] = company
-    else:
-        companies.append(company)
-    _write(COMPANIES_FILE, store)
-    return company
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        companies = store["companies"]
+        idx = next((i for i, c in enumerate(companies) if c.get("id") == company["id"]), None)
+        if idx is not None:
+            companies[idx] = company
+        else:
+            companies.append(company)
+        _write(COMPANIES_FILE, store)
+        return company
 
 
 def create_company(name: str, label: str, industry: str = "", tax_id: str = "") -> dict:
@@ -124,70 +143,75 @@ def create_company(name: str, label: str, industry: str = "", tax_id: str = "") 
 
 
 def add_label_to_company(company_id: str, label: str) -> dict | None:
-    company = get_company(company_id)
-    if company is None:
-        return None
-    if label and label not in company["labels"]:
-        company["labels"].append(label)
-    company["last_updated"] = datetime.now(timezone.utc).isoformat()
-    return upsert_company(company)
+    with _LOCK:
+        company = get_company(company_id)
+        if company is None:
+            return None
+        if label and label not in company["labels"]:
+            company["labels"].append(label)
+        company["last_updated"] = datetime.now(timezone.utc).isoformat()
+        return upsert_company(company)
 
 
 def update_company(company_id: str, updates: dict) -> dict | None:
-    company = get_company(company_id)
-    if company is None:
-        return None
-    company.update(updates)
-    company["last_updated"] = datetime.now(timezone.utc).isoformat()
-    return upsert_company(company)
+    with _LOCK:
+        company = get_company(company_id)
+        if company is None:
+            return None
+        company.update(updates)
+        company["last_updated"] = datetime.now(timezone.utc).isoformat()
+        return upsert_company(company)
 
 
 def update_companies_industry(id_to_industry: dict[str, str]) -> int:
-    """Add an industry to many companies atomically (ADD, not replace)."""
+    """Add an industry to many companies in a single locked write (ADD, not replace)."""
     if not id_to_industry:
         return 0
-    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-    store["companies"], _ = _ensure_industries_field(store["companies"])
-    now = datetime.now(timezone.utc).isoformat()
-    count = 0
-    for c in store["companies"]:
-        if c["id"] in id_to_industry:
-            ind = id_to_industry[c["id"]]
-            if ind and ind not in c["industries"]:
-                c["industries"].append(ind)
-                c["last_updated"] = now
-                count += 1
-    _write(COMPANIES_FILE, store)
-    return count
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        store["companies"], _ = _ensure_industries_field(store["companies"])
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for c in store["companies"]:
+            if c["id"] in id_to_industry:
+                ind = id_to_industry[c["id"]]
+                if ind and ind not in c["industries"]:
+                    c["industries"].append(ind)
+                    c["last_updated"] = now
+                    count += 1
+        _write(COMPANIES_FILE, store)
+        return count
 
 
 def remove_companies_industry(id_to_industry: dict[str, str]) -> int:
-    """Remove an industry from many companies atomically."""
+    """Remove an industry from many companies in a single locked write."""
     if not id_to_industry:
         return 0
-    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-    store["companies"], _ = _ensure_industries_field(store["companies"])
-    now = datetime.now(timezone.utc).isoformat()
-    count = 0
-    for c in store["companies"]:
-        if c["id"] in id_to_industry:
-            ind = id_to_industry[c["id"]]
-            if ind in c["industries"]:
-                c["industries"].remove(ind)
-                c["last_updated"] = now
-                count += 1
-    _write(COMPANIES_FILE, store)
-    return count
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        store["companies"], _ = _ensure_industries_field(store["companies"])
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for c in store["companies"]:
+            if c["id"] in id_to_industry:
+                ind = id_to_industry[c["id"]]
+                if ind in c["industries"]:
+                    c["industries"].remove(ind)
+                    c["last_updated"] = now
+                    count += 1
+        _write(COMPANIES_FILE, store)
+        return count
 
 
 def delete_company(company_id: str) -> bool:
-    store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-    before = len(store["companies"])
-    store["companies"] = [c for c in store["companies"] if c["id"] != company_id]
-    if len(store["companies"]) < before:
-        _write(COMPANIES_FILE, store)
-        return True
-    return False
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        before = len(store["companies"])
+        store["companies"] = [c for c in store["companies"] if c.get("id") != company_id]
+        if len(store["companies"]) < before:
+            _write(COMPANIES_FILE, store)
+            return True
+        return False
 
 
 # --- Config ---
@@ -205,58 +229,63 @@ def get_industry_tree() -> dict[str, list[str]]:
 
 
 def save_industry_tree(tree: dict[str, list[str]]) -> dict[str, list[str]]:
-    config = get_config()
-    config["industry_tree"] = tree
-    _write(CONFIG_FILE, config)
-    return tree
+    with _LOCK:
+        config = get_config()
+        config["industry_tree"] = tree
+        _write(CONFIG_FILE, config)
+        return tree
 
 
 def add_industry(name: str) -> list[str]:
-    config = get_config()
-    if name not in config["industries"]:
-        config["industries"].append(name)
-        _write(CONFIG_FILE, config)
-    return config["industries"]
+    with _LOCK:
+        config = get_config()
+        if name not in config["industries"]:
+            config["industries"].append(name)
+            _write(CONFIG_FILE, config)
+        return config["industries"]
 
 
 def rename_industry(old_name: str, new_name: str) -> list[str]:
-    config = get_config()
-    if old_name in config["industries"]:
-        config["industries"] = [new_name if i == old_name else i for i in config["industries"]]
-        # Keep tree in sync
-        tree = config.get("industry_tree", {})
-        config["industry_tree"] = {
-            (new_name if k == old_name else k): [new_name if c == old_name else c for c in v]
-            for k, v in tree.items()
-        }
-        _write(CONFIG_FILE, config)
-        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-        store["companies"], _ = _ensure_industries_field(store["companies"])
-        for c in store["companies"]:
-            c["industries"] = [new_name if i == old_name else i for i in c["industries"]]
-        _write(COMPANIES_FILE, store)
-    return config["industries"]
+    with _LOCK:
+        config = get_config()
+        if old_name in config["industries"]:
+            config["industries"] = [new_name if i == old_name else i for i in config["industries"]]
+            # Keep tree in sync
+            tree = config.get("industry_tree", {})
+            config["industry_tree"] = {
+                (new_name if k == old_name else k): [new_name if c == old_name else c for c in v]
+                for k, v in tree.items()
+            }
+            _write(CONFIG_FILE, config)
+            store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+            store["companies"], _ = _ensure_industries_field(store["companies"])
+            for c in store["companies"]:
+                c["industries"] = [new_name if i == old_name else i for i in c["industries"]]
+            _write(COMPANIES_FILE, store)
+        return config["industries"]
 
 
 def delete_industry(name: str) -> list[str]:
-    config = get_config()
-    config["industries"] = [i for i in config["industries"] if i != name]
-    # Keep tree in sync: remove as parent and as child
-    tree = config.get("industry_tree", {})
-    config["industry_tree"] = {
-        k: [c for c in v if c != name]
-        for k, v in tree.items()
-        if k != name
-    }
-    _write(CONFIG_FILE, config)
-    return config["industries"]
+    with _LOCK:
+        config = get_config()
+        config["industries"] = [i for i in config["industries"] if i != name]
+        # Keep tree in sync: remove as parent and as child
+        tree = config.get("industry_tree", {})
+        config["industry_tree"] = {
+            k: [c for c in v if c != name]
+            for k, v in tree.items()
+            if k != name
+        }
+        _write(CONFIG_FILE, config)
+        return config["industries"]
 
 
 def add_label(label: str) -> None:
-    config = get_config()
-    if label and label not in config["labels"]:
-        config["labels"].append(label)
-        _write(CONFIG_FILE, config)
+    with _LOCK:
+        config = get_config()
+        if label and label not in config["labels"]:
+            config["labels"].append(label)
+            _write(CONFIG_FILE, config)
 
 
 # --- Label groups ---
@@ -266,21 +295,23 @@ def get_label_groups() -> dict[str, list[str]]:
 
 
 def save_label_group(name: str, labels: list[str]) -> dict[str, list[str]]:
-    config = get_config()
-    groups = config.get("label_groups", {})
-    groups[name] = labels
-    config["label_groups"] = groups
-    _write(CONFIG_FILE, config)
-    return groups
+    with _LOCK:
+        config = get_config()
+        groups = config.get("label_groups", {})
+        groups[name] = labels
+        config["label_groups"] = groups
+        _write(CONFIG_FILE, config)
+        return groups
 
 
 def delete_label_group(name: str) -> dict[str, list[str]]:
-    config = get_config()
-    groups = config.get("label_groups", {})
-    groups.pop(name, None)
-    config["label_groups"] = groups
-    _write(CONFIG_FILE, config)
-    return groups
+    with _LOCK:
+        config = get_config()
+        groups = config.get("label_groups", {})
+        groups.pop(name, None)
+        config["label_groups"] = groups
+        _write(CONFIG_FILE, config)
+        return groups
 
 
 # --- Industry keywords (for daily news synonym expansion) ---
@@ -300,7 +331,8 @@ def get_keywords_for_industry(industry: str) -> list[str]:
 
 
 def save_industry_keywords(industry: str, keywords: list[str]) -> None:
-    store = get_all_industry_keywords()
-    store[industry] = keywords
-    KEYWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    KEYWORDS_FILE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _LOCK:
+        store = get_all_industry_keywords()
+        store[industry] = keywords
+        KEYWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _write(KEYWORDS_FILE, store)

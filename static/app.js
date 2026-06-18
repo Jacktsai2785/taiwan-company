@@ -1994,8 +1994,8 @@ function _setMatRegenStale(stale) {
   if (!btn || btn.disabled) return;  // don't fight the running state
   btn.classList.toggle("is-stale", stale);
   btn.textContent = stale
-    ? "✦ 用 Opus 重新生成（納入新資料）"
-    : "✦ 用 Opus 更新公司簡介";
+    ? "✦ 用 AI 重新生成（納入新資料）"
+    : "✦ 用 AI 更新公司簡介";
 }
 
 async function closeMaterialsPanel() {
@@ -2082,7 +2082,7 @@ async function deleteMaterial(storedNameEnc) {
     if (hadSummary && (data.materials || []).length) {
       _setMatRegenStale(true);
       const us = document.getElementById("materials-upload-status");
-      us.textContent = "✅ 已移除檔案。內容已變動，建議按「✦ 用 Opus 重新生成」更新簡介。";
+      us.textContent = "✅ 已移除檔案。內容已變動，建議按「✦ 用 AI 重新生成」更新簡介。";
       us.className = "memo-status-ok";
     }
   } catch (err) {
@@ -2106,7 +2106,7 @@ async function generateFromMaterials() {
   const renderProgress = () => {
     status.innerHTML =
       `<span class="mat-spinner"></span>` +
-      `<span>Opus 正在閱讀所有補充資料並更新簡介` +
+      `<span>AI 正在閱讀所有補充資料並更新簡介` +
       `<span class="mat-dots"><i>.</i><i>.</i><i>.</i></span></span>` +
       `<span class="mat-elapsed">已 ${elapsed} 秒（約需 1–4 分鐘）</span>`;
   };
@@ -2229,7 +2229,7 @@ document.getElementById("materials-file-input").addEventListener("change", async
     _renderMaterialsList(data.materials || []);
     if (hadSummary) {
       // A summary already exists → it doesn't cover the just-added file(s) yet.
-      status.textContent = `✅ 已新增 ${data.saved.length} 個檔案。內容已變動，請按下方「✦ 用 Opus 重新生成」以納入新檔案（只按「重新審核」不會讀到新檔）。`;
+      status.textContent = `✅ 已新增 ${data.saved.length} 個檔案。內容已變動，請按下方「✦ 用 AI 重新生成」以納入新檔案（只按「重新審核」不會讀到新檔）。`;
       _setMatRegenStale(true);
     } else {
       status.textContent = `✅ 已上傳 ${data.saved.length} 個檔案，可點下方按鈕生成簡介`;
@@ -2574,7 +2574,7 @@ function _setupCompetitorTabs(page) {
     w.className = "comp-add-only";
     const add = document.createElement("button");
     add.className = "add-comp-btn";
-    add.textContent = "＋ 新增競業";
+    add.textContent = "⚙ 編輯競業";
     add.onclick = function () { toggleAddCompetitor(this); };
     w.appendChild(add);
     table.before(w);
@@ -2609,7 +2609,7 @@ function _setupCompetitorTabs(page) {
   });
   const add = document.createElement("button");
   add.className = "add-comp-btn comp-bar-add";
-  add.textContent = "＋ 新增競業";
+  add.textContent = "⚙ 編輯競業";
   add.onclick = function () { toggleAddCompetitor(this); };
   bar.appendChild(add);
   table.before(bar);
@@ -2650,7 +2650,7 @@ function toggleAddCompetitor(btn) {
   if (!form) return;
   const open = form.style.display === "none";
   form.style.display = open ? "" : "none";
-  btn.textContent = open ? "✕ 取消" : "＋ 新增競業";
+  btn.textContent = open ? "✕ 取消" : "⚙ 編輯競業";
   if (open) {
     // pre-select the currently-viewed type
     const t = page.dataset.activeCtype;
@@ -2686,6 +2686,37 @@ async function submitAddCompetitor(btn) {
     status.textContent = `❌ ${err.message}`;
     status.className = "add-comp-status err";
     btn.disabled = false;
+  }
+}
+
+async function removeCompetitorRow(btn) {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const name = btn.dataset.cname || "";
+  const disp = _displayCompName(name) || name;
+  if (!confirm(`確定要刪除競業「${disp}」嗎？\n此操作會從競業分析表格移除這一列。`)) return;
+
+  // 刪除後要停留在原本檢視的競業類型頁籤
+  const page = btn.closest(".summary-tab-page");
+  const prevType = page ? page.dataset.activeCtype : null;
+
+  btn.disabled = true;
+  try {
+    const res = await api("POST", `/api/companies/${id}/competitors/remove`, { name });
+    const c = state.companies.find(x => x.id === id);
+    if (c) { c.summary = res.summary; c.competitors = res.competitors; }
+    _updateSummaryInModal(c);   // rebuild summary tabs without the removed row
+    const ct = [...document.querySelectorAll("#summary-tabbar .summary-tab")].find(t => t.textContent.includes("競業"));
+    if (ct) ct.click();         // stay on 競業分析 tab
+    if (prevType) {
+      const compPage = [...document.querySelectorAll("#modal-summary .summary-tab-page")]
+        .find(p => p.querySelector(".comp-type-bar"));
+      if (compPage) _showCompetitorType(compPage, prevType);
+    }
+    toast(`已刪除競業：${disp}`);
+  } catch (err) {
+    btn.disabled = false;
+    toast(`刪除失敗：${err.message}`);
   }
 }
 
@@ -3944,7 +3975,7 @@ async function handleUpload(file) {
     const result = await api("POST", "/api/upload", fd);
 
     if (result.ocr_failed) {
-      uploadProgress.textContent = `⚠️ 圖片辨識失敗，請手動輸入公司名稱`;
+      uploadProgress.textContent = `⚠️ 無法從圖片讀出公司名稱，請手動輸入`;
       setTimeout(() => uploadProgress.textContent = "", 5000);
       openManualDialog(result.suggested_label);
       return;
@@ -4247,8 +4278,8 @@ function openDisambigDialog(items, onConfirm) {
         const isMDissolved = m.is_dissolved || _DISSOLVED.has(st) || ["解散","撤銷","廢止","命令解散"].some(k => st.includes(k));
         let statusBadge;
         if (isMDissolved)        statusBadge = `<span class="disambig-status dissolved" title="${escHtml(st || '已解散')}">解散</span>`;
-        else if (m.is_unverified) statusBadge = `<span class="disambig-status unverified" title="Ronny 顯示核准，但政府資料庫查無此公司，請謹慎確認">待確認</span>`;
-        else if (m.is_api_error)  statusBadge = `<span class="disambig-status api-error"  title="GCIS API 驗證逾時，Ronny 顯示核准，建議稍後重新查詢">驗證逾時</span>`;
+        else if (m.is_unverified) statusBadge = `<span class="disambig-status unverified" title="登記名單顯示核准，但政府資料庫查無此公司，請謹慎確認">待確認</span>`;
+        else if (m.is_api_error)  statusBadge = `<span class="disambig-status api-error"  title="政府登記資料查詢逾時，登記名單顯示核准，建議稍後重新查詢">驗證逾時</span>`;
         else if (_ACTIVE.has(st)) statusBadge = `<span class="disambig-status active"     title="${escHtml(st)}">核准</span>`;
         else                      statusBadge = `<span class="disambig-status unknown"    title="${escHtml(st || '狀態不明')}">?</span>`;
         const corpBadge = m.is_corp
@@ -4586,9 +4617,9 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
         ? `<span class="new-badge">新增</span>`
         : `<span class="update-badge">既有</span>`;
       const unverifiedBadge = c.is_unverified
-        ? `<span class="unverified-badge" title="Ronny 顯示核准，但政府資料庫查無此公司，請確認是否仍為現役">⚠ 待確認</span>`
+        ? `<span class="unverified-badge" title="登記名單顯示核准，但政府資料庫查無此公司，請確認是否仍為現役">⚠ 待確認</span>`
         : c.is_api_error
-          ? `<span class="unverified-badge api-error" title="GCIS API 驗證逾時（網路不穩），Ronny 顯示核准，建議稍後重新查詢">⏱ 驗證逾時</span>`
+          ? `<span class="unverified-badge api-error" title="政府登記資料查詢逾時（網路不穩），登記名單顯示核准，建議稍後重新查詢">⏱ 驗證逾時</span>`
           : "";
       const existingLabels = c.existing_labels?.length
         ? `<div class="existing-labels">現有標籤：${c.existing_labels.join("、")}</div>`
@@ -4969,11 +5000,12 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
 
   // Decide batching strategy
   let batchSize = enrich_ids.length;
+  let autoRunAll = false;
   if (enrich_ids.length > 10) {
     const wantBatch = confirm(
       `本次共需生成 ${enrich_ids.length} 間公司資料。\n` +
-      `數量較多，同時生成可能因 Claude rate limit 造成延遲或失敗。\n\n` +
-      `是否分批生成？\n[確定] = 分批  [取消] = 一次全跑`
+      `數量較多，建議分批，以免 AI 額度暫時用滿造成延遲（用滿時會自動等待續跑）。\n\n` +
+      `是否分批生成？\n[確定] = 分批　[取消] = 一次全跑`
     );
     if (wantBatch) {
       const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
@@ -4983,42 +5015,88 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
         return;
       }
       batchSize = Math.max(1, n);
+      // 在「初始批次對話」就讓使用者決定要不要全程自動跑完，不用每批盯著點「繼續」
+      autoRunAll = confirm(
+        `要全部自動跑完嗎？\n\n` +
+        `[確定] = 全部自動跑完（中途可按畫面右下「■ 停止批次」喊停）\n` +
+        `[取消] = 每批跑完都問我一次再續`
+      );
     }
   }
 
-  await runEnrichmentInBatches(enrich_ids, batchSize);
+  await runEnrichmentInBatches(enrich_ids, batchSize, autoRunAll);
 });
 
-async function runEnrichmentInBatches(ids, batchSize) {
+let _batchStopRequested = false;
+
+function _showBatchStopButton(getRemaining) {
+  let btn = document.getElementById("batch-stop-fab");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "batch-stop-fab";
+    document.body.appendChild(btn);
+  }
+  btn.textContent = `■ 停止批次（剩 ${getRemaining()} 間）`;
+  btn.onclick = () => {
+    _batchStopRequested = true;
+    btn.textContent = "停止中…跑完本批後結束";
+    btn.disabled = true;
+  };
+  btn.disabled = false;
+  btn.style.display = "block";
+  return btn;
+}
+
+function _hideBatchStopButton() {
+  const btn = document.getElementById("batch-stop-fab");
+  if (btn) btn.style.display = "none";
+}
+
+async function runEnrichmentInBatches(ids, batchSize, autoRunAll = false) {
   const total = ids.length;
   const chunks = [];
   for (let i = 0; i < ids.length; i += batchSize) chunks.push(ids.slice(i, i + batchSize));
 
   let done = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    console.log(`[batch] starting chunk ${i + 1}/${chunks.length}`, chunk);
-    toast(`▶ 開始第 ${i + 1}/${chunks.length} 批（${chunk.length} 間）…`);
-    try {
-      await api("POST", "/api/companies/enrich-batch", { company_ids: chunk });
-    } catch (e) {
-      toast(`啟動第 ${i + 1} 批失敗：${e.message}`, true);
-      return;
-    }
-    await Promise.allSettled(chunk.map(id => subscribeEnrichment(id)));
-    done += chunk.length;
-    console.log(`[batch] chunk ${i + 1}/${chunks.length} done, total ${done}/${total}`);
+  _batchStopRequested = false;
+  const fab = autoRunAll ? _showBatchStopButton(() => total - done) : null;
+  try {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      console.log(`[batch] starting chunk ${i + 1}/${chunks.length}`, chunk);
+      toast(`▶ 開始第 ${i + 1}/${chunks.length} 批（${chunk.length} 間）…`);
+      try {
+        await api("POST", "/api/companies/enrich-batch", { company_ids: chunk });
+      } catch (e) {
+        toast(`啟動第 ${i + 1} 批失敗：${e.message}`, true);
+        return;
+      }
+      await Promise.allSettled(chunk.map(id => subscribeEnrichment(id)));
+      done += chunk.length;
+      console.log(`[batch] chunk ${i + 1}/${chunks.length} done, total ${done}/${total}`);
 
-    if (i === chunks.length - 1) {
-      toast(`✅ 全部 ${total} 間已完成生成`);
-      break;
+      if (i === chunks.length - 1) {
+        toast(`✅ 全部 ${total} 間已完成生成`);
+        break;
+      }
+      const remaining = total - done;
+      if (_batchStopRequested) {
+        toast(`已停止，剩餘 ${remaining} 間未生成`, true);
+        return;
+      }
+      if (autoRunAll) {
+        // 全程自動：不再逐批問，更新停止鈕的剩餘數後直接續跑
+        if (fab) fab.textContent = `■ 停止批次（剩 ${remaining} 間）`;
+        continue;
+      }
+      const cont = await askBatchContinue({ batch: i + 1, totalBatches: chunks.length, done, total, remaining });
+      if (!cont) {
+        toast(`已中止，剩餘 ${remaining} 間未生成`, true);
+        return;
+      }
     }
-    const remaining = total - done;
-    const cont = await askBatchContinue({ batch: i + 1, totalBatches: chunks.length, done, total, remaining });
-    if (!cont) {
-      toast(`已中止，剩餘 ${remaining} 間未生成`, true);
-      return;
-    }
+  } finally {
+    _hideBatchStopButton();
   }
 }
 
@@ -5166,11 +5244,12 @@ async function startBulkEnrich(ids, mode, scopeLabel) {
 
   // 決定批次大小：>10 間時詢問是否分批，與既有 confirm 流程一致
   let batchSize = ids.length;
+  let autoRunAll = false;
   if (ids.length > 10) {
     const wantBatch = confirm(
       `本次共需生成 ${ids.length} 間公司資料。\n` +
-      `數量較多，同時生成可能因 Claude rate limit 造成延遲或失敗。\n\n` +
-      `是否分批生成？\n[確定] = 分批  [取消] = 一次全跑`
+      `數量較多，建議分批，以免 AI 額度暫時用滿造成延遲（用滿時會自動等待續跑）。\n\n` +
+      `是否分批生成？\n[確定] = 分批　[取消] = 一次全跑`
     );
     if (wantBatch) {
       const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
@@ -5180,10 +5259,15 @@ async function startBulkEnrich(ids, mode, scopeLabel) {
         return;
       }
       batchSize = Math.max(1, n);
+      autoRunAll = confirm(
+        `要全部自動跑完嗎？\n\n` +
+        `[確定] = 全部自動跑完（中途可按畫面右下「■ 停止批次」喊停）\n` +
+        `[取消] = 每批跑完都問我一次再續`
+      );
     }
   }
 
-  await runEnrichmentInBatches(ids, batchSize);
+  await runEnrichmentInBatches(ids, batchSize, autoRunAll);
 }
 
 /* ── Batch continue dialog (DOM-based; survives Chrome's background-tab confirm() suppression) ── */
@@ -6101,9 +6185,12 @@ function renderSummary(raw, matHeadings) {
     const [header, , ...body] = tableRows;
     const headerCells = (header || "").split("|").filter((_,i,a) => i>0 && i<a.length-1).map(c => c.trim());
     const isCompetitorTable = headerCells[0] === "公司名稱";
-    const ths = headerCells.map(c => `<th>${inlineMarkdown(c)}</th>`).join("");
+    let ths = headerCells.map(c => `<th>${inlineMarkdown(c)}</th>`).join("");
+    if (isCompetitorTable) ths += `<th class="comp-del-col"></th>`;   // 刪除鈕欄
     const trs = body.map(row => {
       const cells = row.split("|").filter((_,i,a) => i>0 && i<a.length-1);
+      const firstContent = (cells[0] || "").trim();
+      const isCaseRow = firstContent.includes("（本案）");
       const tds = cells.map((c, ci) => {
         const content = c.trim();
         if (isCompetitorTable && ci === 0) {
@@ -6125,7 +6212,14 @@ function renderSummary(raw, matHeadings) {
         }
         return `<td>${inlineMarkdown(content)}</td>`;
       }).join("");
-      return `<tr>${tds}</tr>`;
+      // 競業列尾端的刪除鈕（本案列不可刪）
+      let delCell = "";
+      if (isCompetitorTable) {
+        delCell = isCaseRow
+          ? `<td class="comp-del-col"></td>`
+          : `<td class="comp-del-col"><button class="comp-del-btn" data-cname="${escHtml(firstContent)}" onclick="removeCompetitorRow(this)" title="刪除此競業">✕</button></td>`;
+      }
+      return `<tr>${tds}${delCell}</tr>`;
     }).join("");
     const tcls = "summary-table" + (isCompetitorTable ? " competitor-table" : "");
     out.push(`<table class="${tcls}"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
@@ -6286,7 +6380,7 @@ const _CLIP_SVG = '<svg class="ico-clip" viewBox="0 0 24 24" fill="none" stroke=
 // Supplement markers by source. All markers are「（XX補充」(opening paren + 4 hanzi).
 const _SUP_RE = /（(簡報|訪談|介紹|筆記)補充/;
 const _SUP_META = {
-  "簡報": { cls: "deck",  icon: _CLIP_SVG, label: "簡報補充" },
+  "簡報": { cls: "deck",  icon: _CLIP_SVG, label: "補充資料" },
   "訪談": { cls: "talk",  icon: "🎙", label: "訪談補充" },
   "介紹": { cls: "intro", icon: "📄", label: "介紹補充" },
   "筆記": { cls: "note",  icon: "✏", label: "筆記補充" },
@@ -6358,20 +6452,30 @@ function _wrapSupplements(html) {
   return out;
 }
 
-// Split a paragraph line into public-text pieces and supplement notes (which
-// become collapsible, source-coloured callout blocks).
+// A non-bullet paragraph line that contains ANY「（XX補充…）」marker is treated as
+// fully supplement-sourced — same rule as bullets (_bulletSupInner) — and rendered
+// as ONE callout. We accumulate the whole line, dropping every standalone「（XX補充）」
+// tag (wherever it sits — start, middle or trailing) and keeping inline
+// 「（XX補充：payload）」/「（XX補充；payload）」content. Lines with no marker stay as
+// public text. This kills the old failure mode where a trailing「…內容（簡報補充）。」
+// left the real content in the public paragraph and rendered an empty「。」callout.
 function _splitSupplements(line) {
-  const pieces = [];
-  let i = 0;
+  const first = _findSup(line, 0);
+  if (!first) return line.length ? [{ type: "text", text: line }] : [];
+  let inner = "", i = 0;
   for (;;) {
     const f = _findSup(line, i);
-    if (!f) { if (i < line.length) pieces.push({ type: "text", text: line.slice(i) }); break; }
-    if (f.idx > i) pieces.push({ type: "text", text: line.slice(i, f.idx) });
-    const { inner, end } = _supSpan(line, f.idx);
-    pieces.push({ type: "sup", text: inner, src: f.src });
-    i = end;
+    if (!f) { inner += line.slice(i); break; }
+    inner += line.slice(i, f.idx);
+    if (line[f.idx + _SUP_MARKLEN] === "）") {
+      i = f.idx + _SUP_MARKLEN + 1;            // drop standalone「（XX補充）」tag
+    } else {
+      const { inner: payload, end } = _supSpan(line, f.idx);
+      inner += payload;                        // keep「（XX補充：payload）」content
+      i = end;
+    }
   }
-  return pieces;
+  return [{ type: "sup", text: inner.trim(), src: first.src }];
 }
 
 // A callout body already carries a source label, so any further「（XX補充…）」

@@ -1941,6 +1941,28 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .competitor-chip--added::after { content: "✓"; }
 .competitor-chip--added:hover { background: #f0fdf4; border-bottom-style: solid; }
 
+/* ── 競業列刪除鈕：平時隱藏，hover 該列才浮現 ── */
+.competitor-table th.comp-del-col,
+.competitor-table td.comp-del-col {
+  width: 28px;
+  padding: 0 4px;
+  text-align: center;
+}
+.comp-del-btn {
+  opacity: 0;
+  width: 20px; height: 20px;
+  border: none; background: none;
+  color: var(--muted);
+  font-size: 13px; line-height: 1;
+  cursor: pointer; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: opacity .12s, color .12s, background .12s;
+  padding: 0;
+}
+.competitor-table tbody tr:hover .comp-del-btn { opacity: 1; }
+.comp-del-btn:hover { color: #dc2626; background: #fee2e2; }
+.comp-del-btn:disabled { opacity: .4; cursor: default; }
+
 
 /* ════════════════════════════════════════
    CONFIRM DIALOG
@@ -4515,3 +4537,40 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   border-radius: 4px;
   display: inline-block;
 }
+
+/* 空狀態主動引導（redteam #5） */
+#empty-state { text-align: center; }
+.empty-cta {
+  margin: 14px auto 6px;
+  display: inline-block;
+  padding: 10px 22px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: #2d6cdf;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.empty-cta:hover { background: #1f57bd; }
+.empty-hint { display: block; margin-top: 8px; color: #8a93a3; font-size: 12.5px; }
+
+/* 批次自動跑完時的停止鈕（redteam #6） */
+#batch-stop-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9999;
+  display: none;
+  padding: 11px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: #c0392b;
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  cursor: pointer;
+}
+#batch-stop-fab:hover { background: #a52f22; }
+#batch-stop-fab:disabled { background: #8a93a3; cursor: default; }

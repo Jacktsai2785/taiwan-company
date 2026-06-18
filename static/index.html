@@ -101,7 +101,9 @@
     <div id="company-grid">
       <div id="empty-state">
         <div class="empty-icon">🏢</div>
-        <div>尚無公司資料<br><small>請上傳檔案以開始辨識</small></div>
+        <div>尚無公司資料</div>
+        <button type="button" class="empty-cta" onclick="document.getElementById('file-input').click()">上傳檔案開始</button>
+        <small class="empty-hint">流程：上傳檔案 → AI 自動抽出公司名 → 建檔</small>
       </div>
     </div>
   </main>
@@ -348,7 +350,7 @@
 
   <!-- 固定底部：更新公司簡介（切分頁皆可見） -->
   <div id="materials-panel-footer">
-    <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 Opus 更新公司簡介</button>
+    <button id="materials-gen-btn" onclick="generateFromMaterials()">✦ 用 AI 更新公司簡介</button>
     <div id="materials-gen-status"></div>
     <div id="materials-result-wrap" style="display:none">
       <div id="materials-result"></div>
@@ -400,7 +402,7 @@
   <div id="name-review-dialog">
     <div id="name-review-header">
       <h3>校對公司名稱</h3>
-      <p>請確認 OCR 辨識結果是否正確，可直接編輯或刪除錯誤名稱，再進行下一步</p>
+      <p>請確認辨識結果是否正確，可直接編輯或刪除錯誤名稱，再進行下一步</p>
     </div>
     <div id="name-review-body">
       <div id="name-review-rows"></div>
@@ -510,7 +512,7 @@
         <div class="bulk-mode-row">
           <div class="bulk-mode-info">
             <div class="bulk-mode-title">補齊未完成</div>
-            <div class="bulk-mode-desc">針對因 session limit、斷網或失敗而中斷的公司，重跑 GCIS 與 AI 簡介。判定條件：缺代表人、缺簡介、或簡介含「尚待補充」。</div>
+            <div class="bulk-mode-desc">針對因 AI 額度用滿、斷網或失敗而中斷的公司，重跑政府登記資料與 AI 簡介。判定條件：缺代表人、缺簡介、或簡介含「尚待補充」。</div>
           </div>
           <div class="bulk-mode-count" id="bulk-resume-count">0</div>
         </div>
@@ -520,7 +522,7 @@
         <div class="bulk-mode-row">
           <div class="bulk-mode-info">
             <div class="bulk-mode-title">全部重新生成</div>
-            <div class="bulk-mode-desc">將此清單上所有公司全部重跑一次（覆蓋寫入舊資料）。適合更新 GCIS 變動或重新生成簡介。</div>
+            <div class="bulk-mode-desc">將此清單上所有公司全部重跑一次（覆蓋寫入舊資料）。適合更新政府登記資料變動或重新生成簡介。</div>
           </div>
           <div class="bulk-mode-count" id="bulk-reenrich-count">0</div>
         </div>

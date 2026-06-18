@@ -15,6 +15,11 @@ from . import claude_client, data_store
 log = logging.getLogger("extractor")
 
 
+class ExtractionError(Exception):
+    """AI 引擎本身出錯（未登入 / 逾時 / CLI 失敗），而非『檔案裡沒有公司』。
+    呼叫端應據此回可行動錯誤，而不是顯示『沒有辨識到公司』讓使用者誤以為檔案有問題。"""
+
+
 def _classify(name: str) -> str:
     if "股份有限公司" in name:
         return "valid"
@@ -96,6 +101,7 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
             log.warning("Claude response had no valid JSON array")
     except Exception as e:
         log.error("Claude image extraction failed: %s", e)
+        raise ExtractionError(str(e)) from e
 
     # Resolve names via GCIS when tax_id is available (fixes rare character misreads)
     resolved = await _resolve_names(raw_items)
@@ -272,5 +278,6 @@ def _ask_claude(text: str, engine: str = "claude") -> list[str]:
         log.warning("Claude response had no valid JSON array")
     except Exception as e:
         log.error("Claude call failed: %s", e)
+        raise ExtractionError(str(e)) from e
 
     return []

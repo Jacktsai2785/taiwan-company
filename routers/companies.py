@@ -1,10 +1,12 @@
 import asyncio
+import ipaddress
 import json
 import logging
 import re
+import socket
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -20,6 +22,50 @@ router = APIRouter(prefix="/api/companies", tags=["companies"])
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
+
+def _host_is_public(host: str) -> bool:
+    """host 解析出的所有 IP 都是公開位址才回 True；任一私有/loopback/link-local/保留 → False。
+    擋掉 AI 生成的 URL 把 httpx 導向 127.0.0.1 / 169.254.x / 內網（含本機其他 port）造成 SSRF。"""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False
+    return True
+
+
+async def _ssrf_safe_reachable(url: str, *, max_redirects: int = 3) -> bool:
+    """驗證 URL 可達，且每一跳都指向公開位址（手動跟隨 redirect 以便逐跳檢查 host）。"""
+    current = url
+    async with httpx.AsyncClient(
+        timeout=8.0, follow_redirects=False, headers={"User-Agent": _UA},
+    ) as vc:
+        for _ in range(max_redirects + 1):
+            parts = urlsplit(current)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                return False
+            if not _host_is_public(parts.hostname):
+                log.info("find-website blocked non-public host: %s", parts.hostname)
+                return False
+            try:
+                resp = await vc.head(current)
+                if resp.status_code >= 400:
+                    resp = await vc.get(current)
+            except Exception:
+                return False
+            if resp.is_redirect and resp.headers.get("location"):
+                current = str(httpx.URL(current).join(resp.headers["location"]))
+                continue
+            return resp.status_code < 400
+    return False
+
 _progress: dict[str, list[dict]] = {}
 _running: set[str] = set()
 _rel_progress: dict[str, list[dict]] = {}
@@ -32,6 +78,40 @@ _gcis_progress: dict[str, list[dict]] = {}
 _gcis_running: set[str] = set()
 _summarize_progress: dict[str, list[dict]] = {}
 _summarize_running: set[str] = set()
+
+
+async def _sse_progress_stream(
+    company_id: str,
+    progress_map: dict[str, list[dict]],
+    running_set: set[str],
+    start,
+    *,
+    max_ticks: int = 3600,
+    interval: float = 0.5,
+    terminal: tuple[str, ...] = ("done",),
+    keepalive: bool = False,
+):
+    """共用的 SSE 進度串流：把背景任務 append 到 progress_map[company_id] 的事件依序送出，
+    直到出現 terminal 事件或達 max_ticks。輸出格式與原本逐字相同（前端解析不變）。
+    start：一個無參 callable，負責啟動背景任務（通常是 lambda: asyncio.create_task(...)）。"""
+    if company_id not in running_set:
+        running_set.add(company_id)
+        start()
+    sent = 0
+    try:
+        for _ in range(max_ticks):
+            events = progress_map.get(company_id, [])
+            while sent < len(events):
+                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
+                sent += 1
+            if events and events[-1].get("type") in terminal:
+                break
+            if keepalive:
+                yield ": keepalive\n\n"
+            await asyncio.sleep(interval)
+        yield 'data: {"type": "done"}\n\n'
+    finally:
+        progress_map.pop(company_id, None)
 
 
 class ConfirmItem(BaseModel):
@@ -233,25 +313,12 @@ async def patent_stream(company_id: str):
         finally:
             _patent_running.discard(company_id)
 
-    async def event_generator():
-        if company_id not in _patent_running:
-            _patent_running.add(company_id)
-            asyncio.create_task(_run())
-        sent = 0
-        for _ in range(7200):
-            events = _patent_progress.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") in ("done", "error"):
-                break
-            yield ": keepalive\n\n"
-            await asyncio.sleep(0.5)
-        yield 'data: {"type": "done"}\n\n'
-        _patent_progress.pop(company_id, None)
-
     return StreamingResponse(
-        event_generator(),
+        _sse_progress_stream(
+            company_id, _patent_progress, _patent_running,
+            lambda: asyncio.create_task(_run()),
+            max_ticks=7200, terminal=("done", "error"), keepalive=True,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -378,23 +445,13 @@ async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    async def event_generator():
-        if company_id not in _running:
-            _running.add(company_id)
-            asyncio.create_task(_enrich_company(company_id, **ai))
-        sent = 0
-        for _ in range(3600):
-            events = _progress.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") == "done":
-                break
-            await asyncio.sleep(0.5)
-        yield 'data: {"type": "done"}\n\n'
-        _progress.pop(company_id, None)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_progress_stream(
+            company_id, _progress, _running,
+            lambda: asyncio.create_task(_enrich_company(company_id, **ai)),
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.put("/{company_id}")
@@ -420,23 +477,13 @@ async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query))
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    async def event_generator():
-        if company_id not in _deep_running:
-            _deep_running.add(company_id)
-            asyncio.create_task(_deep_enrich_company(company_id, **ai))
-        sent = 0
-        for _ in range(3600):
-            events = _deep_progress.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") == "done":
-                break
-            await asyncio.sleep(0.5)
-        yield 'data: {"type": "done"}\n\n'
-        _deep_progress.pop(company_id, None)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_progress_stream(
+            company_id, _deep_progress, _deep_running,
+            lambda: asyncio.create_task(_deep_enrich_company(company_id, **ai)),
+        ),
+        media_type="text/event-stream",
+    )
 
 
 async def _summarize_company(company_id: str, engine: str = "claude", reset: bool = False) -> None:
@@ -492,23 +539,13 @@ async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depe
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    async def event_generator():
-        if company_id not in _summarize_running:
-            _summarize_running.add(company_id)
-            asyncio.create_task(_summarize_company(company_id, **ai, reset=reset))
-        sent = 0
-        for _ in range(3600):
-            events = _summarize_progress.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") == "done":
-                break
-            await asyncio.sleep(0.5)
-        yield 'data: {"type": "done"}\n\n'
-        _summarize_progress.pop(company_id, None)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_progress_stream(
+            company_id, _summarize_progress, _summarize_running,
+            lambda: asyncio.create_task(_summarize_company(company_id, **ai, reset=reset)),
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/{company_id}/find-website")
@@ -538,21 +575,9 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
         if not url.startswith("http"):
             return {"website": ""}
 
-        # Verify the URL is actually reachable before returning it
-        try:
-            async with httpx.AsyncClient(
-                timeout=8.0, follow_redirects=True,
-                headers={"User-Agent": _UA},
-            ) as vc:
-                resp = await vc.head(url)
-                if resp.status_code >= 400:
-                    # Some servers reject HEAD; try a GET as fallback
-                    resp = await vc.get(url)
-            if resp.status_code >= 400:
-                log.info("find-website URL unreachable (%s) for %s: %s", resp.status_code, company_id, url)
-                return {"website": ""}
-        except Exception as verify_exc:
-            log.info("find-website URL verify failed for %s (%s): %s", company_id, url, verify_exc)
+        # 驗證可達性，並擋掉指向私網/本機的 SSRF（逐跳檢查 host）
+        if not await _ssrf_safe_reachable(url):
+            log.info("find-website URL unreachable or blocked for %s: %s", company_id, url)
             return {"website": ""}
 
         return {"website": url}
@@ -567,25 +592,14 @@ async def refresh_gcis_stream(company_id: str):
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    async def event_generator():
-        if company_id not in _gcis_running:
-            _gcis_running.add(company_id)
-            asyncio.create_task(_refresh_gcis_only(company_id))
-        sent = 0
-        try:
-            for _ in range(120):
-                events = _gcis_progress.get(company_id, [])
-                while sent < len(events):
-                    yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                    sent += 1
-                if events and events[-1].get("type") == "done":
-                    break
-                await asyncio.sleep(0.5)
-            yield 'data: {"type": "done"}\n\n'
-        finally:
-            _gcis_progress.pop(company_id, None)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_progress_stream(
+            company_id, _gcis_progress, _gcis_running,
+            lambda: asyncio.create_task(_refresh_gcis_only(company_id)),
+            max_ticks=120,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 async def _refresh_gcis_only(company_id: str) -> None:
@@ -636,23 +650,14 @@ async def build_relationship_stream(company_id: str, director_index: int | None 
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    async def event_generator():
-        if company_id not in _rel_running:
-            _rel_running.add(company_id)
-            asyncio.create_task(_build_relationship(company_id, director_index))
-        sent = 0
-        for _ in range(600):
-            events = _rel_progress.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") == "done":
-                break
-            await asyncio.sleep(0.4)
-        yield 'data: {"type": "done"}\n\n'
-        _rel_progress.pop(company_id, None)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _sse_progress_stream(
+            company_id, _rel_progress, _rel_running,
+            lambda: asyncio.create_task(_build_relationship(company_id, director_index)),
+            max_ticks=600, interval=0.4,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/{company_id}/ownership-graph")
@@ -1338,6 +1343,59 @@ async def add_competitor(company_id: str, req: AddCompetitorRequest, ai: dict = 
     return {"summary": new_summary, "competitors": competitors}
 
 
+class RemoveCompetitorRequest(BaseModel):
+    name: str
+
+
+def _remove_competitor_row(summary: str, name: str) -> str:
+    """Remove the competitor row whose first cell (公司名稱) equals `name` from the
+    markdown 競業分析 table. Never touches the 本案 row. Returns the summary
+    unchanged if no matching row is found."""
+    target = (name or "").strip()
+    if not target:
+        return summary
+    lines = summary.split("\n")
+    in_section = False
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if re.match(r"^##\s+競業分析", s):
+            in_section = True
+            continue
+        if in_section and re.match(r"^##\s+", s):
+            break
+        if in_section and s.startswith("|") and s.endswith("|") and not re.match(r"^\|[\s\-|]+\|$", s):
+            cells = [c.strip() for c in s.split("|")[1:-1]]
+            if not cells:
+                continue
+            first = cells[0]
+            if "（本案）" in first:
+                continue
+            if first == target:
+                del lines[i]
+                return "\n".join(lines)
+    return summary
+
+
+@router.post("/{company_id}/competitors/remove")
+def remove_competitor(company_id: str, req: RemoveCompetitorRequest):
+    """Manually delete a competitor row from the 競業分析 table. Identified by the
+    raw first-cell text (公司名稱). Re-parses the structured competitors list and
+    persists. Does not call AI."""
+    company = data_store.get_company(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="請指定要刪除的競業名稱")
+    new_summary = _remove_competitor_row(company.get("summary", ""), name)
+    if new_summary == company.get("summary", ""):
+        raise HTTPException(status_code=422, detail="找不到要刪除的競業列")
+
+    competitors = _resolve_competitor_ids(report_generator._parse_competitor_table(new_summary))
+    data_store.update_company(company_id, {"summary": new_summary, "competitors": competitors})
+    return {"summary": new_summary, "competitors": competitors}
+
+
 async def _enrich_company(company_id: str, engine: str = "claude") -> None:
     _running.add(company_id)
     events: list[dict] = []
@@ -1357,7 +1415,7 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
 
         name = company["name"]
         stored_tax_id = company.get("tax_id", "")
-        push(f"正在查詢公司資料：{name}")
+        push(f"步驟 1/2：查詢政府登記資料（{name}）…")
 
         try:
             if stored_tax_id:
@@ -1384,7 +1442,7 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
         except Exception as e:
             push(f"資料查詢失敗：{e}，跳過繼續")
 
-        push("正在生成公司簡介（約 3–7 分鐘）…")
+        push("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
         company = data_store.get_company(company_id)
         if not company:
             events.append({"type": "done"})
