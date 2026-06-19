@@ -2452,7 +2452,12 @@ function openModal(id) {
     if (patBody) patBody.innerHTML = "";
     const patHint = document.getElementById("modal-patents-hint");
     if (patHint) patHint.textContent = "";
-    if (patentStatus) patentStatus.innerHTML = '<p class="summary-placeholder">尚未生成專利資料，點右上「📋 生成專利」開始（約 15–45 秒）。</p>';
+    // 後端查找完成一定會寫入 patents 陣列（即使查無資料也是空陣列），
+    // 故以「是否為陣列」區分「已查找過但無結果」與「從未查找」。
+    const scanned = Array.isArray(c.patents);
+    if (patentStatus) patentStatus.innerHTML = scanned
+      ? '<p class="summary-placeholder">已查詢專利資料庫，查無此公司的專利資料。如需重新查詢，點右上「📋 生成專利」。</p>'
+      : '<p class="summary-placeholder">尚未生成專利資料，點右上「📋 生成專利」開始（約 15–45 秒）。</p>';
   }
 
   _refreshModalBookmarks();
