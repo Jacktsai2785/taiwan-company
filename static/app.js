@@ -2592,7 +2592,8 @@ function _setupCompetitorTabs(page) {
   // 否則差異化特點寫到「本案客戶」之類的競業列會被誤判成本案列。
   const rows = [...table.querySelectorAll("tbody tr")];
   rows.forEach(tr => {
-    const cells = tr.querySelectorAll("td");
+    // exclude comp-del-col (delete button appended during render) so the last data cell is 競業類型
+    const cells = [...tr.querySelectorAll("td")].filter(td => !td.classList.contains("comp-del-col"));
     const firstCell = cells.length ? cells[0].textContent : "";
     if (firstCell.includes("（本案）")) { tr.dataset.ctype = "__case__"; return; }
     const last = cells.length ? cells[cells.length - 1].textContent.trim() : "";
