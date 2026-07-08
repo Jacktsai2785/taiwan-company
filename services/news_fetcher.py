@@ -170,6 +170,9 @@ async def _fetch_rss(query: str, max_articles: int, label: str = "") -> list[dic
         source = getattr(getattr(entry, "source", None), "title", "") or ""
         if not source and " - " in (entry.title or ""):
             source = entry.title.rsplit(" - ", 1)[-1].strip()
+        # entry.link is always a news.google.com redirector, not the publisher's
+        # domain — use <source url="..."> for the real origin (e.g. money.udn.com).
+        source_url = getattr(getattr(entry, "source", None), "href", "") or ""
 
         if any(b in source for b in _BLOCKED_SOURCES):
             continue
@@ -198,6 +201,7 @@ async def _fetch_rss(query: str, max_articles: int, label: str = "") -> list[dic
             "title": title,
             "url": entry.link or "",
             "source": source,
+            "source_url": source_url,
             "published_at": pub_tw.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         })
 

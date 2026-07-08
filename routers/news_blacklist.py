@@ -15,12 +15,13 @@ class DismissRequest(BaseModel):
     url: str
     title: str
     source: str = ""
+    source_url: str = ""
 
 
 @router.post("/dismiss")
 async def dismiss_article(body: DismissRequest):
     """Mark an article as unwanted. Triggers AI rule analysis every 5 dismissals."""
-    state = bl_svc.dismiss(body.url, body.title, body.source)
+    state = bl_svc.dismiss(body.url, body.title, body.source, body.source_url)
     count = len(state["dismissed"])
 
     if count % 5 == 0:

@@ -49,11 +49,20 @@ def _extract_domain(url: str) -> str:
         return ""
 
 
+# Aggregator/redirector hosts that must never be auto-blocked: every article
+# served through Google News RSS links back through news.google.com, so
+# blocking it would silently zero out all news fetching.
+_NEVER_BLOCK_DOMAINS = {"news.google.com", "google.com"}
+
+
 def _update_heuristic_rules(bl: dict) -> None:
     dismissed = bl["dismissed"]
     rules = bl["rules"]
 
-    domain_counts = Counter(d["domain"] for d in dismissed if d.get("domain"))
+    domain_counts = Counter(
+        d["domain"] for d in dismissed
+        if d.get("domain") and d["domain"] not in _NEVER_BLOCK_DOMAINS
+    )
     rules["blocked_domains"] = [d for d, n in domain_counts.items() if n >= 2]
 
     source_counts = Counter(d["source"] for d in dismissed if d.get("source"))
@@ -62,17 +71,21 @@ def _update_heuristic_rules(bl: dict) -> None:
     rules["blocked_urls"] = [d["url"] for d in dismissed if d.get("url")]
 
 
-def dismiss(url: str, title: str, source: str) -> dict:
+def dismiss(url: str, title: str, source: str, source_url: str = "") -> dict:
     bl = _load()
 
     if any(d["url"] == url for d in bl["dismissed"]):
         return bl
 
+    # Prefer the article's real publisher URL over `url`, which for Google
+    # News RSS entries is always a news.google.com redirector link.
+    domain = _extract_domain(source_url) if source_url else _extract_domain(url)
+
     bl["dismissed"].append({
         "url": url,
         "title": title,
         "source": source,
-        "domain": _extract_domain(url),
+        "domain": domain,
         "dismissed_at": datetime.now(timezone.utc).isoformat(),
     })
 

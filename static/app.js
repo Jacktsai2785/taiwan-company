@@ -106,12 +106,12 @@ function _showAiHint(msg) {
   el._timer = setTimeout(() => { el.style.opacity = "0"; }, 6000);
 }
 
-async function dismissArticle(url, title, source, btn) {
+async function dismissArticle(url, title, source, sourceUrl, btn) {
   _dismissedUrls.add(url);
   const item = btn.closest(".daily-news-item");
   if (item) { item.style.opacity = "0"; item.style.height = "0"; item.style.overflow = "hidden"; item.style.transition = "opacity .2s, height .3s"; }
   try {
-    const data = await api("POST", "/api/news/dismiss", { url, title, source });
+    const data = await api("POST", "/api/news/dismiss", { url, title, source, source_url: sourceUrl || "" });
     if (data.dismissed_count % 5 === 0 && data.rules?.ai_summary) {
       _showAiHint("AI 已更新過濾規則：" + data.rules.ai_summary);
     }
@@ -1272,7 +1272,7 @@ function _renderDigestContent(panel, data, industry) {
         <a class="daily-news-title" href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
         <span class="daily-news-source">${escHtml(a.source)}</span>
         <a class="daily-news-ext" href="${escHtml(a.url)}" target="_blank" rel="noopener">↗</a>
-        <button class="daily-news-dismiss" title="不想看這篇" onclick='dismissArticle(${JSON.stringify(a.url)},${JSON.stringify(a.title)},${JSON.stringify(a.source)},this)'>×</button>
+        <button class="daily-news-dismiss" title="不想看這篇" onclick='dismissArticle(${JSON.stringify(a.url)},${JSON.stringify(a.title)},${JSON.stringify(a.source)},${JSON.stringify(a.source_url || "")},this)'>×</button>
       </div>`;
   // Filter out already-dismissed articles (in-session)
   articles = articles.filter(a => !_dismissedUrls.has(a.url));
