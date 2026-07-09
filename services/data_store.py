@@ -43,6 +43,13 @@ def _write(path: Path, data: dict) -> None:
                 pass
 
 
+# Public aliases: this module's atomic read/write is generic (path + dict), so
+# other services (blacklist.py, daily_digest.py) that keep their own small JSON
+# files reuse it here instead of hand-rolling a non-atomic json.dump.
+read_json = _read
+write_json = _write
+
+
 # --- Companies ---
 
 def _ensure_industries_field(companies: list[dict]) -> tuple[list[dict], bool]:
@@ -278,6 +285,107 @@ def delete_industry(name: str) -> list[str]:
         }
         _write(CONFIG_FILE, config)
         return config["industries"]
+
+
+def apply_subdivision(parent: str, groups: list[dict]) -> dict:
+    """把一個產業細分成子產業（產業地圖 Phase 2）。在鎖內各一次原子寫完成 config 與
+    companies，避免中途壞檔：
+      - 每個 group 的 name 加進 industries（若新）、掛到 industry_tree[parent] 底下
+      - 每個 group 的 company_ids：把 parent 標籤換成該 child 標籤（移除父、加上子）
+    `groups`：[{"name": 子產業名, "company_ids": [...]}]。回傳異動摘要。"""
+    id_to_child: dict[str, str] = {}
+    for g in groups:
+        ch = (g.get("name") or "").strip()
+        if not ch:
+            continue
+        for cid in g.get("company_ids", []):
+            id_to_child[cid] = ch
+
+    with _LOCK:
+        # 1) config：新增子產業 + 掛進樹
+        config = get_config()
+        industries = config["industries"]
+        tree = config.get("industry_tree", {})
+        added_children: list[str] = []
+        existing_kids = list(tree.get(parent, []))
+        for g in groups:
+            ch = (g.get("name") or "").strip()
+            if not ch:
+                continue
+            if ch not in industries:
+                industries.append(ch)
+            if ch not in existing_kids:
+                existing_kids.append(ch)
+                added_children.append(ch)
+        tree[parent] = existing_kids
+        config["industry_tree"] = tree
+        _write(CONFIG_FILE, config)
+
+        # 2) companies：把 parent 標籤換成對應 child 標籤
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        store["companies"], _ = _ensure_industries_field(store["companies"])
+        now = datetime.now(timezone.utc).isoformat()
+        retagged = 0
+        for c in store["companies"]:
+            ch = id_to_child.get(c["id"])
+            if not ch:
+                continue
+            inds = c["industries"]
+            changed = False
+            if parent in inds:
+                inds.remove(parent)
+                changed = True
+            if ch not in inds:
+                inds.append(ch)
+                changed = True
+            if changed:
+                c["last_updated"] = now
+                retagged += 1
+        _write(COMPANIES_FILE, store)
+
+    return {"added_children": added_children, "retagged": retagged}
+
+
+def merge_children_into(parent: str, descendants: list[str]) -> dict:
+    """apply_subdivision 的逆操作：把 parent 底下的子產業（descendants，含各層後代）
+    合併回 parent。掛在任一 descendant 的公司改掛回 parent；descendants 從 industries
+    與 industry_tree 中移除。之後 parent 沒有子產業 → 產業地圖會回到葉模式（單張完整
+    地圖，含競業候選）。在鎖內各一次原子寫完成。"""
+    desc_set = set(descendants)
+    with _LOCK:
+        # companies：任何掛在 descendant 的公司 → 移除該標籤、加回 parent
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        store["companies"], _ = _ensure_industries_field(store["companies"])
+        now = datetime.now(timezone.utc).isoformat()
+        retagged = 0
+        for c in store["companies"]:
+            inds = c["industries"]
+            hit = [i for i in inds if i in desc_set]
+            if not hit:
+                continue
+            for i in hit:
+                inds.remove(i)
+            if parent not in inds:
+                inds.append(parent)
+            c["last_updated"] = now
+            retagged += 1
+        _write(COMPANIES_FILE, store)
+
+        # config：移除 descendants（industries + tree 中的 key 與被引用處）
+        config = get_config()
+        config["industries"] = [i for i in config["industries"] if i not in desc_set]
+        tree = config.get("industry_tree", {})
+        new_tree: dict[str, list[str]] = {}
+        for k, v in tree.items():
+            if k in desc_set:
+                continue
+            kids = [c for c in v if c not in desc_set]
+            if kids:
+                new_tree[k] = kids
+        config["industry_tree"] = new_tree
+        _write(CONFIG_FILE, config)
+
+    return {"removed": list(desc_set), "retagged": retagged}
 
 
 def add_label(label: str) -> None:

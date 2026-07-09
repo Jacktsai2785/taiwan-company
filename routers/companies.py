@@ -1,127 +1,29 @@
 import asyncio
-import ipaddress
-import json
 import logging
-import re
-import socket
 from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import quote, urlsplit
-
-import httpx
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from services import claude_client, company_extractor, company_exporter, competitor_service, data_store, gcis_client, report_generator, patent_scraper
-from services.ai_deps import ai_from_headers, ai_from_query
+from services import company_exporter, competitor_service, data_store, gcis_client, patent_scraper
+from services.ai_deps import ai_from_headers
+from services.task_progress import sse_progress_stream
+from routers.enrichment import _enrich_company, _running as _enrich_running
 
-# 競業邏輯已抽到 services/competitor_service.py（redteam #10）。
-# 以別名接回原本的私有名稱，讓既有呼叫點（含 graph code 用的 _short）不需改動、行為一致。
+# 競業邏輯已抽到 services/competitor_service.py（redteam #10）。競業「端點」本身
+# 已搬到 routers/competitors.py；AI enrich 系列端點搬到 routers/enrichment.py。
+# 這裡留下的別名僅供 ownership-graph 使用。
 _short = competitor_service.short
-_gather_competitor_context = competitor_service.gather_competitor_context
-_resolve_competitor_ids = competitor_service.resolve_competitor_ids
-_backlink_competitor = competitor_service.backlink_competitor
-_insert_competitor_row = competitor_service.insert_competitor_row
-_remove_competitor_row = competitor_service.remove_competitor_row
-_COMPETITION_TYPES = competitor_service.COMPETITION_TYPES
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-
-
-def _host_is_public(host: str) -> bool:
-    """host 解析出的所有 IP 都是公開位址才回 True；任一私有/loopback/link-local/保留 → False。
-    擋掉 AI 生成的 URL 把 httpx 導向 127.0.0.1 / 169.254.x / 內網（含本機其他 port）造成 SSRF。"""
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    for info in infos:
-        try:
-            addr = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
-            return False
-    return True
-
-
-async def _ssrf_safe_reachable(url: str, *, max_redirects: int = 3) -> bool:
-    """驗證 URL 可達，且每一跳都指向公開位址（手動跟隨 redirect 以便逐跳檢查 host）。"""
-    current = url
-    async with httpx.AsyncClient(
-        timeout=8.0, follow_redirects=False, headers={"User-Agent": _UA},
-    ) as vc:
-        for _ in range(max_redirects + 1):
-            parts = urlsplit(current)
-            if parts.scheme not in ("http", "https") or not parts.hostname:
-                return False
-            if not _host_is_public(parts.hostname):
-                log.info("find-website blocked non-public host: %s", parts.hostname)
-                return False
-            try:
-                resp = await vc.head(current)
-                if resp.status_code >= 400:
-                    resp = await vc.get(current)
-            except Exception:
-                return False
-            if resp.is_redirect and resp.headers.get("location"):
-                current = str(httpx.URL(current).join(resp.headers["location"]))
-                continue
-            return resp.status_code < 400
-    return False
-
-_progress: dict[str, list[dict]] = {}
-_running: set[str] = set()
 _rel_progress: dict[str, list[dict]] = {}
 _rel_running: set[str] = set()
-_deep_progress: dict[str, list[dict]] = {}
-_deep_running: set[str] = set()
 _patent_progress: dict[str, list[dict]] = {}
 _patent_running: set[str] = set()
-_gcis_progress: dict[str, list[dict]] = {}
-_gcis_running: set[str] = set()
-_summarize_progress: dict[str, list[dict]] = {}
-_summarize_running: set[str] = set()
-
-
-async def _sse_progress_stream(
-    company_id: str,
-    progress_map: dict[str, list[dict]],
-    running_set: set[str],
-    start,
-    *,
-    max_ticks: int = 3600,
-    interval: float = 0.5,
-    terminal: tuple[str, ...] = ("done",),
-    keepalive: bool = False,
-):
-    """共用的 SSE 進度串流：把背景任務 append 到 progress_map[company_id] 的事件依序送出，
-    直到出現 terminal 事件或達 max_ticks。輸出格式與原本逐字相同（前端解析不變）。
-    start：一個無參 callable，負責啟動背景任務（通常是 lambda: asyncio.create_task(...)）。"""
-    if company_id not in running_set:
-        running_set.add(company_id)
-        start()
-    sent = 0
-    try:
-        for _ in range(max_ticks):
-            events = progress_map.get(company_id, [])
-            while sent < len(events):
-                yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
-                sent += 1
-            if events and events[-1].get("type") in terminal:
-                break
-            if keepalive:
-                yield ": keepalive\n\n"
-            await asyncio.sleep(interval)
-        yield 'data: {"type": "done"}\n\n'
-    finally:
-        progress_map.pop(company_id, None)
 
 
 class ConfirmItem(BaseModel):
@@ -136,14 +38,6 @@ class ConfirmItem(BaseModel):
 class ConfirmRequest(BaseModel):
     companies: list[ConfirmItem]
     enrich: bool = True
-
-
-class EnrichBatchRequest(BaseModel):
-    company_ids: list[str]
-
-
-class SuggestIndustriesRequest(BaseModel):
-    company_ids: list[str] | None = None
 
 
 class IndustryUpdate(BaseModel):
@@ -272,37 +166,6 @@ async def reverify_status(req: ReverifyRequest):
     return await gcis_client.reverify_statuses(tax_ids)
 
 
-@router.post("/suggest-industries")
-async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(ai_from_headers)):
-    """Use AI to assign each given company an industry from the existing list.
-
-    If `company_ids` is omitted, defaults to all companies missing an industry.
-    Does not write changes — caller applies via PUT.
-    """
-    industries = data_store.get_industries()
-    if not industries:
-        raise HTTPException(status_code=422, detail="尚未建立任何產業別，請先新增至少一個產業別")
-
-    all_companies = data_store.get_all_companies()
-    if req.company_ids:
-        wanted = set(req.company_ids)
-        targets = [c for c in all_companies if c["id"] in wanted]
-    else:
-        targets = [c for c in all_companies if not (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
-
-    if not targets:
-        return {"suggestions": {}, "industries": industries, "targets": []}
-
-    suggestions = await company_extractor.suggest_industries_for_companies(
-        targets, industries, **ai
-    )
-    return {
-        "suggestions": suggestions,
-        "industries": industries,
-        "targets": [{"id": c["id"], "name": c["name"], "blurb": c.get("blurb") or ""} for c in targets],
-    }
-
-
 @router.get("/{company_id}/patents")
 async def patent_stream(company_id: str):
     company = data_store.get_company(company_id)
@@ -324,7 +187,7 @@ async def patent_stream(company_id: str):
             _patent_running.discard(company_id)
 
     return StreamingResponse(
-        _sse_progress_stream(
+        sse_progress_stream(
             company_id, _patent_progress, _patent_running,
             lambda: asyncio.create_task(_run()),
             max_ticks=7200, terminal=("done", "error"), keepalive=True,
@@ -418,50 +281,19 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
             saved_ids.append(company["id"])
             if req.enrich:
                 enriching.append(company["id"])
-                _running.add(company["id"])
+                _enrich_running.add(company["id"])
                 asyncio.create_task(_enrich_company(company["id"], **ai))
         else:
             if item.existing_id:
                 updated = data_store.add_label_to_company(item.existing_id, item.label)
                 if updated is not None:
                     saved_ids.append(item.existing_id)
-                    if req.enrich and item.existing_id not in _running:
+                    if req.enrich and item.existing_id not in _enrich_running:
                         enriching.append(item.existing_id)
-                        _running.add(item.existing_id)
+                        _enrich_running.add(item.existing_id)
                         asyncio.create_task(_enrich_company(item.existing_id, **ai))
 
     return {"saved": len(saved_ids), "saved_ids": saved_ids, "enriching": enriching}
-
-
-@router.post("/enrich-batch")
-async def enrich_batch(req: EnrichBatchRequest, ai: dict = Depends(ai_from_headers)):
-    """Spawn enrichment tasks for the given company IDs (skips ones already running)."""
-    known = {c["id"] for c in data_store.get_all_companies()}
-    started: list[str] = []
-    for cid in req.company_ids:
-        if cid not in known:
-            continue
-        if cid in _running:
-            continue
-        _running.add(cid)
-        asyncio.create_task(_enrich_company(cid, **ai))
-        started.append(cid)
-    return {"started": started}
-
-
-@router.get("/enrich/{company_id}")
-async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    return StreamingResponse(
-        _sse_progress_stream(
-            company_id, _progress, _running,
-            lambda: asyncio.create_task(_enrich_company(company_id, **ai)),
-        ),
-        media_type="text/event-stream",
-    )
 
 
 @router.put("/{company_id}")
@@ -481,173 +313,6 @@ def delete_company(company_id: str):
     return {"deleted": company_id}
 
 
-@router.get("/{company_id}/deep-enrich")
-async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    return StreamingResponse(
-        _sse_progress_stream(
-            company_id, _deep_progress, _deep_running,
-            lambda: asyncio.create_task(_deep_enrich_company(company_id, **ai)),
-        ),
-        media_type="text/event-stream",
-    )
-
-
-async def _summarize_company(company_id: str, engine: str = "claude", reset: bool = False) -> None:
-    """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation.
-    reset=True clears existing summary/competitors and ignores known competitor context,
-    producing a true from-scratch rewrite."""
-    events: list[dict] = []
-    _summarize_progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    try:
-        company = data_store.get_company(company_id)
-        if not company:
-            events.append({"type": "done"})
-            return
-
-        if reset:
-            data_store.update_company(company_id, {"summary": "", "blurb": "", "competitors": []})
-            company = data_store.get_company(company_id)
-            push("已清除舊資料，從零重新生成（約 3–7 分鐘）…")
-            ctx = None
-        else:
-            push("正在生成公司簡介（約 3–7 分鐘）…")
-            ctx = _gather_competitor_context(company_id, company.get("name", ""))
-            if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
-
-        try:
-            result = await report_generator.generate_summary(
-                company, engine=engine, competitor_context=ctx
-            )
-            saved = _save_summary_result(company_id, result)
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
-            push("公司簡介已生成完成")
-        except Exception as e:
-            push(f"簡介生成失敗：{e}")
-
-        events.append({"type": "done"})
-    finally:
-        _summarize_running.discard(company_id)
-
-
-@router.get("/{company_id}/summarize")
-async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depends(ai_from_query)):
-    """SSE: regenerate AI summary only, without re-fetching GCIS data.
-    reset=true clears existing data and skips injecting known competitors."""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    return StreamingResponse(
-        _sse_progress_stream(
-            company_id, _summarize_progress, _summarize_running,
-            lambda: asyncio.create_task(_summarize_company(company_id, **ai, reset=reset)),
-        ),
-        media_type="text/event-stream",
-    )
-
-
-@router.get("/{company_id}/find-website")
-async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
-    """Quick WebSearch to find the company's official website URL."""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    name = company.get("name", "")
-    tax_id = company.get("tax_id", "")
-    full = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
-
-    prompt = (
-        f"請用 WebSearch 搜尋「{full}」（統編：{tax_id}）的官方網站。\n"
-        f"只輸出最可能的官方網站 URL（含 https://），禁止任何其他說明文字。\n"
-        f"若找不到官方網站，輸出空字串。\n"
-        f"範例輸出：https://example.com"
-    )
-    try:
-        result = await asyncio.to_thread(
-            claude_client.ask,
-            prompt, 60, ["WebSearch"],
-            ai.get("engine", "claude"), 6,
-        )
-        url = result.strip().split("\n")[0].strip()
-        if not url.startswith("http"):
-            return {"website": ""}
-
-        # 驗證可達性，並擋掉指向私網/本機的 SSRF（逐跳檢查 host）
-        if not await _ssrf_safe_reachable(url):
-            log.info("find-website URL unreachable or blocked for %s: %s", company_id, url)
-            return {"website": ""}
-
-        return {"website": url}
-    except Exception as exc:
-        log.warning("find-website failed for %s: %s", company_id, exc)
-        return {"website": ""}
-
-
-@router.get("/{company_id}/refresh-gcis")
-async def refresh_gcis_stream(company_id: str):
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    return StreamingResponse(
-        _sse_progress_stream(
-            company_id, _gcis_progress, _gcis_running,
-            lambda: asyncio.create_task(_refresh_gcis_only(company_id)),
-            max_ticks=120,
-        ),
-        media_type="text/event-stream",
-    )
-
-
-async def _refresh_gcis_only(company_id: str) -> None:
-    events: list[dict] = []
-    _gcis_progress[company_id] = events
-
-    try:
-        company = data_store.get_company(company_id)
-        if not company:
-            events.append({"type": "done"})
-            return
-
-        name = company["name"]
-        stored_tax_id = company.get("tax_id", "")
-        events.append({"type": "progress", "message": f"正在重新拉取 GCIS 資料：{name}"})
-
-        try:
-            if stored_tax_id:
-                enrichment = await gcis_client.fetch_company_data_by_tax_id(stored_tax_id)
-            else:
-                enrichment = await gcis_client.fetch_company_data(name)
-            matched_name: str = enrichment.pop("matched_name", "")
-            data_store.update_company(company_id, enrichment)
-            directors_count = len(enrichment.get("directors", []))
-            events.append({"type": "data", "fields": {k: v for k, v in enrichment.items()}})
-            events.append({"type": "progress", "message": f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）"})
-
-            if matched_name and matched_name != name:
-                data_store.update_company(company_id, {"name": matched_name})
-                events.append({"type": "data", "fields": {"name": matched_name}})
-        except Exception as e:
-            events.append({"type": "progress", "message": f"資料查詢失敗：{e}"})
-
-        events.append({"type": "done"})
-    finally:
-        _gcis_running.discard(company_id)
-
-
 @router.get("/{company_id}/build-relationship")
 async def build_relationship_stream(company_id: str, director_index: int | None = None):
     """SSE stream that builds the relationship graph for a company.
@@ -661,7 +326,7 @@ async def build_relationship_stream(company_id: str, director_index: int | None 
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        _sse_progress_stream(
+        sse_progress_stream(
             company_id, _rel_progress, _rel_running,
             lambda: asyncio.create_task(_build_relationship(company_id, director_index)),
             max_ticks=600, interval=0.4,
@@ -756,73 +421,6 @@ def get_ownership_graph(company_id: str):
     }
 
 
-@router.get("/{company_id}/competitor-graph")
-def get_competitor_graph(company_id: str):
-    """Return Cytoscape-friendly nodes/edges for the competitor landscape."""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    nodes: list[dict] = []
-    edges: list[dict] = []
-    seen: set[str] = set()
-
-    def add_node(node_id: str, label: str, role: str, **extra):
-        if node_id in seen:
-            return
-        seen.add(node_id)
-        nodes.append({"data": {"id": node_id, "label": label, "role": role, **extra}})
-
-    def add_edge(src: str, tgt: str):
-        eid = "ce:" + "-".join(sorted([src, tgt]))
-        if eid in seen:
-            return
-        seen.add(eid)
-        edges.append({"data": {"id": eid, "source": src, "target": tgt, "type": "competition"}})
-
-    self_id = f"c:{company_id}"
-    add_node(self_id, _short(company["name"]), "self",
-             company_id=company_id, in_db=True,
-             listing_status=company.get("listing_status", ""))
-
-    # Primary competitors listed in this company's memo
-    for comp in (company.get("competitors") or []):
-        name = comp.get("name", "")
-        cid  = comp.get("company_id")
-        # 競業條目來自備忘錄表格解析，company_id 多半為 None；使用者事後把該公司
-        # 加入清單也不會回填舊條目。這裡即時以名稱（去掉品牌附註括號）／統編比對
-        # 現有公司，讓「已收錄」狀態與點擊行為一致（避免「顯示未收錄但點得開」）。
-        if not cid:
-            lookup_name = re.sub(r"（[^）]*）", "", name).strip()
-            hit = data_store.find_company_by_name_or_tax_id(lookup_name, comp.get("tax_id") or "")
-            if hit:
-                cid = hit["id"]
-        node_id = f"comp:{cid}" if cid else f"comp:name:{name}"
-        in_db = bool(cid)
-        add_node(node_id, _short(name), "competitor",
-                 name=name, in_db=in_db, company_id=cid or "",
-                 listing_status=comp.get("listing_status", ""),
-                 core_biz=comp.get("core_biz", ""))
-        add_edge(self_id, node_id)
-
-    # Reverse lookup: companies in DB that list this company as their competitor
-    self_name_key = _short(company["name"])
-    for other in data_store.get_all_companies():
-        if other["id"] == company_id:
-            continue
-        for comp in (other.get("competitors") or []):
-            if comp.get("company_id") == company_id or _short(comp.get("name", "")) == self_name_key:
-                node_id = f"comp:{other['id']}"
-                add_node(node_id, _short(other["name"]), "competitor",
-                         name=other["name"], in_db=True, company_id=other["id"],
-                         listing_status=other.get("listing_status", ""),
-                         core_biz="")
-                add_edge(self_id, node_id)
-                break
-
-    return {"nodes": nodes, "edges": edges}
-
-
 @router.post("/from-graph")
 async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_from_headers)):
     """Create a new company entry from a graph node and start enrichment.
@@ -847,121 +445,10 @@ async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_fr
     if tax_id:
         data_store.update_company(company["id"], {"tax_id": tax_id})
 
-    _running.add(company["id"])
+    _enrich_running.add(company["id"])
     asyncio.create_task(_enrich_company(company["id"], **ai))
 
     return {"existed": False, "company_id": company["id"], "name": company["name"]}
-
-
-@router.post("/symmetrize-competitors")
-def symmetrize_competitors():
-    """
-    Make competitor relationships bidirectional.
-    For every A → B link (B has company_id), ensure B's competitors[] also contains A.
-    Synthetic reverse entries use the company's blurb as core_biz.
-    """
-    all_cos = data_store.get_all_companies()
-    by_id = {c["id"]: c for c in all_cos}
-
-    working: dict[str, list[dict]] = {}
-    changed: set[str] = set()
-
-    def get_working(cid: str) -> list[dict]:
-        if cid not in working:
-            working[cid] = [dict(c) for c in (by_id[cid].get("competitors") or [])]
-        return working[cid]
-
-    added = 0
-    for co in all_cos:
-        a_id = co["id"]
-        a_key = _short(co["name"])
-        for comp in (co.get("competitors") or []):
-            b_id = comp.get("company_id")
-            if not b_id or b_id not in by_id or b_id == a_id:
-                continue
-            b_comps = get_working(b_id)
-            already = any(
-                c.get("company_id") == a_id or _short(c.get("name", "")) == a_key
-                for c in b_comps
-            )
-            if not already:
-                b_comps.append({
-                    "name": co["name"],
-                    "tax_id": co.get("tax_id") or None,
-                    "company_id": a_id,
-                    "core_biz": co.get("blurb") or "",
-                    "listing_status": co.get("listing_status") or "非公發",
-                })
-                changed.add(b_id)
-                added += 1
-
-    for cid in changed:
-        data_store.update_company(cid, {"competitors": working[cid]})
-
-    return {"updated_companies": len(changed), "added_links": added}
-
-
-@router.post("/relink-competitors")
-def relink_competitors():
-    """
-    Re-resolve company_id for ALL competitors entries that currently have company_id=null.
-    Use this after fixing name-normalization bugs or adding new companies in bulk.
-    """
-    all_cos = data_store.get_all_companies()
-    name_to_id: dict[str, str] = {}
-    for c in all_cos:
-        name_to_id[c["name"]] = c["id"]
-        name_to_id[_short(c["name"])] = c["id"]
-    updated_companies = 0
-    resolved_links = 0
-    for co in all_cos:
-        comps = co.get("competitors")
-        if not comps:
-            continue
-        changed = False
-        for comp in comps:
-            if comp.get("company_id") is not None:
-                continue
-            n = comp.get("name", "")
-            cid = name_to_id.get(n) or name_to_id.get(_short(n)) or None
-            if cid:
-                comp["company_id"] = cid
-                changed = True
-                resolved_links += 1
-        if changed:
-            data_store.update_company(co["id"], {"competitors": comps})
-            updated_companies += 1
-    return {"updated_companies": updated_companies, "resolved_links": resolved_links}
-
-
-@router.post("/backfill-competitors")
-def backfill_competitors():
-    """
-    One-shot: parse existing summaries that have no competitors field yet,
-    fill structured competitors data, and resolve company_id cross-references.
-    Returns a summary of how many companies were updated.
-    """
-    all_cos = data_store.get_all_companies()
-    name_to_id: dict[str, str] = {}
-    for c in all_cos:
-        name_to_id[c["name"]] = c["id"]
-        name_to_id[_short(c["name"])] = c["id"]
-    updated = 0
-    for co in all_cos:
-        if co.get("competitors") is not None:
-            continue
-        summary = co.get("summary") or ""
-        if not summary:
-            continue
-        comps = report_generator._parse_competitor_table(summary)
-        if not comps:
-            continue
-        for comp in comps:
-            n = comp.get("name", "")
-            comp["company_id"] = name_to_id.get(n) or name_to_id.get(_short(n)) or None
-        data_store.update_company(co["id"], {"competitors": comps})
-        updated += 1
-    return {"updated": updated, "total": len(all_cos)}
 
 
 def _build_company_index(companies: list[dict]) -> dict:
@@ -1180,204 +667,3 @@ def _build_siblings(
         out.append(item)
     return out
 
-
-def _save_summary_result(company_id: str, result: dict, extra: dict | None = None) -> dict:
-    """Persist summary/blurb/competitors from a generation result. `extra` folds
-    additional fields into the same write (avoids a second full-file rewrite).
-    Returns the fields saved."""
-    fields: dict = {
-        "summary": result.get("summary", ""),
-        "blurb":   result.get("blurb", ""),
-        # A full public-data regen replaces the whole summary, so any
-        # previously-applied 簡報 section markers no longer apply.
-        "materials_applied_headings": [],
-    }
-    if "competitors" in result:
-        fields["competitors"] = _resolve_competitor_ids(result["competitors"])
-    if extra:
-        fields.update(extra)
-    data_store.update_company(company_id, fields)
-    return fields
-
-
-class AddCompetitorRequest(BaseModel):
-    name: str
-    competition_type: str
-
-
-@router.post("/{company_id}/competitors/add")
-async def add_competitor(company_id: str, req: AddCompetitorRequest, ai: dict = Depends(ai_from_headers)):
-    """Manually add a competitor: AI researches it (WebSearch) and fills 核心業務/
-    差異化/上市狀態; 競業類型 is the user's choice. Inserted into the 競業分析 table."""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    name = (req.name or "").strip()
-    ctype = (req.competition_type or "").strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="請輸入競業公司名稱")
-    if ctype not in _COMPETITION_TYPES:
-        raise HTTPException(status_code=422, detail="競業類型不正確")
-    if not (company.get("summary") or "").strip():
-        raise HTTPException(status_code=422, detail="本案尚無公司簡介，請先生成簡介再新增競業")
-
-    analysis = await report_generator.analyze_competitor(company, name, ctype, **ai)
-    # use the AI-resolved full legal name (matches other rows + enables company link);
-    # listing is already resolved in analyze_competitor, so don't run the downgrading
-    # _fix_competitor_listing here (it would clobber short/unmatched names to 非公發).
-    row_name = analysis.get("full_name") or name
-    row = f"| {row_name} | {analysis['core_biz']} | {analysis['differentiation']} | {analysis['listing']} | {ctype} |"
-    new_summary = _insert_competitor_row(company.get("summary", ""), row)
-    if new_summary == company.get("summary", ""):
-        raise HTTPException(status_code=422, detail="找不到競業分析表格，請先生成公司簡介")
-
-    competitors = _resolve_competitor_ids(report_generator._parse_competitor_table(new_summary))
-    data_store.update_company(company_id, {"summary": new_summary, "competitors": competitors})
-    return {"summary": new_summary, "competitors": competitors}
-
-
-class RemoveCompetitorRequest(BaseModel):
-    name: str
-
-
-@router.post("/{company_id}/competitors/remove")
-def remove_competitor(company_id: str, req: RemoveCompetitorRequest):
-    """Manually delete a competitor row from the 競業分析 table. Identified by the
-    raw first-cell text (公司名稱). Re-parses the structured competitors list and
-    persists. Does not call AI."""
-    company = data_store.get_company(company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    name = (req.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="請指定要刪除的競業名稱")
-    new_summary = _remove_competitor_row(company.get("summary", ""), name)
-    if new_summary == company.get("summary", ""):
-        raise HTTPException(status_code=422, detail="找不到要刪除的競業列")
-
-    competitors = _resolve_competitor_ids(report_generator._parse_competitor_table(new_summary))
-    data_store.update_company(company_id, {"summary": new_summary, "competitors": competitors})
-    return {"summary": new_summary, "competitors": competitors}
-
-
-async def _enrich_company(company_id: str, engine: str = "claude") -> None:
-    _running.add(company_id)
-    events: list[dict] = []
-    _progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    try:
-        company = data_store.get_company(company_id)
-        if not company:
-            events.append({"type": "done"})
-            return
-
-        name = company["name"]
-        stored_tax_id = company.get("tax_id", "")
-        push(f"步驟 1/2：查詢政府登記資料（{name}）…")
-
-        try:
-            if stored_tax_id:
-                enrichment = await gcis_client.fetch_company_data_by_tax_id(stored_tax_id)
-            else:
-                enrichment = await gcis_client.fetch_company_data(name)
-            matched_name: str = enrichment.pop("matched_name", "")
-            data_store.update_company(company_id, enrichment)
-            directors_count = len(enrichment.get("directors", []))
-            push_data({k: v for k, v in enrichment.items()})
-            push(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
-
-            # Correct stored name to API-returned short name (strip legal suffix)
-            if matched_name:
-                short = matched_name
-                for sfx in ("股份有限公司", "有限公司"):
-                    if short.endswith(sfx):
-                        short = short[:-len(sfx)]
-                        break
-                if short and short != name:
-                    data_store.update_company(company_id, {"name": short})
-                    push_data({"name": short})
-                    push(f"公司名稱更新為：{short}")
-        except Exception as e:
-            push(f"資料查詢失敗：{e}，跳過繼續")
-
-        push("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
-        company = data_store.get_company(company_id)
-        if not company:
-            events.append({"type": "done"})
-            return
-        try:
-            ctx = _gather_competitor_context(company_id, company.get("name", ""))
-            if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
-            result = await report_generator.generate_summary(
-                company, engine=engine, competitor_context=ctx or None
-            )
-            saved = _save_summary_result(company_id, result)
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
-            push("公司簡介已生成完成")
-            # Reverse link: if this company appears in other companies' competitor lists, fill company_id
-            _backlink_competitor(company_id, company["name"])
-        except Exception as e:
-            push(f"簡介生成失敗：{e}")
-
-        try:
-            from services.jk_nb_exporter import export_company_to_jk_nb
-            export_company_to_jk_nb(data_store.get_company(company_id) or {})
-        except Exception:
-            log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
-
-        events.append({"type": "done"})
-    finally:
-        _running.discard(company_id)
-
-
-async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
-    events: list[dict] = []
-    _deep_progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    try:
-        company = data_store.get_company(company_id)
-        if not company:
-            events.append({"type": "done"})
-            return
-
-        push("正在深度搜尋媒體報導與新聞（約 4–8 分鐘）…")
-        try:
-            ctx = _gather_competitor_context(company_id, company.get("name", ""))
-            if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
-            result = await report_generator.deep_enrich_summary(
-                company, engine=engine, competitor_context=ctx or None
-            )
-            # Mark that a deep enrich has completed, so the UI can warn before
-            # re-running it (distinct from last_updated, which any update touches).
-            deep_at = datetime.now(timezone.utc).isoformat()
-            saved = _save_summary_result(company_id, result, extra={"deep_enriched_at": deep_at})
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"], "deep_enriched_at": deep_at})
-            push("深度生成完成")
-        except Exception as e:
-            push(f"深度生成失敗：{e}")
-
-        try:
-            from services.jk_nb_exporter import export_company_to_jk_nb
-            export_company_to_jk_nb(data_store.get_company(company_id) or {})
-        except Exception:
-            log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
-
-        events.append({"type": "done"})
-    finally:
-        if not events or events[-1].get("type") != "done":
-            events.append({"type": "done"})
-        _deep_running.discard(company_id)

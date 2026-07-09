@@ -3,6 +3,18 @@
 SERVICE := taiwan-company.service
 LOG_FILE := $(CURDIR)/logs/app.log
 
+# 共用：等 service 起來後回報 PID（$(1)=動詞 啟動/重啟，$(2)=成功訊息附註，$(3)=額外提示行）
+define _report_pid
+	@sleep 2
+	@if systemctl --user is-active --quiet $(SERVICE); then \
+		PID=$$(systemctl --user show -p MainPID --value $(SERVICE)); \
+		echo "✅ 已$(1) (PID $$PID)$(2)"; $(3) \
+	else \
+		echo "❌ $(1)失敗，systemctl --user status $(SERVICE) 看詳情"; \
+		exit 1; \
+	fi
+endef
+
 # ── 一鍵安裝完整環境（系統套件 + Python + playwright + claude + systemd）────────
 # 新裝置首次部署用這個；它是冪等的，可重複執行。
 bootstrap:
@@ -35,15 +47,7 @@ start:
 # ── systemd 背景模式（生產建議用法）────────────────────────────────────────────
 start-bg:
 	@systemctl --user start $(SERVICE)
-	@sleep 2
-	@if systemctl --user is-active --quiet $(SERVICE); then \
-		PID=$$(systemctl --user show -p MainPID --value $(SERVICE)); \
-		echo "✅ 已啟動 (PID $$PID)，瀏覽 http://localhost:8003"; \
-		echo "   make logs 看日誌 / make stop 停止 / make restart 套新 code"; \
-	else \
-		echo "❌ 啟動失敗，systemctl --user status $(SERVICE) 看詳情"; \
-		exit 1; \
-	fi
+	$(call _report_pid,啟動,，瀏覽 http://localhost:8003,echo "   make logs 看日誌 / make stop 停止 / make restart 套新 code";)
 
 stop:
 	@if systemctl --user is-active --quiet $(SERVICE); then \
@@ -55,14 +59,7 @@ stop:
 # ── 套用新 code（commit 後執行）────────────────────────────────────────────────
 restart:
 	@systemctl --user restart $(SERVICE)
-	@sleep 2
-	@if systemctl --user is-active --quiet $(SERVICE); then \
-		PID=$$(systemctl --user show -p MainPID --value $(SERVICE)); \
-		echo "✅ 已重啟 (PID $$PID)"; \
-	else \
-		echo "❌ 重啟失敗，systemctl --user status $(SERVICE) 看詳情"; \
-		exit 1; \
-	fi
+	$(call _report_pid,重啟,,)
 
 logs:
 	@tail -n 80 -F $(LOG_FILE)

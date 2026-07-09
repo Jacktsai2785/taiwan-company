@@ -1,0 +1,1109 @@
+/* ════════════════════════════════════════
+   MODAL
+════════════════════════════════════════ */
+#modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(14,26,46,.65);
+  z-index: 100;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 40px 20px;
+}
+#modal-overlay.open { display: flex; }
+
+#modal {
+  background: var(--card);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 900px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(14,26,46,.28);
+}
+
+/* Sticky dark header */
+#modal-header {
+  background: var(--sb-bg);
+  padding: 22px 32px 18px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+#modal-header-controls {
+  position: absolute;
+  top: 14px; right: 16px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+#modal-close,
+#modal-watch-btn {
+  background: rgba(255,255,255,.12);
+  border: none;
+  font-size: 15px;
+  cursor: pointer;
+  color: rgba(255,255,255,.8);
+  border-radius: 50%;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s;
+  padding: 0;
+}
+#modal-close:hover { background: rgba(255,255,255,.22); color: #fff; }
+#modal-watch-btn:hover { background: rgba(255,200,0,.25); }
+#modal-watch-btn.is-watched { background: rgba(255,200,0,.22); }
+
+#modal-name {
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.3;
+  margin-bottom: 10px;
+}
+#modal-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+#modal-labels .label-chip {
+  background: rgba(255,255,255,.15);
+  color: rgba(255,255,255,.9);
+  border-color: rgba(255,255,255,.2);
+}
+
+/* Modal body */
+#modal-body { display: flex; align-items: stretch; }
+
+/* 左側書籤導覽欄 */
+#modal-nav {
+  width: 112px;
+  flex-shrink: 0;
+  padding: 16px 0;
+  background: #f4f7fb;
+  border-right: 1px solid var(--border);
+}
+.modal-bm {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 10px 15px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  user-select: none;
+}
+.modal-bm:hover { background: #eaf1f9; color: var(--text); }
+.modal-bm.on {
+  background: var(--card);
+  color: var(--accent);
+  font-weight: 700;
+  border-left-color: var(--accent);
+  box-shadow: 1px 0 0 var(--card);
+}
+.modal-bm.disabled { opacity: .38; cursor: default; pointer-events: none; }
+.modal-bm-ct {
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--muted);
+  border-radius: 99px; padding: 0 6px; margin-left: auto;
+}
+.modal-bm.on .modal-bm-ct { background: var(--accent); }
+
+#modal-content {
+  flex: 1;
+  min-width: 0;
+  padding: 22px 30px 28px;
+  min-height: 400px;
+  max-height: 76vh;
+  overflow-y: auto;
+  font-size: 13px;   /* consistent base across all pages (含專利提示) */
+}
+
+/* 公司簡介內部橫向分頁 */
+#summary-tabbar {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 14px;
+}
+.summary-tab {
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.summary-tab:hover { color: var(--text); }
+.summary-tab { display: inline-flex; align-items: center; gap: 4px; }
+.summary-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+.summary-tab-clip { display: inline-flex; align-items: center; color: #9aa6b2; }
+/* the tab IS the section heading — hide the redundant in-page section title */
+.summary-tab-page h3 { display: none; }
+.summary-tab-page > :first-child,
+.summary-tab-page > .summary-mat-section:first-child > :first-child { margin-top: 0; }
+
+/* 競業分析：四種類型 sub-tab bar（＋新增競業靠右） */
+.comp-type-bar {
+  display: flex; align-items: center; gap: 4px;
+  margin: 14px 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.comp-type-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.comp-type-tab:hover { color: var(--text); }
+.comp-type-tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+.comp-type-ct {
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--muted);
+  border-radius: 99px; padding: 0 6px;
+}
+.comp-type-tab.on .comp-type-ct { background: var(--accent); }
+.comp-bar-add { margin-left: auto; margin-bottom: 4px; }
+
+/* 競業類型 hover tooltip：顯示在頁籤下方，取代原本固定的「競業類型定義：…」那行 */
+.comp-type-tab[data-tip] { position: relative; }
+.comp-type-tab[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: 240px;
+  padding: 7px 10px;
+  background: #1e2d4d;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.55;
+  letter-spacing: .02em;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+  white-space: normal;
+  pointer-events: none;
+}
+.comp-type-tab[data-tip]:hover::before {
+  content: "";
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 12px;
+  z-index: 51;
+  border: 6px solid transparent;
+  border-bottom-color: #1e2d4d;
+  pointer-events: none;
+}
+
+.comp-add-only { margin: 14px 0 10px; text-align: right; }
+
+/* 手動新增競業 */
+.add-comp-wrap { margin: 0 0 10px; }
+.add-comp-btn {
+  font-size: 12.5px; font-weight: 600; color: var(--accent);
+  border: 1px dashed var(--accent); border-radius: 8px; background: #fff;
+  padding: 6px 14px; cursor: pointer;
+}
+.add-comp-btn:hover { background: var(--accent-light); }
+.add-comp-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.add-comp-name {
+  flex: 1; min-width: 160px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px;
+}
+.add-comp-name:focus { border-color: var(--accent); outline: none; }
+.add-comp-type {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; background: #fff; cursor: pointer;
+}
+.add-comp-submit {
+  font-size: 12.5px; font-weight: 700; color: #fff; background: var(--accent);
+  border: none; border-radius: 6px; padding: 8px 15px; cursor: pointer;
+}
+.add-comp-submit:hover { background: #255d90; }
+.add-comp-submit:disabled { opacity: .55; cursor: not-allowed; }
+.add-comp-status { font-size: 12px; }
+.add-comp-status.info { color: var(--accent); }
+.add-comp-status.err { color: #e05a5a; }
+.dots-anim span { animation: mat-dot 1.2s ease-in-out infinite; opacity: .2; }
+.dots-anim span:nth-child(2) { animation-delay: .2s; }
+.dots-anim span:nth-child(3) { animation-delay: .4s; }
+.modal-section { margin-bottom: 22px; }
+.modal-section h4 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  color: var(--accent);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent-light);
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 5px 12px;
+  font-size: 13px;
+}
+.info-label { color: var(--muted); }
+.info-value { font-weight: 500; }
+
+/* Patent table */
+.patent-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.patent-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: var(--accent-light);
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom: 2px solid #c7d9ee;
+}
+.patent-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.patent-table tr:nth-child(even) td { background: #f7fafd; }
+.patent-table tr:hover td { background: var(--accent-light); }
+.patent-table .patent-no        { width: 80px; font-family: monospace; font-size: 11px; white-space: nowrap; }
+.patent-table .patent-date      { width: 76px; white-space: nowrap; color: var(--muted); }
+.patent-table .patent-status    { width: 48px; text-align: center; }
+.patent-table .patent-title     { width: 160px; }
+.patent-table .patent-inventors { width: 100px; font-size: 11px; line-height: 1.5; }
+.patent-table .inv-applicant    { color: #4f46e5; display: block; }
+.patent-table .inv-inventor     { color: var(--muted); display: block; }
+.patent-table .patent-brief     { color: #444; line-height: 1.5; }
+.patent-table .status-granted   { color: #16a34a; font-weight: 600; }
+.brief-toggle {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.patent-section-h4 { cursor: pointer; user-select: none; }
+.patent-section-h4:hover { color: var(--accent); }
+.collapsible-h4 { cursor: pointer; user-select: none; }
+.collapsible-h4:hover { color: var(--accent); }
+.brief-toggle:hover { background: var(--accent-light); }
+
+/* ── 專利簡要說明 Modal ── */
+#patent-brief-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 3000;
+  align-items: center;
+  justify-content: center;
+}
+#patent-brief-overlay.open { display: flex; }
+#patent-brief-dialog {
+  background: var(--surface);
+  border-radius: 12px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 80vh;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  display: flex;
+  flex-direction: column;
+}
+#patent-brief-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border);
+}
+#patent-brief-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  margin-right: 12px;
+}
+#patent-brief-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+#patent-brief-close:hover { background: rgba(0,0,0,.08); color: var(--text); }
+#patent-brief-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+#patent-brief-text { font-size: 14px; line-height: 1.9; color: var(--text); }
+#patent-brief-text p { margin: 0 0 12px; }
+#patent-brief-text p:last-child { margin-bottom: 0; }
+#patent-brief-text h4 {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin: 18px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+#patent-brief-text h4:first-child { margin-top: 0; }
+.patent-claim-item {
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  margin: 0 0 10px !important;
+  font-size: 13px;
+  color: #555;
+}
+.patent-ref-text { font-size: 12px; color: var(--muted); word-break: break-all; }
+
+.director-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.director-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: var(--accent-light);
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom: 2px solid #c7d9ee;
+}
+.director-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.director-table tr:nth-child(even) td { background: #f7fafd; }
+.director-table tr:hover td { background: var(--accent-light); }
+.director-total-row td {
+  font-weight: 700;
+  background: var(--accent-light) !important;
+  border-top: 2px solid #c7d9ee;
+  color: var(--accent);
+}
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent-light);
+}
+.section-header-row h4 {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.gcis-refresh-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gcis-refresh-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.gcis-refresh-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── 無票面金額 badge ── */
+.no-par-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  font-weight: 500;
+}
+
+/* ── fetch-par-btn（每股金額「抓取」小按鈕）── */
+.fetch-par-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.fetch-par-btn:hover { background: var(--accent-light); border-color: var(--accent); }
+
+/* ── FindBiz dialog ── */
+/* ── 自動抓取 Cloudflare 確認橫幅 ── */
+#auto-fetch-cf-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 9999;
+  background: #1d4ed8;
+  color: #fff;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+#auto-fetch-cf-banner.hidden { display: none; }
+#auto-fetch-cf-msg { flex: 1; }
+.auto-fetch-cf-actions { display: flex; gap: 8px; }
+.auto-fetch-cf-actions .btn-ghost { color: rgba(255,255,255,.8); border-color: rgba(255,255,255,.4); }
+.auto-fetch-cf-actions .btn-ghost:hover { background: rgba(255,255,255,.15); }
+
+#findbiz-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 2000;
+  align-items: center;
+  justify-content: center;
+}
+#findbiz-overlay.open { display: flex; }
+#findbiz-dialog {
+  background: var(--surface);
+  border-radius: 12px;
+  width: 480px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  display: flex;
+  flex-direction: column;
+}
+#findbiz-header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+#findbiz-header h3 { margin: 0 0 4px; font-size: 16px; }
+#findbiz-subtitle  { margin: 0; font-size: 12px; color: var(--muted); }
+#findbiz-body { padding: 20px 24px; }
+#findbiz-steps { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+.findbiz-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.findbiz-step-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.findbiz-step-status { margin-left: auto; font-size: 14px; min-width: 18px; text-align: right; }
+#findbiz-status-msg {
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 20px;
+  padding-top: 4px;
+}
+#findbiz-footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.gen-dropdown-wrap {
+  position: relative;
+}
+
+.gen-dropdown-toggle {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all .12s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.gen-dropdown-toggle:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.gen-dropdown-toggle.open { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.gen-dropdown-toggle:disabled { opacity: .4; cursor: not-allowed; }
+
+.gen-caret {
+  font-size: 10px;
+  display: inline-block;
+  transition: transform .15s;
+}
+.gen-dropdown-toggle.open .gen-caret { transform: rotate(180deg); }
+
+.gen-dropdown-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.10);
+  min-width: 200px;
+  padding: 5px;
+  z-index: 9999;
+}
+.gen-dropdown-menu.open { display: block; }
+
+.gen-dropdown-menu button {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+  gap: 8px;
+  transition: background .1s;
+}
+.gen-dropdown-menu button:hover { background: var(--accent-light); color: var(--accent); }
+
+.gen-hint {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: auto;
+}
+.gen-dropdown-menu button:hover .gen-hint { color: var(--accent-hi); }
+
+#modal-summary { font-size: 13px; line-height: 1.85; color: var(--text); }
+
+/* ── Detail modal: relationship-graph entry button ── */
+#modal-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+#modal-open-rel-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-light);
+  color: var(--accent);
+  cursor: pointer;
+  transition: all .12s;
+}
+#modal-open-rel-btn:hover { background: var(--accent); color: #fff; }
+
+.export-dropdown-wrap {
+  position: relative;
+}
+.export-dropdown-toggle {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all .12s;
+  white-space: nowrap;
+}
+.export-dropdown-toggle:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.export-dropdown-toggle.open  { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+
+.export-dropdown-menu {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.10);
+  min-width: 150px;
+  padding: 5px;
+  z-index: 9999;
+}
+.export-dropdown-menu.open { display: block; }
+.export-dropdown-menu button {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  color: var(--text);
+  gap: 8px;
+  transition: background .1s;
+}
+.export-dropdown-menu button:hover { background: var(--accent-light); color: var(--accent); }
+
+/* ── Relationship Graph Modal (independent) ── */
+#rel-graph-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .6);
+  z-index: 110;        /* slightly above detail modal (100) */
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+}
+#rel-graph-overlay.open { display: flex; }
+#rel-graph-dialog {
+  background: #fff;
+  border-radius: 12px;
+  width: 90vw;
+  height: 90vh;
+  max-width: 1400px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .35);
+  overflow: hidden;
+}
+
+/* ── Side-by-side: both modals open ── */
+body.detail-open.rel-open #modal-overlay,
+body.detail-open.rel-open #rel-graph-overlay {
+  background: rgba(15, 23, 42, .55);  /* one shared backdrop, not stacked */
+  pointer-events: none;               /* let the other side receive clicks too */
+}
+body.detail-open.rel-open #rel-graph-overlay { background: transparent; }
+body.detail-open.rel-open #modal,
+body.detail-open.rel-open #rel-graph-dialog {
+  pointer-events: auto;
+}
+body.detail-open.rel-open #modal-overlay {
+  justify-content: flex-start;
+  padding-left: 20px;
+  padding-right: 0;
+}
+body.detail-open.rel-open #modal {
+  max-width: calc(42vw - 30px);
+  min-width: 380px;
+}
+body.detail-open.rel-open #rel-graph-overlay {
+  justify-content: flex-end;
+  padding-left: 0;
+  padding-right: 20px;
+}
+body.detail-open.rel-open #rel-graph-dialog {
+  width: calc(58vw - 30px);
+  max-width: none;
+  height: calc(100vh - 80px);
+}
+/* Keep "from-graph" confirm dialog above both panels */
+body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
+#rel-graph-header {
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  background: linear-gradient(180deg, #fafbfc, #fff);
+}
+#rel-graph-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--muted);
+}
+#rel-graph-close:hover { color: var(--text); }
+#rel-graph-title { font-size: 18px; font-weight: 700; color: var(--text); margin-right: 80px; }
+#rel-graph-subtitle { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+/* ── rel-graph Tab 列 ── */
+#rel-graph-tabs {
+  display: flex;
+  gap: 0;
+  margin-top: 10px;
+  border-bottom: 2px solid var(--border);
+}
+.rel-tab {
+  padding: 5px 16px 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.rel-tab:hover:not(.active) { color: var(--text); }
+.rel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+#rel-graph-actions { margin-top: 8px; display: flex; gap: 8px; }
+#rel-graph-rebuild-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all .12s;
+}
+#rel-graph-rebuild-btn:hover:not(:disabled) {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-light);
+}
+#rel-graph-rebuild-btn:disabled { cursor: not-allowed; opacity: .6; }
+
+#rel-graph-body {
+  padding: 16px 24px 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#rel-graph-status { font-size: 12px; color: var(--muted); margin-bottom: 8px; min-height: 16px; }
+.rel-progress { color: #1d4ed8; }
+.rel-error    { color: #b91c1c; }
+.rel-empty    { color: var(--muted); padding: 10px 0; }
+#rel-graph-canvas {
+  flex: 1;
+  min-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fafbfc, #f3f4f6);
+}
+#rel-graph-legend {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+#rel-graph-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.legend-self          { background: #1d4ed8; box-shadow: 0 0 0 2px #fbbf24; }
+.legend-parent        { background: #7c3aed; }
+.legend-anchor-person { background: #ea580c; border-radius: 50%; }
+.legend-sibling-in    { background: #059669; }
+.legend-sibling-out   { background: #fff; border: 1px dashed #94a3b8; }
+.legend-comp-in       { background: #d97706; clip-path: polygon(50% 0%,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%); }
+.legend-comp-out      { background: #fff; border: 1px dashed #d97706; clip-path: polygon(50% 0%,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%); }
+.legend-comp-edge     { background: none; border: none; box-shadow: none;
+                        width: 22px; height: 3px; border-top: 2px dashed #d97706; border-radius: 0; }
+
+#rel-graph-legend-competitor {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  font-size: 11.5px; color: var(--muted); margin-top: 10px;
+}
+
+/* Director table anchor controls */
+.director-hint {
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.anchor-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  transition: all .15s;
+}
+.anchor-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.anchor-btn.anchor-active {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1d4ed8;
+  font-weight: 700;
+}
+.director-row-active td { background: #fef3c7 !important; }
+.collapse-parent-rows-btn {
+  float: right;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  color: var(--muted);
+  cursor: pointer;
+  letter-spacing: .02em;
+  transition: all .15s;
+  text-transform: none;
+}
+.collapse-parent-rows-btn:hover { border-color: var(--accent); color: var(--accent); }
+.anchor-auto-tag {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 9px;
+  color: #94a3b8;
+  vertical-align: middle;
+}
+/* ── 董監法人母公司溯源 ── */
+.director-table tr.director-parent-row td {
+  padding: 5px 10px 6px 24px;
+  background: #f0fdf4;
+  border-bottom: 1px solid #d1fae5;
+  font-size: 12px;
+}
+.director-parent-cell { color: #166534; }
+.director-parent-cell.no-parent { color: var(--muted); font-style: italic; }
+.parent-company-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  border-radius: 99px;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 2px 3px;
+}
+.parent-company-badge small {
+  font-weight: 400;
+  color: #4ade80;
+  font-size: 11px;
+}
+
+/* ── 大股東板塊 ── */
+.hidden-holder-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 100%;
+}
+.hidden-holder-alert .alert-icon { font-size: 14px; flex-shrink: 0; }
+.hidden-holder-alert p { margin: 0; }
+.investee-holders-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+.investee-holders-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: var(--accent-light);
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom: 2px solid #c7d9ee;
+}
+.investee-holders-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.investee-holders-table tr:nth-child(even) td { background: #f7fafd; }
+.investee-holders-table tr:hover td { background: var(--accent-light); }
+.holder-category-subsidiary { color: #16a34a; font-weight: 600; }
+.holder-category-associate  { color: #d97706; font-weight: 600; }
+.no-holders-hint { color: var(--muted); font-size: 13px; font-style: italic; margin: 8px 0; }
+.holders-found-hint { font-size: 13px; margin: 10px 0 4px; }
+
+/* ── Add From Graph Dialog ── */
+#from-graph-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#from-graph-overlay.open { display: flex; }
+#from-graph-dialog {
+  background: #fff;
+  border-radius: 10px;
+  width: 480px;
+  max-width: 90vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .25);
+}
+#from-graph-header { padding: 20px 24px 12px; border-bottom: 1px solid var(--border); }
+#from-graph-header h3 { margin: 0 0 6px; font-size: 16px; }
+#from-graph-header p { margin: 0; font-size: 12px; color: var(--muted); }
+#from-graph-body { padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+.from-graph-row { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.from-graph-row span { color: var(--muted); }
+.from-graph-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.from-graph-field label { color: var(--muted); font-weight: 600; }
+.from-graph-field select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 13px;
+}
+#from-graph-footer {
+  padding: 12px 24px 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* collapsible sections */
+#modal-summary h3.collapsible-h3 {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#modal-summary h3.collapsible-h3::after {
+  content: "›";
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform .18s;
+  margin-left: 6px;
+  line-height: 1;
+}
+#modal-summary h3.collapsible-h3.open::after {
+  transform: rotate(-90deg);
+}
+.collapsible-body {
+  display: none;
+}
+.collapsible-body.open {
+  display: block;
+}
+
+#modal-summary h3 {
+  font-size: 14px; font-weight: 700;
+  line-height: 1.4;
+  color: var(--text);
+  margin: 18px 0 7px;
+  padding-left: 9px;
+  border-left: 3px solid var(--accent);
+}
+#modal-summary h4 { font-size: 13px; font-weight: 700; color: var(--text); margin: 12px 0 3px; }
+#modal-summary p { margin: 0 0 8px; }
+#modal-summary ul,
+#modal-summary ol { margin: 4px 0 8px 0; padding-left: 18px; }
+#modal-summary li { margin-bottom: 4px; }
+#modal-summary hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+#modal-summary strong { color: var(--text); font-weight: 700; }
+.summary-placeholder { color: var(--muted); font-style: italic; }
+
+.summary-table {
+  width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 12px 0 18px;
+}
+.summary-table th {
+  background: var(--accent-light);
+  padding: 9px 12px;
+  text-align: left;
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom: 2px solid #c7d9ee;   /* only a header underline, no cell grid */
+  white-space: nowrap;
+}
+.summary-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);   /* horizontal separators only — cleaner */
+  vertical-align: top;
+  line-height: 1.65;
+}
+.summary-table tr:nth-child(even) td { background: #f9fbfd; }
+.summary-table tr:first-child td { background: #eef4fb; }   /* 本案 row, subtle */
+
+/* 競業表格欄寬：把空間留給文字欄，狀態/類型欄收窄不換行 */
+.competitor-table td:nth-child(1), .competitor-table th:nth-child(1) { width: 18%; }   /* 公司名稱 */
+.competitor-table td:nth-child(2), .competitor-table th:nth-child(2) { width: 24%; }   /* 核心業務 */
+.competitor-table td:nth-child(4), .competitor-table th:nth-child(4),
+.competitor-table td:nth-child(5), .competitor-table th:nth-child(5) { white-space: nowrap; width: 1%; }  /* 上市狀態 / 競業類型 */
+
+/* 多家公司各自一個 chip，垂直堆疊、不在公司名與代號間斷行 */
+.comp-name-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
+/* ── 競業表格：可點擊公司名稱 ── */
+.competitor-chip {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--accent);
+  border-bottom: 1px dashed var(--accent);
+  padding: 1px 2px;
+  border-radius: 3px;
+  transition: background .12s, border-style .12s;
+}
+.competitor-chip::after {
+  content: "＋";
+  font-size: 10px;
+  opacity: .6;
+  font-weight: 700;
+}
+.competitor-chip:hover { background: var(--accent-light); border-bottom-style: solid; }
+.competitor-chip--added {
+  color: #16a34a;
+  border-bottom-color: #16a34a;
+}
+.competitor-chip--added::after { content: "✓"; }
+.competitor-chip--added:hover { background: #f0fdf4; border-bottom-style: solid; }
+
+/* ── 競業列刪除鈕：平時隱藏，hover 該列才浮現 ── */
+.competitor-table th.comp-del-col,
+.competitor-table td.comp-del-col {
+  width: 28px;
+  padding: 0 4px;
+  text-align: center;
+}
+.comp-del-btn {
+  opacity: 0;
+  width: 20px; height: 20px;
+  border: none; background: none;
+  color: var(--muted);
+  font-size: 13px; line-height: 1;
+  cursor: pointer; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: opacity .12s, color .12s, background .12s;
+  padding: 0;
+}
+.competitor-table tbody tr:hover .comp-del-btn { opacity: 1; }
+.comp-del-btn:hover { color: #dc2626; background: #fee2e2; }
+.comp-del-btn:disabled { opacity: .4; cursor: default; }
+
+

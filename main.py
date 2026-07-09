@@ -21,7 +21,7 @@ try:
 except ImportError:
     pass
 
-from routers import companies, config, upload, call_memo, industries, findbiz, news_blacklist, industry_map, materials
+from routers import companies, competitors, enrichment, config, upload, call_memo, industries, findbiz, news_blacklist, industry_map, materials
 
 log = logging.getLogger(__name__)
 TAIWAN_TZ = timezone(timedelta(hours=8))
@@ -90,6 +90,8 @@ app.add_middleware(
 
 app.include_router(upload.router)
 app.include_router(companies.router)
+app.include_router(competitors.router)
+app.include_router(enrichment.router)
 app.include_router(config.router)
 app.include_router(call_memo.router)
 app.include_router(industries.router)

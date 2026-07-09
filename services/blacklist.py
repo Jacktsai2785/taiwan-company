@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from services import data_store
+
 log = logging.getLogger(__name__)
 
 BLACKLIST_PATH = Path(__file__).parent.parent / "data" / "blacklist.json"
@@ -25,20 +27,12 @@ _EMPTY: dict = {
 
 
 def _load() -> dict:
-    if BLACKLIST_PATH.exists():
-        try:
-            with open(BLACKLIST_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
     import copy
-    return copy.deepcopy(_EMPTY)
+    return data_store.read_json(BLACKLIST_PATH, copy.deepcopy(_EMPTY))
 
 
 def _save(bl: dict) -> None:
-    BLACKLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(BLACKLIST_PATH, "w", encoding="utf-8") as f:
-        json.dump(bl, f, ensure_ascii=False, indent=2)
+    data_store.write_json(BLACKLIST_PATH, bl)
 
 
 def _extract_domain(url: str) -> str:

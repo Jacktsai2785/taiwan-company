@@ -1,0 +1,43 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* Layout */
+  --sidebar-w: 200px;
+
+  /* Dark sidebar */
+  --sb-bg:             #1e2d4d;
+  --sb-text:           #b8cfe0;
+  --sb-muted:          #6a8aa8;
+  --sb-hover:          rgba(255,255,255,.07);
+  --sb-active-bg:      rgba(91,155,213,.15);
+  --sb-active-border:  #5b9bd5;
+  --sb-border:         rgba(255,255,255,.07);
+
+  /* Main palette */
+  --accent:       #2e6da8;
+  --accent-hi:    #5b9bd5;
+  --accent-light: #edf4fb;
+  --danger:       #c0392b;
+  --surface:      #f0f4f8;
+  --card:         #ffffff;
+  --border:       #d1dae6;
+  --text:         #1a2537;
+  --muted:        #7990a8;
+  --radius:       8px;
+  --shadow:       0 1px 3px rgba(26,44,77,.08);
+  --shadow-md:    0 4px 20px rgba(26,44,77,.14);
+}
+
+body {
+  font-family: "Calibri", "Microsoft JhengHei", "微軟正黑體", sans-serif;
+  background: var(--surface);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Layout ── */
+#app { display: flex; flex: 1; overflow: hidden; }
+

@@ -200,21 +200,6 @@ def _inline_sup_segments(text: str) -> list[tuple[str, str | None]]:
     return segs
 
 
-def _wrap_smart(text: str, size: float, max_w: float) -> list[str]:
-    """Width-aware line wrap: CJK chars ≈ 1.0× size, ASCII ≈ 0.55× size."""
-    if not text:
-        return [""]
-    lines, cur, cur_w = [], "", 0.0
-    for ch in text:
-        ch_w = size * (1.0 if ord(ch) > 0x3000 else 0.55)
-        if cur_w + ch_w > max_w and cur:
-            lines.append(cur)
-            cur, cur_w = "", 0.0
-        cur += ch
-        cur_w += ch_w
-    return (lines + [cur]) if cur else (lines or [""])
-
-
 def _fmt_capital(n) -> str:
     return f"NT$ {int(n):,} 元" if n else "—"
 

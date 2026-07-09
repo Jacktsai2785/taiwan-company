@@ -469,53 +469,6 @@ async def reverify_statuses(tax_ids: list[str]) -> dict[str, dict]:
     return out
 
 
-async def is_company_active(name: str) -> bool | None:
-    """Quick check: is this company active?
-    Returns True (active), False (dissolved), or None (unknown / not found in Ronny).
-    Only returns False when we have positive evidence of dissolution.
-    """
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        try:
-            resp = await client.get(RONNY_SEARCH, params={"q": name}, timeout=10.0)
-            resp.raise_for_status()
-            hits = resp.json().get("data", [])
-        except Exception:
-            return None
-
-    for h in hits:
-        h_name = h.get("公司名稱", "")
-        if isinstance(h_name, list):
-            h_name = h_name[0] if h_name else ""
-        if h_name != name:
-            continue
-        status = h.get("公司狀況", "")
-        if status in _ACTIVE_STATUSES:
-            return True
-        if status in _DISSOLVED_STATUSES:
-            return False
-        # Unknown status in Ronny → ask GCIS App1
-        tax_id = h.get("統一編號", "")
-        if tax_id:
-            try:
-                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as gc:
-                    resp2 = await gc.get(
-                        GCIS_APP1,
-                        params={"$format": "json",
-                                "$filter": f"Business_Accounting_NO eq '{tax_id}'",
-                                "$skip": "0", "$top": "1"},
-                    )
-                    resp2.raise_for_status()
-                    rows = resp2.json()
-                    gcis_st = rows[0].get("Company_Status_Desc", "") if rows else ""
-                    if gcis_st and any(kw in gcis_st for kw in _DISSOLVED_KEYWORDS):
-                        return False
-            except Exception:
-                pass
-        return True  # found in Ronny, status doesn't say dissolved
-
-    return None  # not found — can't confirm dissolved, pass through
-
-
 async def search_company_matches(name: str) -> list[dict]:
     """Return candidate matches for name disambiguation.
 
@@ -740,6 +693,57 @@ async def search_company_matches(name: str) -> list[dict]:
     return {"matches": result, "rejected": rejected, "not_found": not_found, "suggestions": suggestions}
 
 
+async def _crossref_gcis_and_finalize(
+    client: httpx.AsyncClient, result: dict[str, Any], tax_id: str, *,
+    listing_name: str, matched_name: str,
+) -> None:
+    """Shared tail of fetch_company_data / fetch_company_data_by_tax_id: cross-reference
+    with GCIS App1 (authoritative — overrides Ronny), derive total_shares from
+    capital/par_value when still missing, resolve listing_status + is_corp, recompute
+    director ratios for 有限公司 when total_shares is unavailable, and annotate directors'
+    listing status. Mutates `result` in place.
+
+    `listing_name` / `matched_name` are passed separately because the two callers
+    historically resolve them differently: fetch_company_data_by_tax_id already has a
+    single confirmed name (matched_name from /api/show), while fetch_company_data (a
+    name-based search) resolves listing_status against the caller's original search
+    `name`, but computes is_corp from whatever `matched_name` Ronny's search returned."""
+    if tax_id:
+        gcis = await _fetch_gcis_by_tax_id(client, tax_id)
+        for k in ("authorized_capital", "capital", "setup_date", "last_change_date",
+                  "register_org", "representative", "address"):
+            v = gcis.get(k)
+            if v:  # non-empty and non-zero overrides Ronny
+                result[k] = v
+        # Derive total_shares from GCIS Paid_In_Capital / Ronny par_value when missing.
+        # Skip for 無票面金額 companies since par_value is not applicable.
+        if (not result.get("total_shares") and result.get("par_value")
+                and gcis.get("capital") and not result.get("no_par_value")):
+            derived = gcis["capital"] // result["par_value"]
+            if derived > 0:
+                result["total_shares"] = derived
+                for d in result.get("directors", []):
+                    d["ratio"] = round((d.get("shares") or 0) / derived, 6)
+
+    result["listing_status"] = _resolve_listing_status(tax_id, listing_name)
+
+    # Persist is_corp so the frontend can show the 🔍 fetch button correctly
+    # even when the stored company name is abbreviated.
+    is_corp = matched_name.endswith("股份有限公司")
+    result["is_corp"] = is_corp
+
+    # Recalculate director ratios when total_shares is unavailable.
+    # For 有限公司: 出資額 = NTD → divide by 實收資本額 (capital).
+    # For 股份有限公司: 出資額 = share count → cannot divide by NTD; leave ratio as 0.
+    if result.get("total_shares", 0) == 0 and not is_corp:
+        base = result.get("capital", 0) or result.get("authorized_capital", 0)
+        if base > 0:
+            for d in result.get("directors", []):
+                d["ratio"] = round((d.get("shares") or 0) / base, 6)
+
+    _annotate_directors_listing(result.get("directors", []))
+
+
 async def fetch_company_data_by_tax_id(tax_id: str) -> dict[str, Any]:
     """Fetch enrichment data using tax_id directly — no name-based search, no ambiguity."""
     result: dict[str, Any] = {
@@ -791,30 +795,11 @@ async def fetch_company_data_by_tax_id(tax_id: str) -> dict[str, Any]:
                     for d in show_data.get("董監事名單", [])
                 ],
             })
-        gcis = await _fetch_gcis_by_tax_id(client, tax_id)
-        for k in ("authorized_capital", "capital", "setup_date", "last_change_date",
-                  "register_org", "representative", "address"):
-            v = gcis.get(k)
-            if v:
-                result[k] = v
-        if (not result.get("total_shares") and result.get("par_value")
-                and gcis.get("capital") and not result.get("no_par_value")):
-            derived = gcis["capital"] // result["par_value"]
-            if derived > 0:
-                result["total_shares"] = derived
-                for d in result["directors"]:
-                    d["ratio"] = round((d.get("shares") or 0) / derived, 6)
-        result["listing_status"] = _resolve_listing_status(tax_id, matched_name)
-        is_corp = matched_name.endswith("股份有限公司")
-        result["is_corp"] = is_corp
-        if result.get("total_shares", 0) == 0 and not is_corp:
-            base = result.get("capital", 0) or result.get("authorized_capital", 0)
-            if base > 0:
-                for d in result["directors"]:
-                    d["ratio"] = round((d.get("shares") or 0) / base, 6)
         if matched_name:
             result["matched_name"] = matched_name
-        _annotate_directors_listing(result.get("directors", []))
+        await _crossref_gcis_and_finalize(
+            client, result, tax_id, listing_name=matched_name, matched_name=matched_name,
+        )
     return result
 
 
@@ -866,46 +851,11 @@ async def fetch_company_data(name: str) -> dict[str, Any]:
                     for d in result.get("directors", []):
                         d["ratio"] = round((d.get("shares") or 0) / total, 6)
 
-        # Cross-reference with GCIS App1. GCIS is authoritative: any non-empty GCIS value
-        # overrides Ronny (Ronny is used for speed; GCIS is the official source).
         tax_id = result.get("tax_id", "")
-        if tax_id:
-            gcis = await _fetch_gcis_by_tax_id(client, tax_id)
-            for k in ("authorized_capital", "capital", "setup_date",
-                      "last_change_date", "register_org", "representative", "address"):
-                v = gcis.get(k)
-                if v:  # non-empty and non-zero overrides Ronny
-                    result[k] = v
-
-            # Derive total_shares from GCIS Paid_In_Capital / Ronny par_value when missing
-            # Skip for 無票面金額 companies since par_value is not applicable.
-            if not result.get("total_shares") and result.get("par_value") and gcis.get("capital") and not result.get("no_par_value"):
-                derived = gcis["capital"] // result["par_value"]
-                if derived > 0:
-                    result["total_shares"] = derived
-                    for d in result.get("directors", []):
-                        d["ratio"] = round((d.get("shares") or 0) / derived, 6)
-
-        result["listing_status"] = _resolve_listing_status(tax_id, name)
-
-        # Persist is_corp so the frontend can show the 🔍 fetch button correctly
-        # even when the stored company name is abbreviated.
-        matched = result.get("matched_name", "")
-        result["is_corp"] = matched.endswith("股份有限公司")
-
-        # Recalculate director ratios when total_shares is unavailable.
-        # For 有限公司: 出資額 = NTD → divide by 實收資本額 (capital).
-        # For 股份有限公司: 出資額 = share count → cannot divide by NTD; leave ratio as 0.
-        if result.get("total_shares", 0) == 0:
-            is_corp = result["is_corp"]
-            if not is_corp:
-                base = result.get("capital", 0) or result.get("authorized_capital", 0)
-                if base > 0:
-                    for d in result.get("directors", []):
-                        shares = d.get("shares") or 0
-                        d["ratio"] = round(shares / base, 6)
-
-        _annotate_directors_listing(result.get("directors", []))
+        await _crossref_gcis_and_finalize(
+            client, result, tax_id,
+            listing_name=name, matched_name=result.get("matched_name", ""),
+        )
 
     return result
 

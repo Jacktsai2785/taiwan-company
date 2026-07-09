@@ -43,7 +43,7 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
 main.py              FastAPI 入口
 routers/             API 路由（companies, upload, config, call_memo）
 services/            業務邏輯（claude_client, gcis_client, data_store 等）
-static/              前端（index.html, app.js, style.css）
+static/              前端（index.html, app-*.js × 8, style-*.css × 8，依區塊拆檔）
 data/                執行時資料（不在 git 追蹤範圍）
   companies.json     公司資料
   config.json        產業別設定
@@ -85,7 +85,7 @@ data/                執行時資料（不在 git 追蹤範圍）
 
 - **不要加資料庫**。所有資料 JSON 落地。如果效能不夠，先想 indexing / cache，最後才考慮 DB。
 - **不要加認證**。本平台預設單人單機，CORS `*`。要加 auth 是大改動，請先討論。
-- **不要加前端框架**（React / Vue 之類）。`static/app.js` 是純 JS，刻意保持「打開就能改」。
+- **不要加前端框架**（React / Vue 之類）。前端是純 JS/CSS（依區塊拆成 `static/app-*.js` 8 檔、`static/style-*.css` 8 檔，classic script 直接用多個 `<script>`/`<link>` 載入，無建置工具），刻意保持「打開就能改」。
 - **不要在 service 層直接依賴外部 DB**。需要 MOPS 資料時，走 `mops_investee_client` 之類的 HTTP client，符合使用者「禁止直連 PostgreSQL」全域指令。
 - **不要加回雲端 API Key 機制**。平台定案純地端，全部走本機引擎（claude / codex / gemini CLI、ollama 端點），不收 API Key、不呼叫雲端 API。
 - **不要刪 `companies.json` 的欄位**（或重新命名）。前端 + AI 抽取流程都依賴現有 schema，加欄位 OK，刪欄位需先檢查所有讀取點。
@@ -97,8 +97,8 @@ data/                執行時資料（不在 git 追蹤範圍）
 | 加新的 AI 引擎 | `services/claude_client.py`（加 `_ask_xxx` + `_ask_text`/`ask*` dispatch 分支 + `KNOWN_ENGINES`） |
 | 加新的公司資料來源 | `services/gcis_client.py` 或新開一個 client |
 | 改 call memo 範本 | `data/call_memo_template.docx`（DOCX 直接改） |
-| 加新的 enrich 步驟 | `routers/companies.py` 的 `_enrich_company` / `_deep_enrich_company` |
-| 改前端 | `static/app.js`（單檔較大，用 Ctrl+F） |
+| 加新的 enrich 步驟 | `routers/enrichment.py` 的 `_enrich_company` / `_deep_enrich_company` |
+| 改前端 | `static/app-*.js`（依區塊拆成 8 檔，用 Ctrl+F 全域搜尋定位在哪個檔） |
 | 加新產業同義詞 | UI 設定面板 → 走 `industry_keywords.json` 流程；hardcoded 在 `services/news_fetcher.py` `_INDUSTRY_SYNONYMS` |
 
 > 改任何 `*.py` 後，若是 systemd service 在跑，要 `systemctl --user restart taiwan-company` 才會生效（沒有 `--reload`）。詳見下方 systemd 區段。
@@ -156,10 +156,10 @@ systemctl --user restart taiwan-company
 - **撞用量上限自動等待**：本機 Claude CLI 是 5 小時滾動窗口、每窗口約 20 間；偵測到上限訊息就每 15 分鐘重試，額度回血自動接續。
 - **排除規則**：跳過貼了「潛在案源」標籤、有套用補充資料（`materials_*`）、在 skip-list（連續失敗 3 次）的公司。`PRIORITY_LABELS` / `PRIORITY_ONLY` 可調優先或只跑優先。
 - **flock**：同時只允許一個實例（systemd 重啟 / 手動執行不疊跑）。
-- **service**：`Restart=on-failure`（crash 5 分鐘後重起）、`WantedBy=default.target`（開機自啟，靠 `Linger=yes`）。跑完 exit 0 不重啟。
+- **service**：`Restart=on-failure`（crash 5 分鐘後重起）、`WantedBy=default.target`（開機自啟，靠 `Linger=yes`）。跑完 exit 0 不重啟。由 `bootstrap.sh` 從 `deploy/taiwan-regen.service.template` 安裝（`enable` 但不 `--now`，避免新裝置一裝完就自動燒 AI 額度；要跑就手動 `systemctl --user start taiwan-regen`）。
 
 ```bash
-# 控制（範本：scripts/taiwan-regen.service → ~/.config/systemd/user/）
+# 控制
 systemctl --user status taiwan-regen
 systemctl --user stop taiwan-regen      # 暫停（把額度讓給其他事；勿用 pkill，會被 service 自動重起）
 systemctl --user start taiwan-regen     # 續跑

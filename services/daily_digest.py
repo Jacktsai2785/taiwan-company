@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from services import data_store
 from services.claude_client import ask
 from services.news_fetcher import (
     cache_date,
@@ -29,27 +30,19 @@ MIN_DAYS_FOR_TRENDS = 1   # bootstrap fetches 7-day RSS when cache is sparse
 # ── Cache I/O ──────────────────────────────────────────────────────────────────
 
 def _load() -> dict:
-    try:
-        return json.loads(_DIGEST_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return data_store.read_json(_DIGEST_PATH, {})
 
 
 def _save(cache: dict) -> None:
-    _DIGEST_PATH.parent.mkdir(exist_ok=True)
-    _DIGEST_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    data_store.write_json(_DIGEST_PATH, cache)
 
 
 def _load_trends() -> dict:
-    try:
-        return json.loads(_TRENDS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return data_store.read_json(_TRENDS_PATH, {})
 
 
 def _save_trends(data: dict) -> None:
-    _TRENDS_PATH.parent.mkdir(exist_ok=True)
-    _TRENDS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    data_store.write_json(_TRENDS_PATH, data)
 
 
 def _prune(cache: dict, industry: str) -> None:

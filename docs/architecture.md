@@ -31,8 +31,8 @@ source_repo: ~/taiwan-company
 
 ## 前端（純靜態，無框架）
 
-- `static/index.html` + `static/app.js` + `static/style.css`，由 `main.py` 的 `/static` 與 `/` 直接服務。
-- **無前端框架**（沒有 React / Vue），原生 JS。`app.js` 約 131 KB，所有互動都在裡面。
+- `static/index.html` + `static/app-*.js`（8 檔）+ `static/style-*.css`（8 檔），由 `main.py` 的 `/static` 與 `/` 直接服務。
+- **無前端框架**（沒有 React / Vue），原生 JS。原本單一 ~131 KB 的 `app.js` 依區塊拆成 8 個 classic `<script>`（`app-core.js` 放共用全域 state/api()/openOverlay 等，`app-render-util.js` 結尾呼叫 `boot()`），純檔案拆分、載入順序即原始執行順序，無建置工具、無 module 系統。
 - 唯一 CDN 依賴：`cytoscape@3.30.2`（畫母子公司關係圖）。
 - AI 引擎選擇靠 `localStorage.ai_engine`，每次請求帶 `X-AI-Engine` header（SSE 走 `?engine=`，見 `services/ai_deps.py`）。無 API Key。
 

@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣產業商情平台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234f46e5'/%3E%3Ctext x='32' y='44' font-size='40' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3E台%3C/text%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/style.css?v=69" />
+  <!-- style.css 已依區塊拆成以下 8 個檔案（純檔案拆分，無內容變更）；順序不可調換 -->
+  <link rel="stylesheet" href="/static/style-core.css?v=77" />
+  <link rel="stylesheet" href="/static/style-sidebar.css?v=77" />
+  <link rel="stylesheet" href="/static/style-side-panel.css?v=77" />
+  <link rel="stylesheet" href="/static/style-toolbar-grid.css?v=77" />
+  <link rel="stylesheet" href="/static/style-modal.css?v=77" />
+  <link rel="stylesheet" href="/static/style-dialogs.css?v=77" />
+  <link rel="stylesheet" href="/static/style-industry-suggest.css?v=77" />
+  <link rel="stylesheet" href="/static/style-industry-map-settings.css?v=77" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
@@ -243,18 +251,6 @@
       <div id="industry-map-title">產業地圖</div>
       <div id="industry-map-subtitle"></div>
       <div id="industry-map-controls">
-        <div class="im-breadth-group" title="控制 AI 規劃地圖的密度：主分類數 × 子類別數 × 每子類公司上限。公司多時用『廣』才不會被砍掉。">
-          <span class="im-control-label">廣度 <span class="im-info-icon">ⓘ</span></span>
-          <button class="im-breadth-btn" data-breadth="narrow"
-            onclick="setIndustryMapBreadth('narrow')"
-            title="窄｜3 個主分類 × 每分類最多 2 個子類別 × 每子類最多 6 家公司&#10;適合：快速概觀、產業重點玩家">窄</button>
-          <button class="im-breadth-btn active" data-breadth="medium"
-            onclick="setIndustryMapBreadth('medium')"
-            title="中｜5 個主分類 × 每分類最多 3 個子類別 × 每子類最多 10 家公司&#10;適合：一般用途（推薦），平衡細節與可讀性">中</button>
-          <button class="im-breadth-btn" data-breadth="broad"
-            onclick="setIndustryMapBreadth('broad')"
-            title="廣｜7 個主分類 × 每分類最多 5 個子類別 × 每子類最多 18 家公司&#10;適合：完整呈現產業全貌，公司多時用此選項">廣</button>
-        </div>
         <button id="industry-map-generate-btn" class="btn btn-primary" onclick="generateIndustryMap()">🗺️ 生成地圖</button>
       </div>
     </div>
@@ -728,6 +724,16 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=69"></script>
+<!-- app.js 已依區塊拆成以下 8 個檔案（純檔案拆分，無內容變更）；classic script（非 module），
+     共用全域（state/api()/openOverlay 等）在 app-core.js，boot() 呼叫在 app-render-util.js 結尾，
+     順序不可調換 -->
+<script src="/static/app-core.js?v=77"></script>
+<script src="/static/app-sidebar.js?v=77"></script>
+<script src="/static/app-digest-grid.js?v=77"></script>
+<script src="/static/app-modal.js?v=77"></script>
+<script src="/static/app-findbiz-upload.js?v=77"></script>
+<script src="/static/app-add-company.js?v=77"></script>
+<script src="/static/app-enrich-graphs.js?v=77"></script>
+<script src="/static/app-render-util.js?v=77"></script>
 </body>
 </html>

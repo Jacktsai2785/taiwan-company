@@ -134,11 +134,15 @@ if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
   sed -e "s|__REPO_DIR__|$REPO_DIR|g" \
       deploy/taiwan-company-backup.service.template > "$HOME/.config/systemd/user/taiwan-company-backup.service"
   cp deploy/taiwan-company-backup.timer.template "$HOME/.config/systemd/user/taiwan-company-backup.timer"
+  # 競業表批次重生成：長跑維護任務，裝好但不自動跑（會燒 AI 額度），要跑手動 start
+  sed -e "s|__REPO_DIR__|$REPO_DIR|g" \
+      deploy/taiwan-regen.service.template > "$HOME/.config/systemd/user/taiwan-regen.service"
   systemctl --user daemon-reload
   systemctl --user enable taiwan-company.service >/dev/null 2>&1 || true
   systemctl --user enable --now taiwan-company-backup.timer >/dev/null 2>&1 || true
+  systemctl --user enable taiwan-regen.service >/dev/null 2>&1 || true
   systemctl --user restart taiwan-company.service
-  ok "service 已安裝並啟動（開機自啟 + 每日資料備份已開啟）"
+  ok "service 已安裝並啟動（開機自啟 + 每日資料備份已開啟；taiwan-regen 已裝好，手動 systemctl --user start taiwan-regen 啟動）"
 else
   warn "systemd user instance 不可用，略過。可改用前景啟動： make start"
 fi

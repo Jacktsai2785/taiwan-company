@@ -1,0 +1,148 @@
+/* ════════════════════════════════════════
+   SLIDE-OVER SIDE PANEL
+════════════════════════════════════════ */
+#side-panel-backdrop { display: none; }
+
+#side-panel {
+  position: fixed; left: var(--sidebar-w); top: 0; bottom: 0;
+  width: 320px;
+  background: #fff;
+  box-shadow: 4px 0 24px rgba(0,0,0,.18);
+  border-left: 1px solid #e2e8f0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  /* 關閉時平移到 sidebar 左側完全隱藏 */
+  transform: translateX(calc(-100% - var(--sidebar-w)));
+  transition: transform .22s ease;
+  z-index: 201;
+}
+#side-panel.open { transform: translateX(0); }
+
+#main { transition: margin-left .22s ease; }
+#main.side-panel-open { margin-left: 320px; }
+
+.sp-header {
+  padding: 16px 16px 0;
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.sp-header h3 { font-size: 15px; font-weight: 700; color: #1e293b; flex: 1; }
+.sp-close-btn {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: none; background: #f1f5f9; color: #64748b;
+  cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.sp-close-btn:hover { background: #e2e8f0; }
+
+.sp-tabs {
+  display: flex; border-bottom: 2px solid #e2e8f0;
+  padding: 10px 16px 0; gap: 0; flex-shrink: 0;
+}
+.sp-tab {
+  padding: 6px 14px 8px; font-size: 13px; font-weight: 600;
+  color: #94a3b8; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: color .12s, border-color .12s;
+}
+.sp-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.sp-tab:hover:not(.active) { color: #475569; }
+
+.sp-toolbar {
+  padding: 10px 12px 10px 16px; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid #f1f5f9; flex-shrink: 0;
+}
+.sp-search {
+  flex: 1; padding: 6px 10px;
+  border: 1px solid #e2e8f0; border-radius: 6px;
+  font-size: 13px; outline: none;
+}
+.sp-search:focus { border-color: var(--accent); }
+.sp-sort {
+  padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px;
+  font-size: 12px; color: #64748b; cursor: pointer; background: #f8fafc;
+}
+.sp-add-btn {
+  padding: 6px 10px; border: 1px solid #bfdbfe; border-radius: 6px;
+  font-size: 14px; font-weight: 600; color: #2563eb; cursor: pointer;
+  background: #eff6ff; transition: background .12s; display: none;
+}
+.sp-add-btn.visible { display: block; }
+.sp-add-btn:hover { background: #dbeafe; }
+
+.sp-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+.sp-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; cursor: default; transition: background .1s;
+}
+.sp-item:hover { background: #f8fafc; }
+.sp-name { flex: 1; font-size: 13px; color: #1e293b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-count {
+  font-size: 11px; background: #f1f5f9; color: #64748b;
+  padding: 1px 6px; border-radius: 99px; flex-shrink: 0;
+}
+/* pin 鈕永遠可見：已釘 → 金色；未釘 → hover 才出現 */
+.sp-pin-btn {
+  width: 22px; height: 22px; border: none; background: transparent;
+  color: #e2e8f0; cursor: pointer; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  transition: color .12s, background .12s; flex-shrink: 0;
+  opacity: 0;
+}
+.sp-item:hover .sp-pin-btn { opacity: 1; }
+.sp-pin-btn.pinned { opacity: 1; color: #f59e0b; }
+.sp-pin-btn:hover { color: #f59e0b; background: #fef3c7; }
+/* Industry tree controls */
+.sp-tree-toggle {
+  flex-shrink: 0; width: 18px; height: 18px;
+  border: none; background: none; cursor: pointer;
+  color: #94a3b8; font-size: 9px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; transition: background .1s, color .1s;
+}
+.sp-tree-toggle:hover { background: #e2e8f0; color: #334155; }
+.sp-tree-indent, .sp-tree-spacer { flex-shrink: 0; width: 18px; display: inline-block; }
+.sp-child-item { padding-left: 12px; border-left: 2px solid #e2e8f0; margin-left: 16px; }
+.sp-child-item .sp-name { color: #475569; font-size: 12px; }
+.sp-child-item .sp-count { background: #f8fafc; }
+
+/* Add industry dialog */
+.ind-add-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 9000;
+}
+.ind-add-box {
+  background: #fff; border-radius: 12px; padding: 24px;
+  width: 340px; box-shadow: 0 20px 60px rgba(0,0,0,.2);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ind-add-title { font-size: 15px; font-weight: 600; color: #1e293b; }
+.ind-add-label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 12px; color: #64748b; font-weight: 500;
+}
+.ind-add-label input, .ind-add-label select {
+  padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 7px;
+  font-size: 13px; color: #1e293b; outline: none;
+  transition: border-color .15s;
+}
+.ind-add-label input:focus, .ind-add-label select:focus { border-color: #3b82f6; }
+.ind-add-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.ind-add-footer button {
+  padding: 7px 16px; border-radius: 7px; font-size: 13px;
+  border: 1px solid #cbd5e1; background: #f8fafc; color: #374151; cursor: pointer;
+}
+.ind-add-ok-btn { background: #3b82f6 !important; color: #fff !important; border-color: #3b82f6 !important; }
+.ind-add-footer button:hover { filter: brightness(.95); }
+
+.sp-actions { display: none; gap: 2px; }
+.sp-item:hover .sp-actions { display: flex; }
+.sp-actions button {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: #94a3b8; padding: 2px 4px; border-radius: 4px;
+}
+.sp-actions button:hover { background: #f1f5f9; color: #1e293b; }
+
+.sp-empty { padding: 16px; font-size: 13px; color: #94a3b8; font-style: italic; }
+

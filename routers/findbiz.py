@@ -180,10 +180,6 @@ async def _search_and_load_detail(page, tax_id: str) -> str | None:
             )
         await asyncio.sleep(2)
         search_html = await page.content()
-        try:
-            Path("/tmp/findbiz_debug.html").write_text(search_html, encoding="utf-8")
-        except Exception:
-            pass
     except Exception as exc:
         log.error("findbiz search form submit failed: %s", exc)
         return None
@@ -221,10 +217,6 @@ async def _search_and_load_detail(page, tax_id: str) -> str | None:
         log.warning("findbiz: '每股金額' not rendered for %s", tax_id)
 
     detail_html = await page.content()
-    try:
-        Path("/tmp/findbiz_detail_debug.html").write_text(detail_html, encoding="utf-8")
-    except Exception:
-        pass
     return detail_html
 
 
@@ -308,12 +300,6 @@ async def _run_session(session_id: str) -> None:
 
             await queue.put({"type": "progress", "message": "找到公司資料，正在解析…"})
             raw = _parse_detail_html(detail_html)
-            try:
-                Path("/tmp/findbiz_detail_parsed.txt").write_text(
-                    "\n".join(f"{k}: {v}" for k, v in raw.items()), encoding="utf-8"
-                )
-            except Exception:
-                pass
             log.info("findbiz detail parsed keys: %s", list(raw.keys()))
             await ctx.close()
 

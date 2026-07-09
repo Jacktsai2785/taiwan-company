@@ -83,5 +83,5 @@ capital      = _parse_int(raw.get("實收資本額(元)", ""))
 ## 相關檔案
 - 後端實作：`routers/findbiz.py`
 - Browser profile：`data/findbiz_profile/`（不進 git）
-- 觸發前端：`static/app.js` `fetchParValue()` 函式
+- 觸發前端：`static/app-modal.js` `fetchParValue()` 函式
 - DISPLAY 設定：`~/.config/systemd/user/taiwan-company.service` `Environment=DISPLAY=:0`

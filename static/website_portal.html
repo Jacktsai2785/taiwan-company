@@ -1,3 +1,10 @@
+<!--
+  一次性維運工具，非平台正式功能，故不從 index.html 連結，只能直接開 URL。
+  用途：手動幫仍查無官網的公司補填網址，直接打真實 API（GET /api/companies、
+  PUT /api/companies/{id}）寫回 companies.json。
+  下面 NOTES 是研究當下（約 2026-06 初）手填的「查無原因」備註，只是輔助顯示、
+  不影響存檔邏輯——但公司資料之後可能變動，備註可能已過期，僅供參考。
+-->
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -43,7 +50,7 @@
   <button class="ghost" onclick="load()">↻ 重新整理</button>
 </header>
 <div class="wrap">
-  <div class="hint">資料即時來自 <code>/api/companies</code>;存檔走 <code>PUT /api/companies/{id}</code> 直接寫回 companies.json。存好的列會變灰並沉到底部。貼上網址後按 Enter 或「存」即可。</div>
+  <div class="hint">資料即時來自 <code>/api/companies</code>;存檔走 <code>PUT /api/companies/{id}</code> 直接寫回 companies.json。存好的列會變灰並沉到底部。貼上網址後按 Enter 或「存」即可。<br>⚠ 一次性維運工具（非平台正式功能）；「查無原因」備註為 2026-06 初手填，公司資料異動後可能已過期，僅供參考。</div>
   <div class="toolbar">
     <input class="q" id="q" type="text" placeholder="篩選公司名 / 統編…" oninput="render()">
     <select id="indFilter" onchange="render()" style="background:#11141a;border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:7px"></select>
