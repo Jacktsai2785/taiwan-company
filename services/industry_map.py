@@ -51,6 +51,21 @@ def _get_children(industry: str) -> list[str]:
     return [ch for ch in tree.get(industry, []) if ch in valid]
 
 
+def _subtree_industries(root: str, tree: dict[str, list[str]]) -> set[str]:
+    """root 及其所有後代子產業名。父模式計數要用它遞迴涵蓋整個子樹——某子產業若又被
+    細分成孫產業（例：半導體製造 → 晶圓製造與封裝），公司是掛在孫節點上的，只比對子
+    產業本名會漏算成 0 家（台積電掛「晶圓製造與封裝」卻沒進「半導體製造」就是這個洞）。"""
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node in seen:            # 防止樹意外成環時無限迴圈
+            continue
+        seen.add(node)
+        stack.extend(tree.get(node, []))
+    return seen
+
+
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 def load_all_maps() -> dict[str, Any]:
@@ -323,13 +338,16 @@ async def _generate_parent(
     """父模式：子產業當 sections（可 drill-in），另收一個「未分類」區塊放只掛在本產業、
     尚未細分到任何子產業的公司。AI 只排序子產業，不歸位公司。"""
     all_cos = data_store.get_all_companies()
+    tree = data_store.get_industry_tree()
 
-    # 每個子產業的公司（依資本額取代表）
+    # 每個子產業的公司（依資本額取代表）。掛在該子產業「或其任一後代孫產業」的都算——
+    # 否則被進一步細分過的子產業會顯示 0 家（見 _subtree_industries）。
     child_briefs: list[dict] = []
     child_reps: dict[str, list[dict]] = {}
     child_counts: dict[str, int] = {}
     for ch in children:
-        members = [c for c in all_cos if ch in _industries_of(c)]
+        names = _subtree_industries(ch, tree)
+        members = [c for c in all_cos if names.intersection(_industries_of(c))]
         members.sort(key=lambda c: c.get("capital", 0) or 0, reverse=True)
         reps = members[:REPS_PER_CHILD]
         child_reps[ch] = reps

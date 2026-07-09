@@ -839,6 +839,10 @@ async function openIndustryMap(industry, opts = {}) {
   document.getElementById("industry-map-status").innerHTML = "";
   document.getElementById("industry-map-canvas").innerHTML = "";
   document.getElementById("industry-map-meta").innerHTML = "";
+  // 每次開啟都強制把生成按鈕復原成可按狀態——避免上一輪的 SSE 若悄悄斷線
+  // （分頁被切到背景、連線被中斷、中途關 modal）導致 Promise 永不 resolve、
+  // 按鈕永遠卡在「生成中…」，重開 modal 卻沒人救回來（見 generateIndustryMap）。
+  _imResetGenerateBtn(false);
   openOverlay("industry-map-overlay");
 
   // Try cached first
@@ -846,6 +850,7 @@ async function openIndustryMap(industry, opts = {}) {
     const cached = await api("GET", `/api/industry-map/${encodeURIComponent(industry)}`);
     _imState.data = cached;
     _renderIndustryMap(cached);
+    _imResetGenerateBtn(true);   // 已有地圖 → 「重新生成」
   } catch (err) {
     // 404 → 顯示空狀態，提示按生成
     document.getElementById("industry-map-canvas").innerHTML = `
@@ -854,7 +859,19 @@ async function openIndustryMap(industry, opts = {}) {
         <div class="im-empty-title">尚未生成「${escHtml(industry)}」的產業地圖</div>
         <div class="im-empty-hint">按右上方「生成地圖」</div>
       </div>`;
+    _imResetGenerateBtn(false);  // 尚無地圖 → 「生成地圖」
   }
+}
+
+// 把生成按鈕復原成非生成狀態（enabled）。hasMap 決定 label：有地圖顯示「重新生成」、
+// 沒有顯示「生成地圖」。openIndustryMap / closeIndustryMap / 生成流程結束都會呼叫，
+// 讓按鈕狀態不再只依賴那個可能永不 resolve 的 SSE Promise。
+function _imResetGenerateBtn(hasMap) {
+  _imState.generating = false;
+  const btn = document.getElementById("industry-map-generate-btn");
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = hasMap ? "🗺️ 重新生成" : "🗺️ 生成地圖";
 }
 
 function _imRenderBreadcrumb() {
@@ -876,7 +893,7 @@ function closeIndustryMap() {
     try { _imState.evtSrc.close(); } catch (_) {}
     _imState.evtSrc = null;
   }
-  _imState.generating = false;
+  _imResetGenerateBtn(!!_imState.data);  // 關閉時也復原按鈕（含清 generating flag）
   _imState.stack = [];
   closeOverlay("industry-map-overlay");
 }
@@ -927,9 +944,7 @@ async function generateIndustryMap() {
     };
   });
 
-  _imState.generating = false;
-  btn.disabled = false;
-  btn.textContent = "🗺️ 重新生成";
+  _imResetGenerateBtn(!!_imState.data);  // 成功→有 data→「重新生成」；失敗/斷線→維持原有
 }
 
 function _renderIndustryMap(data) {
