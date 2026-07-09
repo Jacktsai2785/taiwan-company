@@ -30,7 +30,11 @@ MIN_DAYS_FOR_TRENDS = 1   # bootstrap fetches 7-day RSS when cache is sparse
 # ── Cache I/O ──────────────────────────────────────────────────────────────────
 
 def _load() -> dict:
-    return data_store.read_json(_DIGEST_PATH, {})
+    try:
+        return data_store.read_json(_DIGEST_PATH, {})
+    except Exception:
+        log.warning("daily_digest.json 損毀，回退空快取", exc_info=True)
+        return {}
 
 
 def _save(cache: dict) -> None:
@@ -38,7 +42,11 @@ def _save(cache: dict) -> None:
 
 
 def _load_trends() -> dict:
-    return data_store.read_json(_TRENDS_PATH, {})
+    try:
+        return data_store.read_json(_TRENDS_PATH, {})
+    except Exception:
+        log.warning("industry_trends.json 損毀，回退空快取", exc_info=True)
+        return {}
 
 
 def _save_trends(data: dict) -> None:

@@ -59,8 +59,12 @@ async def generate_industry_map(
 ):
     """SSE: 觸發 AI 生成，串流進度訊息，最後送 done event 帶完整結果。
     有子產業 → 父模式總覽；無子產業 → 葉模式完整歸位（見 services.industry_map）。"""
+    # 佔用守衛 + 啟動任務都在 endpoint body 同步做：檢查與 add 之間沒有 await → 原子，
+    # 兩個近同時的請求不會都通過（若放進 sse_progress_stream，守衛只在串流第一個 tick
+    # 才設，窗口變寬 → 可能雙開 → 對 industry_maps.json 未上鎖讀寫 lost-update）。
     if industry in _running:
         raise HTTPException(status_code=409, detail="該產業正在生成中，請稍候再試")
+    _running.add(industry)
 
     _progress[industry] = []
     # 持有清單「參照」而非每次都 _progress[industry]：SSE 串流在 client 斷線時會 pop 掉
@@ -85,9 +89,11 @@ async def generate_industry_map(
         finally:
             _running.discard(industry)
 
+    asyncio.create_task(run())
     return StreamingResponse(
+        # start 傳 no-op：已在上面同步佔用 _running 並啟動任務，sse_progress_stream 只負責串流
         sse_progress_stream(
-            industry, _progress, _running, lambda: asyncio.create_task(run()),
+            industry, _progress, _running, lambda: None,
             max_ticks=7200, interval=0.5, terminal=("done", "error"), keepalive=True,
         ),
         media_type="text/event-stream",
@@ -102,8 +108,10 @@ async def propose_subdivision(industry: str, ai: dict = Depends(ai_from_query)):
     最後 done event 帶 {industry, groups}。葉圖的「收成子產業」不走這裡——前端直接用
     現成 sections 算 groups，省一次 AI call。"""
     key = f"sub:{industry}"
+    # 同 generate：守衛 + 啟動同步做在 endpoint body（原子、關掉並發窗口）
     if key in _sub_running:
         raise HTTPException(status_code=409, detail="該產業正在細分中，請稍候再試")
+    _sub_running.add(key)
 
     _sub_progress[key] = []
     events = _sub_progress[key]  # captured ref（同 generate：避免 pop 後 KeyError，見上）
@@ -123,9 +131,11 @@ async def propose_subdivision(industry: str, ai: dict = Depends(ai_from_query)):
         finally:
             _sub_running.discard(key)
 
+    asyncio.create_task(run())
     return StreamingResponse(
+        # start no-op：已同步佔用 + 啟動
         sse_progress_stream(
-            key, _sub_progress, _sub_running, lambda: asyncio.create_task(run()),
+            key, _sub_progress, _sub_running, lambda: None,
             max_ticks=7200, interval=0.5, terminal=("done", "error"), keepalive=True,
         ),
         media_type="text/event-stream",

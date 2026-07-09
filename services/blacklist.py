@@ -28,7 +28,11 @@ _EMPTY: dict = {
 
 def _load() -> dict:
     import copy
-    return data_store.read_json(BLACKLIST_PATH, copy.deepcopy(_EMPTY))
+    try:
+        return data_store.read_json(BLACKLIST_PATH, copy.deepcopy(_EMPTY))
+    except Exception:
+        log.warning("blacklist.json 損毀，回退空白黑名單", exc_info=True)
+        return copy.deepcopy(_EMPTY)
 
 
 def _save(bl: dict) -> None:
