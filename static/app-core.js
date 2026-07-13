@@ -234,7 +234,7 @@ async function loadCompanies() {
       const neu = fresh.find(c => c.id === _modalCompanyId);
       if (old && neu) {
         for (const k of ["summary", "competitors", "directors", "patents",
-                         "investee_candidates", "materials_summary"]) {
+                         "investee_candidates", "materials_summary", "shareholders_analysis"]) {
           if (!(k in neu) && k in old) neu[k] = old[k];
         }
       }

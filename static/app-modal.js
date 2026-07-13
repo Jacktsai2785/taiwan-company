@@ -79,6 +79,7 @@ async function openModal(id) {
   // 合併進 state，之後 modal 內所有讀取（簡介、董監事、關係圖）都有完整欄位。
   try {
     const full = await api("GET", `/api/companies/${id}`);
+    if (_modalCompanyId !== id) return;   // await 期間使用者點了別張卡 → 放棄舊渲染
     Object.assign(c, full);
   } catch (_) { /* 暫時失敗就先用輕量資料開窗，欄位顯示為空 */ }
 

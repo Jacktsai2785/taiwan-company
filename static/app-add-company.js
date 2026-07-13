@@ -613,7 +613,11 @@ function openConfirmDialog(valid, uncertain, excluded, suggestedLabel) {
       const existingLabels = c.existing_labels?.length
         ? `<div class="existing-labels">現有標籤：${c.existing_labels.join("、")}</div>`
         : "";
-      const hasData = !c.is_new && state.companies.find(x => x.id === c.existing_id)?.summary;
+      // list 投影不含 summary 本文——沿用 isIncompleteCompany 的雙態判定：
+      // 有完整資料看 summary、投影資料看後端算好的 summary_incomplete。
+      // （若直接 ?.summary，投影後永遠 falsy → 既有公司全被預設勾「生成」→ 覆蓋重燒）
+      const _ex = !c.is_new ? state.companies.find(x => x.id === c.existing_id) : null;
+      const hasData = !!_ex && ("summary" in _ex ? !!_ex.summary : _ex.summary_incomplete === false);
       const checked = hasData ? "" : "checked";
       const enrichHint = hasData ? `<span class="enrich-has-data" title="已有摘要，預設不重新生成">已生成</span>` : "";
       return `
