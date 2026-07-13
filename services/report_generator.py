@@ -18,6 +18,9 @@ log = logging.getLogger("report_generator")
 
 _CLAUDE_LOCK = asyncio.Semaphore(1)  # CLI mode: serialize to avoid concurrent session limit
 
+# materials 全文塞進 prompt 的長度上限（字元）；超過截斷，見 _build_materials_prompt
+_MATERIALS_TEXT_MAX = 30_000
+
 _CORP_SUFFIXES = ("股份有限公司", "有限公司")
 
 
@@ -392,9 +395,14 @@ def _build_materials_prompt(company: dict, materials_text: str = "", interview_t
     short_name, full_name = _company_name_variants(name)
     capital_str = f"NT$ {capital:,}" if capital else "不詳"
 
+    # 截斷保護：materials_text 是所有上傳檔的全文拼接，大簡報/多檔可能達數十萬字，
+    # 會把 Opus prompt 撐爆。30K 字已足以涵蓋一般簡報內容。
+    _mat = materials_text.strip()
+    if len(_mat) > _MATERIALS_TEXT_MAX:
+        _mat = _mat[:_MATERIALS_TEXT_MAX] + "\n…（內容過長已截斷）"
     text_block = (
-        f"\n【上傳檔案文字內容（簡報／公司介紹／文件擷取）】\n{materials_text.strip()}\n"
-        if materials_text.strip() else ""
+        f"\n【上傳檔案文字內容（簡報／公司介紹／文件擷取）】\n{_mat}\n"
+        if _mat else ""
     )
     has_interview = bool(interview_text.strip())
     interview_block = (
@@ -573,6 +581,12 @@ async def generate_summary(company: dict, engine: str = "claude",
             except Exception as e:
                 last_error = e
                 log.warning("DD memo attempt %d failed for %s: %s", attempt + 1, name, e)
+                # 只重試「可能一次就好」的暫時性錯誤（解析失敗、CLI 偶發 exit）。
+                # 超時代表 prompt/任務本身太重，重打大機率再超時＝再燒一次 420s token；
+                # 未登入/授權更不可能靠重試解決。這兩類直接放棄，把錯誤丟給使用者。
+                msg = str(e)
+                if any(kw in msg for kw in ("執行超時", "登入", "授權")):
+                    break
                 if attempt == 0:
                     await asyncio.sleep(5)
 

@@ -92,6 +92,10 @@ class SuggestIndustriesRequest(BaseModel):
     company_ids: list[str] | None = None
 
 
+# suggest-industries 單次送 AI 的公司數上限（prompt 大小保護）
+_SUGGEST_MAX = 80
+
+
 @router.post("/suggest-industries")
 async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(ai_from_headers)):
     """Use AI to assign each given company an industry from the existing list.
@@ -113,6 +117,12 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
     if not targets:
         return {"suggestions": {}, "industries": industries, "targets": []}
 
+    # Cap：未分類公司會全部塞進單一 prompt，隨資料成長遲早撐爆（數百家＝數十 K 字）。
+    # 一次最多送 _SUGGEST_MAX 家；truncated 回給前端提示「再跑一次處理剩餘的」。
+    truncated = max(0, len(targets) - _SUGGEST_MAX)
+    if truncated:
+        targets = targets[:_SUGGEST_MAX]
+
     suggestions = await company_extractor.suggest_industries_for_companies(
         targets, industries, **ai
     )
@@ -120,6 +130,7 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
         "suggestions": suggestions,
         "industries": industries,
         "targets": [{"id": c["id"], "name": c["name"], "blurb": c.get("blurb") or ""} for c in targets],
+        "truncated": truncated,   # 還有幾家沒送 AI（0 = 全部處理完）
     }
 
 
@@ -155,10 +166,17 @@ async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
 
 
 @router.get("/{company_id}/deep-enrich")
-async def deep_enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
+async def deep_enrich_stream(company_id: str, force: bool = False, ai: dict = Depends(ai_from_query)):
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+    # 防重：深度生成是全平台最貴的呼叫（Opus、~8 分鐘）。已做過的公司必須帶
+    # force=true（前端在使用者確認覆蓋後才帶）才准重跑，避免誤觸重複燒額度。
+    if company.get("deep_enriched_at") and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"此公司已於 {company['deep_enriched_at'][:10]} 深度生成過，重跑請帶 force=true",
+        )
 
     return StreamingResponse(
         sse_progress_stream(

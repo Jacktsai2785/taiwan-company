@@ -188,7 +188,7 @@
   line-height: 1.4;
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;          /* 放不下的長「父›子」產業麵包屑換到下一行，不擠壓名字 */
   gap: 4px;
   min-width: 0;
 }
@@ -197,7 +197,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex-shrink: 1;
+  flex-shrink: 0;           /* 名字優先完整顯示，不被同列的產業標籤壓成一個字 */
+  max-width: 100%;          /* 名字自己超寬時才在卡片寬度內以省略號截斷 */
 }
 .card-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-left: -4px; margin-top: 4px; margin-bottom: 4px; }
 .label-chip {

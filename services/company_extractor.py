@@ -28,6 +28,30 @@ def _classify(name: str) -> str:
     return "uncertain"
 
 
+def _existing_lookup():
+    """一次讀入全部公司建索引，回傳 find(name, tax_id) -> company|None。
+    語意與 data_store.find_company_by_name_or_tax_id 相同（tax_id 優先、名稱去尾綴、
+    首個命中優先），但抽取迴圈逐名呼叫時不再每次整檔重讀（N 家名單 = N×~10MB parse）。"""
+    companies = data_store.get_all_companies()
+    by_tax: dict[str, dict] = {}
+    by_norm: dict[str, dict] = {}
+    for c in companies:
+        tid = c.get("tax_id")
+        if tid and tid not in by_tax:
+            by_tax[tid] = c
+        norm = data_store.normalize_company_name(c.get("name") or "")
+        if norm and norm not in by_norm:
+            by_norm[norm] = c
+
+    def find(name: str, tax_id: str = "") -> dict | None:
+        if tax_id and tax_id in by_tax:
+            return by_tax[tax_id]
+        target = data_store.normalize_company_name(name)
+        return by_norm.get(target) if target else None
+
+    return find
+
+
 def extract_companies_from_text(text: str, source_label: str, engine: str = "claude") -> dict:
     """
     Returns:
@@ -43,6 +67,7 @@ def extract_companies_from_text(text: str, source_label: str, engine: str = "cla
 
     result: dict[str, list] = {"valid": [], "excluded": [], "uncertain": []}
 
+    find_existing = _existing_lookup()   # 讀一次、迴圈內查索引
     for name in all_names:
         kind = _classify(name)
         if kind == "excluded":
@@ -50,7 +75,7 @@ def extract_companies_from_text(text: str, source_label: str, engine: str = "cla
         elif kind == "uncertain":
             result["uncertain"].append({"name": name})
         else:
-            existing = data_store.find_company_by_name_or_tax_id(name)
+            existing = find_existing(name)
             result["valid"].append({
                 "name": name,
                 "is_new": existing is None,
@@ -81,7 +106,11 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
 
     raw_items: list[dict] = []
     try:
-        raw = claude_client.ask_with_image(prompt, image_content, image_ext, timeout=120, engine=engine)
+        # async 函式內的 CLI 呼叫必須 to_thread（同檔文字路徑皆已卸載，此處先前獨漏，
+        # 會把 event loop 卡住最長 120s）
+        raw = await asyncio.to_thread(
+            claude_client.ask_with_image, prompt, image_content, image_ext, 120, engine
+        )
         log.info("Claude image raw response:\n%s", raw)
         start = raw.find("[")
         end = raw.rfind("]")
@@ -107,6 +136,7 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
     resolved = await _resolve_names(raw_items)
 
     result: dict[str, list] = {"valid": [], "excluded": [], "uncertain": []}
+    find_existing = _existing_lookup()   # 讀一次、迴圈內查索引
     for name in resolved:
         kind = _classify(name)
         if kind == "excluded":
@@ -114,7 +144,7 @@ async def extract_companies_from_image(image_content: bytes, image_ext: str, sou
         elif kind == "uncertain":
             result["uncertain"].append({"name": name})
         else:
-            existing = data_store.find_company_by_name_or_tax_id(name)
+            existing = find_existing(name)
             result["valid"].append({
                 "name": name,
                 "is_new": existing is None,

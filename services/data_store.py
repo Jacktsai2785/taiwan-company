@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -19,12 +20,31 @@ DEFAULT_CONFIG = {"industries": ["前瞻科技", "消費生活", "環保"], "lab
 # 互相呼叫的 mutator（如 update_company→upsert_company）可重入。
 _LOCK = threading.RLock()
 
+# 檔案層 mtime 快取：companies.json 已近 10MB，每次 _read 整檔 parse 約 27ms，
+# 而 get_company / find_company_by_name* 在 routers 有 40+ 個呼叫點，等於每個請求
+# 都重複付這筆錢。檔案沒變（st_mtime_ns 相同）就直接回快取物件；_write 落地後同步
+# 更新快取。外部程序改檔（還原備份、手動編輯）靠 mtime 變化自動失效。
+# 注意：快取物件是共享參照——讀取路徑一律視為唯讀；單筆修改請走 get_company
+# （回傳 deepcopy）→ 改 → upsert_company 的流程，不要就地改 get_all_companies 的結果。
+_CACHE_LOCK = threading.Lock()
+_FILE_CACHE: dict[Path, tuple[int, dict]] = {}
+
 
 def _read(path: Path, default: dict) -> dict:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
-    return json.loads(path.read_text(encoding="utf-8"))
+    mtime_ns = path.stat().st_mtime_ns
+    with _CACHE_LOCK:
+        hit = _FILE_CACHE.get(path)
+        if hit and hit[0] == mtime_ns:
+            return hit[1]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # 若 stat 與 read 之間檔案被替換：這裡會以「舊 mtime + 新內容」入快取，
+    # 下次 stat 發現 mtime 不同會重新讀——只會多讀一次，不會讀到舊資料。
+    with _CACHE_LOCK:
+        _FILE_CACHE[path] = (mtime_ns, data)
+    return data
 
 
 def _write(path: Path, data: dict) -> None:
@@ -35,6 +55,8 @@ def _write(path: Path, data: dict) -> None:
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, path)
+        with _CACHE_LOCK:
+            _FILE_CACHE[path] = (path.stat().st_mtime_ns, data)
     finally:
         if tmp.exists():
             try:
@@ -74,7 +96,12 @@ def get_all_companies() -> list[dict]:
 
 
 def get_company(company_id: str) -> dict | None:
-    return next((c for c in get_all_companies() if c.get("id") == company_id), None)
+    """回傳 deepcopy：呼叫端普遍走「取出 → 就地改 → upsert」流程，若回共享的
+    快取物件，改到一半就會被其他請求讀到（甚至在不寫入時汙染快取）。單筆 copy
+    很便宜（平均 ~20KB），upsert 時整筆替換回去。"""
+    import copy
+    hit = next((c for c in get_all_companies() if c.get("id") == company_id), None)
+    return copy.deepcopy(hit) if hit is not None else None
 
 
 def find_company_by_name(name: str) -> dict | None:
@@ -88,6 +115,22 @@ def normalize_company_name(name: str) -> str:
         if n.endswith(sfx):
             return n[: -len(sfx)]
     return n
+
+
+_STOCK_SUFFIX_RE = re.compile(r"[（(]\d{4,6}[）)]\s*$")
+
+
+def clean_company_name(name: str) -> str:
+    """去除名稱尾端的「（股號）」——AI 生成的產業地圖競業池/競業表慣用
+    「美琪瑪國際股份有限公司（4721）」寫法，從地圖點加入或上傳抽名時原樣入庫，
+    會讓 GCIS/TWSE 全部比對不到 → 統編/代表人空白、上市狀態誤判、DD memo
+    拿殘料生成到超時。入庫前一律清掉；地圖上的顯示不受影響。"""
+    n = (name or "").strip()
+    while True:
+        m = _STOCK_SUFFIX_RE.search(n)
+        if not m:
+            return n
+        n = n[: m.start()].strip()
 
 
 def find_company_by_name_or_tax_id(name: str, tax_id: str = "") -> dict | None:
@@ -124,7 +167,7 @@ def create_company(name: str, label: str, industry: str = "", tax_id: str = "") 
     inds = [industry] if industry else []
     company = {
         "id": str(uuid.uuid4()),
-        "name": name,
+        "name": clean_company_name(name),   # 入庫鎖喉點：股號後綴一律清掉
         "tax_id": tax_id,
         "labels": [label] if label else [],
         "industries": inds,

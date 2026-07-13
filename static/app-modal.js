@@ -71,10 +71,16 @@ function _buildModalInfoHTML(c) {
   `;
 }
 
-function openModal(id) {
+async function openModal(id) {
   _modalCompanyId = id;
   const c = state.companies.find(x => x.id === id);
   if (!c) return;
+  // 列表是輕量投影（無 summary/directors/patents 等重欄位）；開窗時抓單筆完整資料
+  // 合併進 state，之後 modal 內所有讀取（簡介、董監事、關係圖）都有完整欄位。
+  try {
+    const full = await api("GET", `/api/companies/${id}`);
+    Object.assign(c, full);
+  } catch (_) { /* 暫時失敗就先用輕量資料開窗，欄位顯示為空 */ }
 
   const supBtnHtml = `<button id="materials-open-btn" onclick="openMaterialsPanel()">➕ 補充資料</button>`;
   document.getElementById("modal-name").innerHTML =
@@ -806,7 +812,7 @@ function fetchParValue() {
 }
 
 function _listenFindBizStream(sessionId, companyId) {
-  const es = new EventSource(`/api/findbiz/stream/${sessionId}`);
+  const es = trackModalES(new EventSource(`/api/findbiz/stream/${sessionId}`));
 
   es.onmessage = async e => {
     const msg = JSON.parse(e.data);

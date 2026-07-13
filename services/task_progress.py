@@ -41,14 +41,16 @@ async def sse_progress_stream(
         start()
     sent = 0
     try:
-        for _ in range(max_ticks):
+        for tick in range(max_ticks):
             events = progress_map.get(key, [])
             while sent < len(events):
                 yield f"data: {json.dumps(events[sent], ensure_ascii=False)}\n\n"
                 sent += 1
             if events and events[-1].get("type") in terminal:
                 break
-            if keepalive:
+            # keepalive 只為防 proxy 閒置斷線，10 秒一次就夠——不必每個 tick（0.5s）
+            # 都送，長任務掛 30–60 分鐘時可省 95% 的無意義訊息
+            if keepalive and tick % 20 == 0:
                 yield ": keepalive\n\n"
             await asyncio.sleep(interval)
         yield 'data: {"type": "done"}\n\n'

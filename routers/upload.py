@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -57,7 +58,9 @@ async def upload_file(file: UploadFile = File(...), ai: dict = Depends(ai_from_h
             "extracted_chars": 0,
         }
 
-    text = file_parser.extract_text(filename, content)
+    # extract_text 內含 tesseract OCR subprocess（最長 60s），必須卸載到 thread，
+    # 否則單 worker 的 event loop 被整個佔死、所有請求與 SSE 停擺。
+    text = await asyncio.to_thread(file_parser.extract_text, filename, content)
     log.info("Extracted %d chars", len(text))
     log.info("Text preview: %s", text[:300].replace("\n", " "))
 
@@ -74,7 +77,10 @@ async def upload_file(file: UploadFile = File(...), ai: dict = Depends(ai_from_h
         }
 
     try:
-        groups = company_extractor.extract_companies_from_text(text, suggested_label, **ai)
+        # 同步鏈內含 claude CLI 呼叫（最長 90s），一樣卸載避免卡 event loop
+        groups = await asyncio.to_thread(
+            company_extractor.extract_companies_from_text, text, suggested_label, **ai
+        )
     except company_extractor.ExtractionError as e:
         raise HTTPException(status_code=503, detail=_AI_ERROR_HINT) from e
     log.info(

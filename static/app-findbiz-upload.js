@@ -464,16 +464,18 @@ function deepEnrich() {
   const id = _modalCompanyId;
   if (!id) return;
   const c = state.companies.find(x => x.id === id);
+  let force = false;
   if (c && c.deep_enriched_at) {
     const when = formatTimestamp(c.deep_enriched_at);
     if (!confirm(`這間公司已於 ${when} 做過深度生成。\n\n再次深度生成會覆蓋現有的簡介與競業分析（約 4–8 分鐘）。\n確定要重新生成嗎？`)) return;
+    force = true;   // 使用者確認覆蓋 → 帶給後端防重守衛
   }
   const summaryEl = document.getElementById("modal-summary");
   if (summaryEl) summaryEl.innerHTML = "<p class=\"summary-placeholder\">🔍 深度搜尋媒體報導中，請稍候（約 4–8 分鐘）…</p>";
   _expandSummarySection();
   const btn = document.getElementById("modal-gen-btn");
   if (btn) btn.disabled = true;
-  _subscribeDeepEnrich(id).finally(() => {
+  _subscribeDeepEnrich(id, force).finally(() => {
     if (btn) btn.disabled = false;
   });
 }
@@ -614,7 +616,7 @@ function _expandSummarySection() {
 }
 
 function _subscribePatent(companyId) {
-  const es = new EventSource(`/api/companies/${companyId}/patents`);
+  const es = trackModalES(new EventSource(`/api/companies/${companyId}/patents`));
   const status = document.getElementById("modal-patents-status");
   const hint   = document.getElementById("modal-patents-hint");
 
@@ -751,8 +753,9 @@ function _subscribeSummarize(companyId, reset = false) {
   });
 }
 
-function _subscribeDeepEnrich(companyId) {
-  const sseUrl = `/api/companies/${companyId}/deep-enrich?engine=${encodeURIComponent(getAiEngine())}`;
+function _subscribeDeepEnrich(companyId, force = false) {
+  const sseUrl = `/api/companies/${companyId}/deep-enrich?engine=${encodeURIComponent(getAiEngine())}`
+    + (force ? "&force=true" : "");
 
   state.enrichingIds.add(companyId);
   renderGrid();

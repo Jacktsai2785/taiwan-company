@@ -84,8 +84,18 @@ class UpdateRequest(BaseModel):
     website: str | None = None
 
 
+# 列表檢視（view=list）剝掉的重欄位：卡片/側欄/搜尋完全用不到，卻佔了 payload 九成
+# 以上（investee_candidates 51%、summary 24%、competitors 7%、directors/materials/
+# patents ~11%）。完整資料由 modal 開窗時 GET /api/companies/{id} 單筆抓。
+_LIST_VIEW_STRIP = {
+    "investee_candidates", "summary", "competitors", "directors",
+    "materials_summary", "patents", "shareholders_analysis",
+}
+
+
 @router.get("")
-def list_companies(industry: str | None = None, group: str | None = None, sort_by: str = "capital"):
+def list_companies(industry: str | None = None, group: str | None = None,
+                   sort_by: str = "capital", view: str | None = None):
     companies = data_store.get_all_companies()
     if industry:
         companies = [c for c in companies if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
@@ -98,6 +108,16 @@ def list_companies(industry: str | None = None, group: str | None = None, sort_b
         companies = sorted(companies, key=lambda c: c["name"])
     else:
         companies = sorted(companies, key=lambda c: c.get("capital", 0), reverse=True)
+    if view == "list":
+        slim = []
+        for c in companies:
+            d = {k: v for k, v in c.items() if k not in _LIST_VIEW_STRIP}
+            # 前端「補齊未完成」判定需要 summary 狀態，但不需要 summary 本文——
+            # 後端算好布林替代（與 isIncompleteCompany 的規則一致）
+            s = (c.get("summary") or "").strip()
+            d["summary_incomplete"] = (not s) or ("尚待補充" in s)
+            slim.append(d)
+        return slim
     return companies
 
 
@@ -427,7 +447,9 @@ async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_fr
 
     Returns 200 with `existed: true` if the company already exists (matched by tax_id or name).
     """
-    name = (req.name or "").strip()
+    # 圖節點名常帶「（股號）」（AI 競業池慣用寫法）——先清再比對/建檔，
+    # 否則髒名入庫會讓 GCIS/TWSE 全查不到（美琪瑪（4721）事件）
+    name = data_store.clean_company_name(req.name)
     tax_id = (req.tax_id or "").strip()
     if not name and not tax_id:
         raise HTTPException(status_code=400, detail="name or tax_id required")

@@ -403,9 +403,36 @@ function renderGrid() {
   }
 
   grid.innerHTML = companies.map(c => companyCardHtml(c)).join("");
-  grid.querySelectorAll(".company-card").forEach(card => {
-    card.addEventListener("click", () => openModal(card.dataset.id));
+  _wireGridDelegation(grid);
+}
+
+// 卡片點擊改事件委派：renderGrid 不再每次對幾百張卡逐一 addEventListener。
+// 卡內按鈕/下拉的 inline onclick 都有 event.stopPropagation()，不會冒泡到這裡；
+// closest 的 button/select/input 檢查是額外保險（例如簡介編輯的 textarea）。
+function _wireGridDelegation(grid) {
+  if (grid._delegated) return;
+  grid._delegated = true;
+  grid.addEventListener("click", ev => {
+    const card = ev.target.closest(".company-card");
+    if (!card) return;
+    if (ev.target.closest("button, select, input, textarea")) return;
+    openModal(card.dataset.id);
   });
+}
+
+// 單卡就地重繪：單筆操作（追蹤/標籤/簡介）不再全格重建幾百張卡。
+// 操作可能讓卡片離開目前篩選範圍時（mustRefilter），退回完整 renderGrid。
+function patchCard(id, mustRefilter = false) {
+  if (mustRefilter) { renderGrid(); return; }
+  const c = state.companies.find(x => x.id === id);
+  const card = document.querySelector(`#company-grid .company-card[data-id="${id}"]`);
+  if (!c || !card) { renderGrid(); return; }
+  card.outerHTML = companyCardHtml(c);
+}
+
+// 目前的篩選是否吃「標籤」——是的話改標籤就可能讓卡片進出範圍，需要整格重繪
+function _labelFilterActive() {
+  return !!(state.activeLabelGroup || state.activeLabel || state.activeGroup);
 }
 
 function companyCardHtml(c) {
@@ -504,7 +531,7 @@ async function saveBlurb(id) {
     const updated = await api("PUT", `/api/companies/${id}`, { blurb });
     const idx = state.companies.findIndex(c => c.id === id);
     if (idx !== -1) state.companies[idx] = updated;
-    renderGrid();
+    patchCard(id);   // 簡介不影響篩選，單卡重繪即可
     toast("簡介已更新");
   } catch (err) {
     toast(`更新失敗：${err.message}`, true);
@@ -520,7 +547,7 @@ async function removeLabel(id, label) {
     const updated = await api("PUT", `/api/companies/${id}`, { labels: newLabels });
     const idx = state.companies.findIndex(x => x.id === id);
     if (idx !== -1) state.companies[idx] = updated;
-    renderGrid();
+    patchCard(id, _labelFilterActive());   // 標籤篩選中改標籤可能讓卡片離開範圍
   } catch (err) {
     toast(`移除標籤失敗：${err.message}`, true);
   }
@@ -623,7 +650,7 @@ async function confirmAddLabel(id, label) {
     const updated = await api("PUT", `/api/companies/${id}`, { labels: newLabels });
     const idx = state.companies.findIndex(x => x.id === id);
     if (idx !== -1) state.companies[idx] = updated;
-    renderGrid();
+    patchCard(id, _labelFilterActive());   // 同 removeLabel
   } catch (err) {
     toast(`新增標籤失敗：${err.message}`, true);
   }
@@ -656,7 +683,8 @@ async function toggleWatch(id) {
     await api("PUT", `/api/companies/${id}`, { watched: newVal });
     c.watched = newVal;
     updateWatchCount();
-    renderGrid();
+    // 「追蹤」tab 下取消追蹤要把卡片移出清單 → 整格重繪；其他情境單卡即可
+    patchCard(id, state.activeTab === "watched");
   } catch (err) {
     toast(`操作失敗：${err.message}`, true);
   }

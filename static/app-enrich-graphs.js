@@ -8,10 +8,12 @@ function isIncompleteCompany(c) {
   // 對齊 run_enrich.py 的判定條件
   if (!c) return false;
   if (!(c.representative || "").trim()) return true;
-  const summary = (c.summary || "").trim();
-  if (!summary) return true;
-  if (summary.includes("尚待補充")) return true;
-  return false;
+  if ("summary" in c) {          // 完整資料（modal 抓過或 SSE 補進來的）
+    const summary = (c.summary || "").trim();
+    return !summary || summary.includes("尚待補充");
+  }
+  // list 投影不含 summary 本文——用後端算好的布林
+  return c.summary_incomplete === true;
 }
 
 function getScopedCompanies() {
@@ -207,6 +209,7 @@ function _startEnrichPoll() {
       _enrichPollTimer = null;
       return;
     }
+    if (document.hidden) return;   // 背景分頁不打 API，回前景下一輪自然補上
     await loadCompanies();
     renderGrid();
     if (_modalCompanyId && state.enrichingIds.has(_modalCompanyId) && document.getElementById("modal-overlay").classList.contains("open")) openModal(_modalCompanyId);

@@ -102,6 +102,20 @@ function openOverlay(idOrEl) {
 function closeOverlay(idOrEl) {
   const el = typeof idOrEl === "string" ? document.getElementById(idOrEl) : idOrEl;
   el?.classList.remove("open");
+  // modal 關閉時把窗內建立的 SSE（專利、findbiz 串流）一併關掉，
+  // 否則串流途中關窗會留下殭屍長連線（後端掛著直到任務結束）
+  if (el && el.id === "modal-overlay") _closeModalStreams();
+}
+
+/* modal 範圍的 EventSource 註冊表——只收「關窗即無意義」的串流（專利、findbiz）；
+   summarize/deep-enrich 刻意不收：那是背景生成，關窗後要繼續跑並靠 SSE 清 enrichingIds */
+const _modalStreams = [];
+function trackModalES(es) { _modalStreams.push(es); return es; }
+function _closeModalStreams() {
+  while (_modalStreams.length) {
+    const es = _modalStreams.pop();
+    try { es.close(); } catch (_) {}
+  }
 }
 
 /* ── News blacklist / dismiss ── */
@@ -209,7 +223,24 @@ async function loadLabelGroups() {
 }
 
 async function loadCompanies() {
-  state.companies = await api("GET", "/api/companies");
+  // view=list：輕量投影（無 summary/directors/patents 等重欄位），payload 從 ~5MB
+  // 降到 ~0.3MB。完整資料由 openModal 開窗時單筆抓取。
+  const fresh = await api("GET", "/api/companies?view=list");
+  // modal 開著時，把該公司已抓到的重欄位搬到新物件上，
+  // 避免背景 refetch 後視窗內的互動（關係圖、專利表）突然缺資料
+  try {
+    if (_modalCompanyId) {
+      const old = (state.companies || []).find(c => c.id === _modalCompanyId);
+      const neu = fresh.find(c => c.id === _modalCompanyId);
+      if (old && neu) {
+        for (const k of ["summary", "competitors", "directors", "patents",
+                         "investee_candidates", "materials_summary"]) {
+          if (!(k in neu) && k in old) neu[k] = old[k];
+        }
+      }
+    }
+  } catch (_) {}
+  state.companies = fresh;
   updateWatchCount();
 }
 

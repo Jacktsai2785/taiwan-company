@@ -16,10 +16,19 @@ import os
 import signal
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# 全平台 AI 併發閘：限制「同時在跑的 CLI 子行程」總數（所有引擎、所有功能共用）。
+# 沒有這道閘時，產業地圖生成、每日 digest、enrich、公司抽取可各自同時起一個 CLI，
+# 並行搶同一份 5 小時滾動額度；report_generator 的 _CLAUDE_LOCK 只罩 DD memo，
+# 罩不到其他路徑。放在 _run_cli 這層 = 一處守住所有呼叫點。
+# 預設 2：允許一個長任務（480s 地圖/深度生成）與一個短任務並行，不互相餓死。
+_MAX_CONCURRENT_CLI = max(1, int(os.getenv("AI_MAX_CONCURRENCY", "2") or 2))
+_CLI_GATE = threading.BoundedSemaphore(_MAX_CONCURRENT_CLI)
 
 DEFAULT_ENGINE = (os.getenv("AI_ENGINE", "claude") or "claude").strip().lower()
 
@@ -59,7 +68,13 @@ def _normalize_engine(engine: str) -> str:
 
 def _run_cli(cmd: list[str], timeout: int, label: str) -> str:
     """Run a CLI in its own process group; killpg on timeout so child processes
-    holding the pipe can't hang us forever."""
+    holding the pipe can't hang us forever. Serialized through _CLI_GATE so at
+    most _MAX_CONCURRENT_CLI engine processes run at once platform-wide."""
+    with _CLI_GATE:
+        return _run_cli_unlocked(cmd, timeout, label)
+
+
+def _run_cli_unlocked(cmd: list[str], timeout: int, label: str) -> str:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

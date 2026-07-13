@@ -34,7 +34,11 @@ LEAF_PRESET: dict[str, int] = {
     "n_columns": 5, "max_per_subgroup": 10, "max_subgroups_per_col": 3, "max_pool": 40,
 }
 
-REPS_PER_CHILD = 5  # 父模式每個子產業顯示幾家代表公司（預覽；點展開看完整葉圖）
+REPS_PER_CHILD = 5
+
+# subdivide 一次送 AI 分組的公司數上限（與 LEAF_MAX_COMPANIES 同精神的 prompt 保護；
+# 超過取資本額前 N 家，其餘留在父產業，之後可對剩餘再跑一次細分）
+SUBDIVIDE_MAX_COMPANIES = 150  # 父模式每個子產業顯示幾家代表公司（預覽；點展開看完整葉圖）
 
 # 葉圖（單張完整地圖）能容納的已收錄公司上限——超過就一定會撞 AI timeout，改引導去細分。
 LEAF_MAX_COMPANIES = 70
@@ -469,6 +473,15 @@ async def propose_subdivision(
     targets = [c for c in all_cos if industry in _industries_of(c)]  # 掛本產業標籤的公司
     if not targets:
         raise ValueError(f"「{industry}」沒有可細分的公司")
+
+    # Cap：與 leaf 的 LEAF_MAX_COMPANIES 對稱的保護。太多家會把 prompt 撐爆、
+    # 480s 逾時整段白燒（過去 200+ 家實際發生過）。取資本額前 N 家送 AI，
+    # 其餘保留在父產業（本來就允許「未歸入」的公司留下，語意一致）。
+    if len(targets) > SUBDIVIDE_MAX_COMPANIES:
+        targets.sort(key=lambda c: c.get("capital", 0) or 0, reverse=True)
+        skipped = len(targets) - SUBDIVIDE_MAX_COMPANIES
+        targets = targets[:SUBDIVIDE_MAX_COMPANIES]
+        _emit(f"公司多達 {skipped + SUBDIVIDE_MAX_COMPANIES} 家，僅取資本額前 {SUBDIVIDE_MAX_COMPANIES} 家送 AI 分組；其餘 {skipped} 家將留在「{industry}」（可再次細分處理）")
 
     _emit(f"要細分 {len(targets)} 家公司，呼叫 AI 分組…（{len(targets)} 家約需 {max(1, round(len(targets)/25))}–{max(2, round(len(targets)/18))} 分鐘，請勿關閉）")
     companies = [{"name": c["name"], "core_biz": _extract_one_liner(c)} for c in targets]

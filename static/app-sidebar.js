@@ -798,6 +798,9 @@ async function runClassify() {
   const targets = result.targets || [];
   const suggestions = result.suggestions || {};
   const industries = result.industries || [];
+  if (result.truncated) {
+    toast(`未分類公司較多，本次先處理 ${targets.length} 家；還有 ${result.truncated} 家，套用後可再跑一次繼續分類`);
+  }
 
   alertDone("(!) 分類完成 — 請確認", `✅ AI 自動分類完成，請確認並套用`);
 
