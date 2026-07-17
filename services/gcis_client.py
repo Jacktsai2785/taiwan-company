@@ -10,8 +10,10 @@ Listing status (上市/上櫃/興櫃/創新板/非公發) is resolved from TWSE/
 創櫃板: TPEX 尚未提供公開 JSON API，暫不支援自動辨識。
 """
 import asyncio
+import json
 import random
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -34,6 +36,40 @@ _by_abbrev: dict[str, str] = {}
 _cache_until: datetime | None = None
 _cache_lock = asyncio.Lock()
 _CACHE_TTL = timedelta(hours=24)
+# 落地上市狀態快取，重啟後不必冷抓 TWSE/TPEX/GISA 四支 API（開發期頻繁 restart）
+_LISTING_CACHE_FILE = Path(__file__).parent.parent / "data" / "listing_cache.json"
+
+
+def _save_listing_cache() -> None:
+    try:
+        _LISTING_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LISTING_CACHE_FILE.write_text(json.dumps({
+            "until": _cache_until.isoformat() if _cache_until else None,
+            "by_taxid": _by_taxid, "by_name": _by_name, "by_abbrev": _by_abbrev,
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_listing_cache() -> bool:
+    """從磁碟載入未過期的上市快取。成功且未過期回 True。"""
+    global _cache_until
+    try:
+        if not _LISTING_CACHE_FILE.exists():
+            return False
+        d = json.loads(_LISTING_CACHE_FILE.read_text(encoding="utf-8"))
+        until = d.get("until")
+        if not until or datetime.now() >= datetime.fromisoformat(until):
+            return False
+        _by_taxid.update(d.get("by_taxid") or {})
+        _by_name.update(d.get("by_name") or {})
+        _by_abbrev.update(d.get("by_abbrev") or {})
+        if not (_by_taxid or _by_name or _by_abbrev):
+            return False
+        _cache_until = datetime.fromisoformat(until)
+        return True
+    except Exception:
+        return False
 
 _LISTING_SOURCES = [
     ("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "上市"),
@@ -92,13 +128,21 @@ async def _ensure_listing_cache(client: httpx.AsyncClient) -> None:
     async with _cache_lock:
         if _cache_until and datetime.now() < _cache_until:
             return
+        # 重啟後先嘗試從磁碟載入未過期的快取，省掉冷抓四支 API
+        if not (_by_taxid or _by_name or _by_abbrev) and _load_listing_cache():
+            return
         _by_taxid.clear()
         _by_name.clear()
         _by_abbrev.clear()
         for url, status in _LISTING_SOURCES:
             await _load_listing_source(client, url, status)
         await _load_gisa(client)
-        _cache_until = datetime.now() + _CACHE_TTL
+        # 來源全失敗（三個 dict 皆空）時不要鎖 24h，否則 24 小時內所有公司都被解析成
+        # 『非公發』、摘要裡的『上市』也會被 _fix_competitor_listing 改寫錯。改設短 TTL 重試。
+        loaded = len(_by_taxid) + len(_by_name) + len(_by_abbrev)
+        _cache_until = datetime.now() + (_CACHE_TTL if loaded else timedelta(minutes=5))
+        if loaded:
+            _save_listing_cache()
 
 
 def _resolve_listing_status(tax_id: str, name: str) -> str:

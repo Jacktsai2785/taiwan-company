@@ -11,6 +11,11 @@ from pathlib import Path
 
 log = logging.getLogger("file_parser")
 
+
+class FileParseError(Exception):
+    """檔案解析失敗（格式不支援或內容讀取錯誤）。改用例外傳遞，不再用『回傳 [訊息]』的
+    in-band 訊號——避免正文以 [ 開頭、] 結尾的合法檔（JSON 陣列、帶中括號小標的簡報）被誤判。"""
+
 # ── Tesseract (fallback only) ─────────────────────────────────────────────────
 try:
     import pytesseract
@@ -36,16 +41,16 @@ def extract_text(filename: str, content: bytes) -> str:
     if ext == ".docx":
         return _from_docx(content)
     if ext == ".doc":
-        return "[不支援舊版 .doc 格式，請另存為 .docx 後重新上傳]"
+        raise FileParseError("不支援舊版 .doc 格式，請另存為 .docx 後重新上傳")
     if ext == ".pptx":
         return _from_pptx(content)
     if ext == ".ppt":
-        return "[不支援舊版 .ppt 格式，請另存為 .pptx 或匯出 PDF 後重新上傳]"
+        raise FileParseError("不支援舊版 .ppt 格式，請另存為 .pptx 或匯出 PDF 後重新上傳")
     if ext in (".xlsx", ".xls"):
         return _from_excel(content)
     if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"):
         return _from_image(content)
-    return f"[不支援的檔案格式：{ext}]"
+    raise FileParseError(f"不支援的檔案格式：{ext}")
 
 
 # ── Text-based formats ────────────────────────────────────────────────────────
@@ -58,7 +63,7 @@ def _from_pdf(content: bytes) -> str:
         doc.close()
         return "\n".join(pages)
     except Exception as e:
-        return f"[PDF 解析失敗：{e}]"
+        raise FileParseError(f"PDF 解析失敗：{e}")
 
 
 def _from_docx(content: bytes) -> str:
@@ -76,7 +81,7 @@ def _from_docx(content: bytes) -> str:
                     parts.append(row_text)
         return "\n".join(parts)
     except Exception as e:
-        return f"[DOCX 解析失敗：{e}]"
+        raise FileParseError(f"DOCX 解析失敗：{e}")
 
 
 def _from_pptx(content: bytes) -> str:
@@ -105,7 +110,7 @@ def _from_pptx(content: bytes) -> str:
                 parts.append(f"── 第 {idx} 頁 ──\n" + "\n".join(slide_lines))
         return "\n\n".join(parts)
     except Exception as e:
-        return f"[PPTX 解析失敗：{e}]"
+        raise FileParseError(f"PPTX 解析失敗：{e}")
 
 
 def _from_excel(content: bytes) -> str:
@@ -120,7 +125,7 @@ def _from_excel(content: bytes) -> str:
                     parts.append(row_text)
         return "\n".join(parts)
     except Exception as e:
-        return f"[Excel 解析失敗：{e}]"
+        raise FileParseError(f"Excel 解析失敗：{e}")
 
 
 # ── Image: Windows OCR → tesseract fallback ──────────────────────────────────
@@ -212,7 +217,7 @@ def _tesseract_ocr(content: bytes) -> str:
     # Find tesseract binary
     tesseract_bin = pytesseract.pytesseract.tesseract_cmd if _TESSERACT_OK else None
     if not tesseract_bin or not Path(tesseract_bin).exists():
-        return "[圖片解析失敗：Windows OCR 不可用且 Tesseract 未安裝]"
+        raise FileParseError("圖片解析失敗：Windows OCR 不可用且 Tesseract 未安裝")
 
     import os, uuid
     from PIL import Image
@@ -255,9 +260,9 @@ def _tesseract_ocr(content: bytes) -> str:
             log.info("Tesseract extracted %d chars", len(text))
             return text
         stderr = r.stderr.decode("utf-8", errors="replace")
-        return f"[圖片 OCR 失敗：tesseract exit {r.returncode}: {stderr[:100]}]"
+        raise FileParseError(f"圖片 OCR 失敗：tesseract exit {r.returncode}: {stderr[:100]}")
     except Exception as e:
-        return f"[圖片 OCR 失敗：{e}]"
+        raise FileParseError(f"圖片 OCR 失敗：{e}")
     finally:
         for p in [input_path, f"{output_base}.txt"]:
             try:

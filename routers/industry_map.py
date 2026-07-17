@@ -1,5 +1,6 @@
 """Industry map endpoints: read cached / generate (SSE) / delete / subdivide."""
 import asyncio
+from routers.enrichment import _spawn
 import logging
 import subprocess
 from pathlib import Path
@@ -89,7 +90,7 @@ async def generate_industry_map(
         finally:
             _running.discard(industry)
 
-    asyncio.create_task(run())
+    _spawn(run())
     return StreamingResponse(
         # start 傳 no-op：已在上面同步佔用 _running 並啟動任務，sse_progress_stream 只負責串流
         sse_progress_stream(
@@ -131,7 +132,7 @@ async def propose_subdivision(industry: str, ai: dict = Depends(ai_from_query)):
         finally:
             _sub_running.discard(key)
 
-    asyncio.create_task(run())
+    _spawn(run())
     return StreamingResponse(
         # start no-op：已同步佔用 + 啟動
         sse_progress_stream(

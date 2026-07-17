@@ -12,6 +12,7 @@ Both write to ~/jk_nb/raw/_dropbox/ ; jk_nb's raw-watcher will pick them up,
 move into raw/, and the nightly consume timer compiles them into wiki/.
 """
 from __future__ import annotations
+from services import data_store
 
 import json
 import logging
@@ -95,7 +96,7 @@ def export_company_to_jk_nb(company: dict) -> Path | None:
         facts.append(f"**所在地**: {company['address']}")
     if company.get("setup_date"):
         facts.append(f"**設立日期**: {company['setup_date']}")
-    inds = company.get("industries") or ([company["industry"]] if company.get("industry") else [])
+    inds = data_store.company_industries(company)
     if inds:
         facts.append(f"**產業**: {', '.join(inds)}")
     if facts:

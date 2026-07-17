@@ -7,6 +7,7 @@ findbiz.py — 透過 Playwright 手動通過 Cloudflare，抓取 findbiz.nat.go
   POST /api/findbiz/confirm/{session_id} → 使用者通知「已通過 Cloudflare」
 """
 import asyncio
+from routers.enrichment import _spawn
 import json
 import logging
 import os
@@ -361,7 +362,7 @@ async def start_scrape(req: ScrapeRequest):
         "tax_id":     req.tax_id,
         "done":       False,
     }
-    asyncio.create_task(_run_session(session_id))
+    _spawn(_run_session(session_id))
     return {"session_id": session_id}
 
 

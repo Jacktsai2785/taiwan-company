@@ -175,7 +175,7 @@ tail -f logs/regen_progress.log         # 即時進度
 
 - **腳本**：`scripts/backup_data.sh` — 打包 `companies.json` / `config.json` / `industry_keywords.json` / `blacklist.json`（快取類不備），gzip 壓縮存到 `~/taiwan-company-backups/`。
 - **不堆重複檔**：用 `companies.json` 的 sha256 比對上次，內容沒變就跳過。
-- **壞檔保護**：落地前先驗證 JSON 可解析（`data_store` 是非原子寫），避免把寫到一半的檔存成備份。
+- **壞檔保護**：`data_store` 已是原子寫（tmp + os.replace），備份仍額外驗證 JSON 可解析作雙保險。
 - **輪替**：只留最近 30 份（`BACKUP_KEEP` 可覆寫）；存放目錄可用 `BACKUP_DIR` 覆寫。
 - **排程**：每天 03:30 跑，`Persistent=true` 會補跑錯過的時段。範本 `deploy/taiwan-company-backup.{service,timer}.template`，由 bootstrap 安裝。
 

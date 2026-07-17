@@ -142,29 +142,14 @@ async function startBulkEnrich(ids, mode, scopeLabel) {
   const modeLabel = mode === "resume" ? "補齊未完成" : "全部重跑";
   toast(`▶ ${modeLabel}：${scopeLabel}，共 ${ids.length} 間`);
 
-  // 決定批次大小：>10 間時詢問是否分批，與既有 confirm 流程一致
+  // 決定批次大小：>10 間時用自繪對話框詢問（取代原生 confirm/prompt）
   let batchSize = ids.length;
   let autoRunAll = false;
   if (ids.length > 10) {
-    const wantBatch = confirm(
-      `本次共需生成 ${ids.length} 間公司資料。\n` +
-      `數量較多，建議分批，以免 AI 額度暫時用滿造成延遲（用滿時會自動等待續跑）。\n\n` +
-      `是否分批生成？\n[確定] = 分批　[取消] = 一次全跑`
-    );
-    if (wantBatch) {
-      const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
-      const n = parseInt(input, 10);
-      if (!input || isNaN(n) || n < 1) {
-        toast("已取消分批生成", true);
-        return;
-      }
-      batchSize = Math.max(1, n);
-      autoRunAll = confirm(
-        `要全部自動跑完嗎？\n\n` +
-        `[確定] = 全部自動跑完（中途可按畫面右下「■ 停止批次」喊停）\n` +
-        `[取消] = 每批跑完都問我一次再續`
-      );
-    }
+    const s = await askBatchSettings(ids.length);
+    if (!s) { toast("已取消生成"); return; }
+    batchSize = s.batchSize;
+    autoRunAll = s.autoRunAll;
   }
 
   await runEnrichmentInBatches(ids, batchSize, autoRunAll);
@@ -216,6 +201,13 @@ function _startEnrichPoll() {
   }, 30000);
 }
 
+function retryEnrich(companyId) {
+  // 失敗後重跑：清掉失敗狀態並重新訂閱（enrich SSE 端點在任務不存在時會自動重啟）
+  const c = state.companies.find(x => x.id === companyId);
+  if (c) c.enrich_status = "generating";
+  subscribeEnrichment(companyId);
+}
+
 function subscribeEnrichment(companyId) {
   // On cloud deploy, AI features require a key. Prompt the user before firing
   // the SSE call so they don't see "簡介生成失敗" with a cryptic message.
@@ -247,13 +239,22 @@ function subscribeEnrichment(companyId) {
       } else if (event.type === "progress") {
         toast(event.message);
 
+      } else if (event.type === "error") {
+        // enrich 失敗：標記狀態、常駐紅字提示，不當成功（不加綠勾）
+        const company = state.companies.find(c => c.id === companyId);
+        if (company) company.enrich_status = "failed";
+        toast(event.message || "公司簡介生成失敗", true);
+        renderGrid();
+
       } else if (event.type === "done") {
         es.close();
         settle();
         state.enrichingIds.delete(companyId);
-        state.doneIds.add(companyId);
-        // Notify if user isn't looking at the page
-        alertDone("(!) 摘要生成完成", `✅ ${state.companies.find(c => c.id === companyId)?.name ?? "公司"} 摘要已生成完成`);
+        // done 前若已標 failed 就不要蓋成綠勾「已完成」
+        const failed = state.companies.find(c => c.id === companyId)?.enrich_status === "failed";
+        if (!failed) state.doneIds.add(companyId);
+        // Notify if user isn't looking at the page（失敗就不要報成功）
+        if (!failed) alertDone("(!) 摘要生成完成", `✅ ${state.companies.find(c => c.id === companyId)?.name ?? "公司"} 摘要已生成完成`);
         try {
           await loadCompanies();
           computeGroups();

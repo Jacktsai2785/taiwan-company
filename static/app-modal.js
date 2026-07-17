@@ -726,8 +726,9 @@ document.addEventListener("click", e => {
 function exportCompany(format) {
   const id = _modalCompanyId;
   if (!id) return;
+  const prov = document.getElementById("export-provenance")?.checked ? "&provenance=1" : "";
   const a = document.createElement("a");
-  a.href = `/api/companies/${id}/export?format=${format}`;
+  a.href = `/api/companies/${id}/export?format=${format}${prov}`;
   a.style.display = "none";
   document.body.appendChild(a);
   a.click();

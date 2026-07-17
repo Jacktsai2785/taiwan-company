@@ -95,6 +95,16 @@ def get_all_companies() -> list[dict]:
         return companies
 
 
+def company_industries(c: dict) -> list[str]:
+    """公司的產業別清單（相容舊 industry(str) 欄位）。單一來源，取代散落 9+ 處、
+    版本還不一致（config.py 曾用 ['']  會塞空產業）的 inline 相容讀法。"""
+    inds = c.get("industries")
+    if inds:
+        return list(inds)
+    old = c.get("industry")
+    return [old] if old else []
+
+
 def get_company(company_id: str) -> dict | None:
     """回傳 deepcopy：呼叫端普遍走「取出 → 就地改 → upsert」流程，若回共享的
     快取物件，改到一半就會被其他請求讀到（甚至在不寫入時汙染快取）。單筆 copy
@@ -229,6 +239,25 @@ def update_companies_industry(id_to_industry: dict[str, str]) -> int:
                     c["industries"].append(ind)
                     c["last_updated"] = now
                     count += 1
+        _write(COMPANIES_FILE, store)
+        return count
+
+
+def update_companies_fields(id_to_fields: dict[str, dict]) -> int:
+    """Apply per-company field updates in a single locked atomic write (avoids N full
+    file rewrites when many companies change at once, e.g. competitor back-linking)."""
+    if not id_to_fields:
+        return 0
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        now = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for c in store["companies"]:
+            fields = id_to_fields.get(c.get("id"))
+            if fields:
+                c.update(fields)
+                c["last_updated"] = now
+                count += 1
         _write(COMPANIES_FILE, store)
         return count
 
@@ -429,6 +458,29 @@ def merge_children_into(parent: str, descendants: list[str]) -> dict:
         _write(CONFIG_FILE, config)
 
     return {"removed": list(desc_set), "retagged": retagged}
+
+
+def reconcile_industries() -> dict:
+    """啟動對帳（非破壞）：把公司掛著、但 config.industries 已無的產業補回 config。
+    rename/delete/subdivision/merge 是 config+companies 兩段寫，中途被 kill 會留下
+    『公司有標籤但選單看不到、無法選取/清除』的殭屍標籤——補回 config 即可讓它重新可管理。"""
+    with _LOCK:
+        config = get_config()
+        industries = config.get("industries", [])
+        valid = set(industries)
+        companies = _read(COMPANIES_FILE, DEFAULT_COMPANIES)["companies"]
+        companies, _ = _ensure_industries_field(companies)
+        readded: list[str] = []
+        for c in companies:
+            for ind in c.get("industries", []):
+                if ind and ind not in valid:
+                    valid.add(ind)
+                    industries.append(ind)
+                    readded.append(ind)
+        if readded:
+            config["industries"] = industries
+            _write(CONFIG_FILE, config)
+        return {"readded_industries": readded}
 
 
 def add_label(label: str) -> None:

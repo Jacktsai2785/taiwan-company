@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from services import company_exporter, competitor_service, data_store, gcis_client, patent_scraper
 from services.ai_deps import ai_from_headers
 from services.task_progress import sse_progress_stream
-from routers.enrichment import _enrich_company, _running as _enrich_running
+from routers.enrichment import _enrich_company, _running as _enrich_running, _spawn
 
 # 競業邏輯已抽到 services/competitor_service.py（redteam #10）。競業「端點」本身
 # 已搬到 routers/competitors.py；AI enrich 系列端點搬到 routers/enrichment.py。
@@ -98,7 +98,7 @@ def list_companies(industry: str | None = None, group: str | None = None,
                    sort_by: str = "capital", view: str | None = None):
     companies = data_store.get_all_companies()
     if industry:
-        companies = [c for c in companies if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
+        companies = [c for c in companies if industry in (data_store.company_industries(c))]
     if group:
         if group == "__ungrouped__":
             companies = [c for c in companies if not c.get("group")]
@@ -209,7 +209,7 @@ async def patent_stream(company_id: str):
     return StreamingResponse(
         sse_progress_stream(
             company_id, _patent_progress, _patent_running,
-            lambda: asyncio.create_task(_run()),
+            lambda: _spawn(_run()),
             max_ticks=7200, terminal=("done", "error"), keepalive=True,
         ),
         media_type="text/event-stream",
@@ -218,7 +218,8 @@ async def patent_stream(company_id: str):
 
 
 @router.get("/{company_id}/export")
-async def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|pdf)$")):
+async def export_company(company_id: str, format: str = Query("docx", pattern="^(docx|pdf)$"),
+                         provenance: bool = Query(False)):
     company = data_store.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -234,14 +235,14 @@ async def export_company(company_id: str, format: str = Query("docx", pattern="^
         log.warning("export: investee-holders 查詢失敗，大股東表將略過", exc_info=True)
 
     if format == "pdf":
-        data = company_exporter.build_pdf(company, holders)
+        data = company_exporter.build_pdf(company, holders, provenance=provenance)
         return Response(
             content=data,
             media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}.pdf"},
         )
     else:
-        data = company_exporter.build_docx(company, holders)
+        data = company_exporter.build_docx(company, holders, provenance=provenance)
         return Response(
             content=data,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -302,7 +303,7 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
             if req.enrich:
                 enriching.append(company["id"])
                 _enrich_running.add(company["id"])
-                asyncio.create_task(_enrich_company(company["id"], **ai))
+                _spawn(_enrich_company(company["id"], **ai))
         else:
             if item.existing_id:
                 updated = data_store.add_label_to_company(item.existing_id, item.label)
@@ -311,7 +312,7 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
                     if req.enrich and item.existing_id not in _enrich_running:
                         enriching.append(item.existing_id)
                         _enrich_running.add(item.existing_id)
-                        asyncio.create_task(_enrich_company(item.existing_id, **ai))
+                        _spawn(_enrich_company(item.existing_id, **ai))
 
     return {"saved": len(saved_ids), "saved_ids": saved_ids, "enriching": enriching}
 
@@ -348,7 +349,7 @@ async def build_relationship_stream(company_id: str, director_index: int | None 
     return StreamingResponse(
         sse_progress_stream(
             company_id, _rel_progress, _rel_running,
-            lambda: asyncio.create_task(_build_relationship(company_id, director_index)),
+            lambda: _spawn(_build_relationship(company_id, director_index)),
             max_ticks=600, interval=0.4,
         ),
         media_type="text/event-stream",
@@ -468,7 +469,7 @@ async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_fr
         data_store.update_company(company["id"], {"tax_id": tax_id})
 
     _enrich_running.add(company["id"])
-    asyncio.create_task(_enrich_company(company["id"], **ai))
+    _spawn(_enrich_company(company["id"], **ai))
 
     return {"existed": False, "company_id": company["id"], "name": company["name"]}
 

@@ -68,6 +68,14 @@ async def _daily_trends_scheduler() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 啟動對帳：修補多段寫中斷留下的殭屍產業標籤（非破壞，把公司引用到但 config 沒有的補回）
+    try:
+        from services.data_store import reconcile_industries
+        r = reconcile_industries()
+        if r.get("readded_industries"):
+            log.info("啟動對帳：補回 %d 個殭屍產業標籤到 config", len(r["readded_industries"]))
+    except Exception:
+        log.exception("啟動產業對帳失敗（非致命）")
     t1 = asyncio.create_task(_daily_digest_scheduler())
     t2 = asyncio.create_task(_daily_trends_scheduler())
     yield

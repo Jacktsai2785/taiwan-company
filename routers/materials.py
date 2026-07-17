@@ -7,6 +7,7 @@ latest-Opus pass scans all uploaded files and writes a standalone profile into t
 company's `materials_summary` field (kept separate from the public-data
 `summary`).
 """
+import logging
 import mimetypes
 import re
 from datetime import datetime, timezone
@@ -19,8 +20,13 @@ from services import data_store, report_generator
 from services.ai_deps import ai_from_headers
 from services.file_parser import extract_text
 from services.materials_merge import PUBLIC_SECTIONS, UMBRELLA, normalize_to_umbrella, parse_sections, serialize_sections
+from routers.enrichment import _spawn
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["materials"])
+
+# in-flight 保護：同一公司只跑一個 materials 生成
+_mat_generating: set[str] = set()
 
 UPLOADS_DIR = data_store.DATA_DIR / "uploads"
 
@@ -63,6 +69,8 @@ def list_materials(company_id: str):
         "materials_summary": company.get("materials_summary") or "",
         "materials_blurb": company.get("materials_blurb") or "",
         "materials_generated_at": company.get("materials_generated_at") or "",
+        "materials_generating": bool(company.get("materials_generating")) or (company_id in _mat_generating),
+        "materials_error": company.get("materials_error") or "",
     }
 
 
@@ -126,18 +134,13 @@ def delete_material(company_id: str, stored_name: str):
     return {"materials": remaining}
 
 
-@router.post("/{company_id}/materials/generate")
-async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_headers)):
-    company = _require_company(company_id)
+def _collect_materials_inputs(company_id: str, company: dict) -> tuple[list[str], str, str]:
+    """讀出補充資料：native 檔路徑、抽取文字、訪談文字。"""
     materials = company.get("materials") or []
     interview_text = report_generator.serialize_memo(company.get("call_memo"))
-    if not materials and not interview_text.strip():
-        raise HTTPException(status_code=422, detail="尚無補充資料（請上傳檔案或填寫訪談備忘錄）")
-
     base_dir = _company_dir(company_id)
     native_paths: list[str] = []
     text_parts: list[str] = []
-
     for m in materials:
         stored = m.get("stored_name", "")
         path = base_dir / stored
@@ -154,25 +157,50 @@ async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_he
                     txt = extract_text(m.get("filename", stored), path.read_bytes())
             except Exception:
                 txt = ""
-            if txt and not txt.startswith("["):
+            if txt:   # 解析失敗已收成 ""；不再用 startswith('[') 誤剔合法檔
                 text_parts.append(f"── 檔案：{m.get('filename', stored)} ──\n{txt}")
+    return native_paths, "\n\n".join(text_parts), interview_text
 
-    if not native_paths and not text_parts and not interview_text.strip():
-        raise HTTPException(status_code=422, detail="無法從補充資料讀取任何內容")
 
-    materials_text = "\n\n".join(text_parts)
-    result = await report_generator.generate_summary_from_materials(
-        company, native_paths, materials_text, interview_text, **ai
-    )
+async def _run_materials_generation(company_id: str, native_paths, materials_text, interview_text, engine):
+    """背景生成 materials 簡介：關窗也會在後端跑完並落地，前端靠輪詢 GET /materials 取結果。"""
+    try:
+        company = data_store.get_company(company_id) or {}
+        result = await report_generator.generate_summary_from_materials(
+            company, native_paths, materials_text, interview_text, engine=engine
+        )
+        data_store.update_company(company_id, {
+            "materials_summary": result.get("summary", ""),
+            "materials_blurb": result.get("blurb", ""),
+            "materials_generated_at": datetime.now(timezone.utc).isoformat(),
+            "materials_generating": False,
+            "materials_error": "",
+        })
+    except Exception as e:
+        log.warning("materials generation failed for %s: %s", company_id, e)
+        data_store.update_company(company_id, {
+            "materials_generating": False,
+            "materials_error": "補充資料簡介生成失敗，請重試或換引擎",
+        })
+    finally:
+        _mat_generating.discard(company_id)
 
-    now = datetime.now(timezone.utc).isoformat()
-    fields = {
-        "materials_summary": result.get("summary", ""),
-        "materials_blurb": result.get("blurb", ""),
-        "materials_generated_at": now,
-    }
-    data_store.update_company(company_id, fields)
-    return fields
+
+@router.post("/{company_id}/materials/generate")
+async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_headers)):
+    company = _require_company(company_id)
+    if company_id in _mat_generating:
+        return {"started": True, "already_running": True}
+
+    native_paths, materials_text, interview_text = _collect_materials_inputs(company_id, company)
+    if not native_paths and not materials_text and not interview_text.strip():
+        raise HTTPException(status_code=422, detail="無法從補充資料讀取任何內容（請上傳檔案或填寫訪談備忘錄）")
+
+    # 背景執行：立即回應，前端輪詢 GET /materials 直到 materials_generating 轉 false
+    _mat_generating.add(company_id)
+    data_store.update_company(company_id, {"materials_generating": True, "materials_error": ""})
+    _spawn(_run_materials_generation(company_id, native_paths, materials_text, interview_text, ai.get("engine", "claude")))
+    return {"started": True}
 
 
 # ── Section-level merge into the public 公司簡介 (summary) ─────────────────────

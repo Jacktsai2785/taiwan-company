@@ -4,6 +4,7 @@
 router 端以模組別名接回原本的 `_short` / `_gather_competitor_context` 等名稱，
 呼叫點不需改動、行為與抽出前完全一致。
 """
+import copy
 import re
 
 from . import data_store
@@ -73,35 +74,50 @@ def gather_competitor_context(company_id: str, company_name: str) -> dict:
 
 
 def resolve_competitor_ids(competitors: list[dict]) -> list[dict]:
-    """Fill in company_id for competitors that are already in the DB."""
+    """Fill in company_id for competitors that are already in the DB.
+    優先用 tax_id（唯一）比對，避免台灣集團常見同短名（多家『台塑…』）互相錯連；
+    無 tax_id 才退回全名 / 短名比對。"""
     all_cos = data_store.get_all_companies()
-    # Index by both stored name and short name so full/short mismatches resolve correctly
+    taxid_to_id: dict[str, str] = {}
     name_to_id: dict[str, str] = {}
     for c in all_cos:
+        if c.get("tax_id"):
+            taxid_to_id[c["tax_id"]] = c["id"]
         name_to_id[c["name"]] = c["id"]
         name_to_id[short(c["name"])] = c["id"]
     for comp in competitors:
+        tid = comp.get("tax_id") or ""
         name = comp.get("name", "")
-        comp["company_id"] = name_to_id.get(name) or name_to_id.get(short(name)) or None
+        comp["company_id"] = (
+            (taxid_to_id.get(tid) if tid else None)
+            or name_to_id.get(name)
+            or name_to_id.get(short(name))
+            or None
+        )
     return competitors
 
 
 def backlink_competitor(new_id: str, new_name: str) -> None:
-    """When a new company is added, update other companies' competitors[].company_id."""
+    """When a new company is added, update other companies' competitors[].company_id.
+    一次鎖內原子批次寫（不再每筆一次全檔重寫），且以 deepcopy 修改、不就地寫共享快取。"""
     new_key = short(new_name)
-    for co in data_store.get_all_companies():
+    updates: dict[str, list] = {}
+    for co in data_store.get_all_companies():   # 唯讀迭代共享快取
         if co["id"] == new_id:
             continue
         comps = co.get("competitors")
         if not comps:
             continue
-        updated = False
-        for comp in comps:
+        new_comps = None
+        for i, comp in enumerate(comps):
             if comp.get("company_id") is None and short(comp.get("name", "")) == new_key:
-                comp["company_id"] = new_id
-                updated = True
-        if updated:
-            data_store.update_company(co["id"], {"competitors": comps})
+                if new_comps is None:
+                    new_comps = copy.deepcopy(comps)   # 不就地改共享快取物件
+                new_comps[i]["company_id"] = new_id
+        if new_comps is not None:
+            updates[co["id"]] = {"competitors": new_comps}
+    if updates:
+        data_store.update_companies_fields(updates)   # 單次原子寫
 
 
 def insert_competitor_row(summary: str, row: str) -> str:

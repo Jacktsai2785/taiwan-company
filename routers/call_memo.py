@@ -1,44 +1,27 @@
+import asyncio
 from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import create_model
 
 from services import data_store, memo_extractor
 from services.ai_deps import ai_from_headers
-from services.file_parser import extract_text
+from services.file_parser import extract_text, FileParseError
 from services import whisper_transcriber
 
 router = APIRouter(prefix="/api/companies", tags=["call_memo"])
 
+_MAX_BYTES = 30 * 1024 * 1024        # 逐字稿文件 30MB（與 upload 一致）
+_AUDIO_MAX_BYTES = 100 * 1024 * 1024  # 音檔放寬到 100MB
 
-class MemoSave(BaseModel):
-    interview_date: str = ""
-    deal_source: str = ""
-    interviewees: str = ""
-    paid_in_capital: str = ""
-    address: str = ""
-    founding_date: str = ""
-    underwriter: str = ""
-    auditor: str = ""
-    chairman: str = ""
-    general_manager: str = ""
-    headcount: str = ""
-    ipo_timeline: str = ""
-    investment_terms: str = ""
-    business_revenue: str = ""
-    financials: str = ""
-    management_team: str = ""
-    board_shareholding: str = ""
-    recent_development: str = ""
-    major_customers: str = ""
-    major_suppliers: str = ""
-    factory_capacity: str = ""
-    competitors: str = ""
-    industry_trends: str = ""
-    risk_tracking: str = ""
-    conclusion: str = ""
+# 單一來源：欄位定義只在 memo_extractor.FIELDS 維護，MemoSave 由它 + interview_date 動態生成
+MemoSave = create_model(
+    "MemoSave",
+    interview_date=(str, ""),
+    **{key: (str, "") for key in memo_extractor.FIELD_KEYS},
+)
 
 
 @router.get("/{company_id}/memo")
@@ -64,18 +47,29 @@ async def extract_memo(company_id: str, file: UploadFile = File(...), ai: dict =
         raise HTTPException(status_code=404, detail="Company not found")
 
     content = await file.read()
+    if len(content) > _MAX_BYTES:
+        raise HTTPException(status_code=413, detail="逐字稿檔過大，上限 30MB")
     filename = file.filename or "transcript.txt"
 
     if filename.lower().endswith(".txt"):
         transcript = content.decode("utf-8", errors="replace")
     else:
-        transcript = extract_text(filename, content)
+        # 含 OCR/解析的同步呼叫卸載到 thread，否則卡死整個 event loop（比照 upload.py）
+        try:
+            transcript = await asyncio.to_thread(extract_text, filename, content)
+        except FileParseError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     if not transcript.strip():
         raise HTTPException(status_code=422, detail="無法從檔案中取得文字內容")
 
-    fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
-    fields["interview_date"] = date.today().strftime("%Y/%m/%d")
+    try:
+        fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    # 訪談日期優先用逐字稿抽到的；抽不到才預設今天（不再硬蓋）
+    if not fields.get("interview_date"):
+        fields["interview_date"] = date.today().strftime("%Y/%m/%d")
     return fields
 
 
@@ -94,13 +88,19 @@ async def transcribe_audio_memo(
         raise HTTPException(status_code=422, detail=f"不支援的音訊格式：{suffix}，請上傳 MP3 / WAV / M4A / OGG / WEBM / FLAC")
 
     content = await file.read()
+    if len(content) > _AUDIO_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="音檔過大，上限 100MB，請壓縮或分段上傳")
     transcript = await whisper_transcriber.transcribe_audio(content, suffix)
 
     if not transcript.strip():
         raise HTTPException(status_code=422, detail="無法辨識音訊內容，請確認檔案包含清晰語音")
 
-    fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
-    fields["interview_date"] = date.today().strftime("%Y/%m/%d")
+    try:
+        fields = await memo_extractor.extract_from_transcript(company["name"], transcript, **ai)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not fields.get("interview_date"):
+        fields["interview_date"] = date.today().strftime("%Y/%m/%d")
     return {"transcript": transcript, "fields": fields}
 
 

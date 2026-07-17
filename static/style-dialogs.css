@@ -354,6 +354,19 @@
 .enriching-summary::after { content: ' ●●●'; animation: blink-dots 1.2s ease-in-out infinite; }
 @keyframes blink-dots { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 
+/* enrich 失敗：卡片顯示可點的重試入口，而非無聲停在「未生成」 */
+.retry-badge {
+  display: inline-block;
+  background: #b91c1c; color: #fff;
+  font-size: 10px; font-weight: 700;
+  padding: 2px 8px; border-radius: 99px;
+  margin-left: 8px; vertical-align: middle;
+  border: none; cursor: pointer;
+}
+.retry-badge:hover { background: #dc2626; }
+.enrich-failed-summary { font-size: 12px; color: #b91c1c; margin-top: 8px; }
+.company-card.enrich-failed { border-color: #fca5a5; }
+
 /* ════════════════════════════════════════
    TOAST
 ════════════════════════════════════════ */

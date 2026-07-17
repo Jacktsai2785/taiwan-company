@@ -438,11 +438,14 @@ function _labelFilterActive() {
 function companyCardHtml(c) {
   const isEnriching = state.enrichingIds.has(c.id);
   const isDone = state.doneIds.has(c.id);
+  const isFailed = !isEnriching && c.enrich_status === "failed";
 
   const isWatched = c.watched === true;
-  const cardClass = (isEnriching ? " enriching" : isDone ? " enriching-done" : "") + (!(c.industries || []).length ? " no-industry" : "") + (isWatched ? " watched" : "");
+  const cardClass = (isEnriching ? " enriching" : isDone ? " enriching-done" : isFailed ? " enrich-failed" : "") + (!(c.industries || []).length ? " no-industry" : "") + (isWatched ? " watched" : "");
   const statusBadge = isEnriching
     ? '<span class="enriching-badge">● 生成中</span>'
+    : isFailed
+    ? `<button class="retry-badge" onclick="event.stopPropagation();retryEnrich('${c.id}')" title="重新生成公司簡介">⚠ 生成失敗 · 重試</button>`
     : isDone
     ? '<span class="done-badge">✓ 已完成</span>'
     : "";
@@ -457,6 +460,8 @@ function companyCardHtml(c) {
   const blurbText = cardBlurb(c);
   const summaryHtml = isEnriching
     ? `<div class="enriching-summary">正在為您生成公司簡介</div>`
+    : isFailed
+    ? `<div class="enrich-failed-summary">公司簡介生成失敗，點右上角「重試」重新生成</div>`
     : `<div class="card-summary-wrap">
         <span class="card-summary-text" id="blurb-text-${c.id}">${escHtml(blurbText)}</span>
         <button class="blurb-edit-btn" onclick="event.stopPropagation();startEditBlurb('${c.id}')" title="編輯簡介">✎</button>
@@ -1044,13 +1049,32 @@ async function generateFromMaterials() {
   btn.classList.add("is-running");
 
   try {
-    const fields = await api("POST", `/api/companies/${id}/materials/generate`);
+    await api("POST", `/api/companies/${id}/materials/generate`);
+    // 背景生成：輪詢 GET /materials 直到完成。關窗/切走也會在後端跑完並落地，
+    // 下次開面板即見結果，不再因關窗而白跑一趟 Opus。
+    let data = null;
+    for (let i = 0; i < 200; i++) {          // 每 3 秒一次，最長約 10 分鐘
+      await new Promise(r => setTimeout(r, 3000));
+      if (_modalCompanyId !== id) return;    // 使用者切走：停止輪詢（後端仍會跑完落地）
+      data = await api("GET", `/api/companies/${id}/materials`);
+      if (!data.materials_generating) break;
+    }
+    if (data && data.materials_error) {
+      status.textContent = `❌ ${data.materials_error}`;
+      status.className = "memo-status-error";
+      return;
+    }
+    const summary = (data && data.materials_summary) || "";
     const c = state.companies.find(x => x.id === id);
-    if (c) Object.assign(c, fields);
-    _renderMaterialsResult(fields.materials_summary || "", fields.materials_generated_at || "");
+    if (c) Object.assign(c, {
+      materials_summary: summary,
+      materials_blurb: (data && data.materials_blurb) || "",
+      materials_generated_at: (data && data.materials_generated_at) || "",
+    });
+    _renderMaterialsResult(summary, (data && data.materials_generated_at) || "");
     status.textContent = "✅ 已生成，請於審核框選取要套用的段落";
     status.className = "memo-status-ok";
-    openMatReview(fields.materials_summary || "");
+    openMatReview(summary);
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
     status.className = "memo-status-error";

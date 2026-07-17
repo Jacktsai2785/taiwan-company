@@ -83,6 +83,22 @@ _gcis_running: set[str] = set()
 _summarize_progress: dict[str, list[dict]] = {}
 _summarize_running: set[str] = set()
 
+# 保存 fire-and-forget 任務的強參照，避免 event loop 只持弱參照時被 GC 中途取消
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    t = asyncio.create_task(coro)
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
+    return t
+
+
+def _nonempty_fields(d: dict) -> dict:
+    """只保留非空/非零欄位。外部 API（g0v/GCIS）全失敗時 gcis 回的是全預設骨架，
+    用它整包寫回會洗掉既有的董監事/資本額/代表人等好資料。"""
+    return {k: v for k, v in d.items() if v not in ("", 0, [], None)}
+
 
 class EnrichBatchRequest(BaseModel):
     company_ids: list[str]
@@ -112,7 +128,7 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
         wanted = set(req.company_ids)
         targets = [c for c in all_companies if c["id"] in wanted]
     else:
-        targets = [c for c in all_companies if not (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
+        targets = [c for c in all_companies if not (data_store.company_industries(c))]
 
     if not targets:
         return {"suggestions": {}, "industries": industries, "targets": []}
@@ -145,7 +161,7 @@ async def enrich_batch(req: EnrichBatchRequest, ai: dict = Depends(ai_from_heade
         if cid in _running:
             continue
         _running.add(cid)
-        asyncio.create_task(_enrich_company(cid, **ai))
+        _spawn(_enrich_company(cid, **ai))
         started.append(cid)
     return {"started": started}
 
@@ -159,7 +175,7 @@ async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
     return StreamingResponse(
         sse_progress_stream(
             company_id, _progress, _running,
-            lambda: asyncio.create_task(_enrich_company(company_id, **ai)),
+            lambda: _spawn(_enrich_company(company_id, **ai)),
         ),
         media_type="text/event-stream",
     )
@@ -181,7 +197,7 @@ async def deep_enrich_stream(company_id: str, force: bool = False, ai: dict = De
     return StreamingResponse(
         sse_progress_stream(
             company_id, _deep_progress, _deep_running,
-            lambda: asyncio.create_task(_deep_enrich_company(company_id, **ai)),
+            lambda: _spawn(_deep_enrich_company(company_id, **ai)),
         ),
         media_type="text/event-stream",
     )
@@ -199,6 +215,9 @@ async def _summarize_company(company_id: str, engine: str = "claude", reset: boo
 
     def push_data(fields: dict):
         events.append({"type": "data", "fields": fields})
+
+    def push_error(msg: str):
+        events.append({"type": "error", "message": msg})
 
     try:
         company = data_store.get_company(company_id)
@@ -221,11 +240,20 @@ async def _summarize_company(company_id: str, engine: str = "claude", reset: boo
             result = await report_generator.generate_summary(
                 company, engine=engine, competitor_context=ctx
             )
-            saved = _save_summary_result(company_id, result)
+            saved = _save_summary_result(company_id, result, extra={
+                "enrich_status": "ok",
+                "enriched_at": datetime.now(timezone.utc).isoformat(),
+                "enrich_error": "",
+            })
             push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
             push("公司簡介已生成完成")
         except Exception as e:
-            push(f"簡介生成失敗：{e}")
+            log.warning("summarize failed for %s: %s", company_id, e)
+            data_store.update_company(company_id, {
+                "enrich_status": "failed",
+                "enrich_error": "公司簡介生成失敗，可在卡片點『重試』重新生成",
+            })
+            push_error("公司簡介生成失敗，可在卡片點『重試』重新生成")
 
         events.append({"type": "done"})
     finally:
@@ -243,7 +271,7 @@ async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depe
     return StreamingResponse(
         sse_progress_stream(
             company_id, _summarize_progress, _summarize_running,
-            lambda: asyncio.create_task(_summarize_company(company_id, **ai, reset=reset)),
+            lambda: _spawn(_summarize_company(company_id, **ai, reset=reset)),
         ),
         media_type="text/event-stream",
     )
@@ -283,8 +311,9 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
 
         return {"website": url}
     except Exception as exc:
+        # 引擎未就緒/逾時 ≠ 確實查無官網，回 engine_error 讓前端顯示可行動訊息
         log.warning("find-website failed for %s: %s", company_id, exc)
-        return {"website": ""}
+        return {"website": "", "engine_error": True}
 
 
 @router.get("/{company_id}/refresh-gcis")
@@ -296,7 +325,7 @@ async def refresh_gcis_stream(company_id: str):
     return StreamingResponse(
         sse_progress_stream(
             company_id, _gcis_progress, _gcis_running,
-            lambda: asyncio.create_task(_refresh_gcis_only(company_id)),
+            lambda: _spawn(_refresh_gcis_only(company_id)),
             max_ticks=120,
         ),
         media_type="text/event-stream",
@@ -323,16 +352,19 @@ async def _refresh_gcis_only(company_id: str) -> None:
             else:
                 enrichment = await gcis_client.fetch_company_data(name)
             matched_name: str = enrichment.pop("matched_name", "")
-            data_store.update_company(company_id, enrichment)
-            directors_count = len(enrichment.get("directors", []))
-            events.append({"type": "data", "fields": {k: v for k, v in enrichment.items()}})
-            events.append({"type": "progress", "message": f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）"})
-
+            clean = _nonempty_fields(enrichment)
             if matched_name and matched_name != name:
-                data_store.update_company(company_id, {"name": matched_name})
-                events.append({"type": "data", "fields": {"name": matched_name}})
+                clean["name"] = matched_name
+            if clean:
+                data_store.update_company(company_id, clean)
+                directors_count = len(clean.get("directors", []))
+                events.append({"type": "data", "fields": clean})
+                events.append({"type": "progress", "message": f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）"})
+            else:
+                events.append({"type": "progress", "message": "政府登記資料暫時查無，保留既有資料"})
         except Exception as e:
-            events.append({"type": "progress", "message": f"資料查詢失敗：{e}"})
+            log.warning("GCIS refresh failed for %s: %s", name, e)
+            events.append({"type": "progress", "message": "政府登記資料查詢暫時失敗"})
 
         events.append({"type": "done"})
     finally:
@@ -369,6 +401,11 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
     def push_data(fields: dict):
         events.append({"type": "data", "fields": fields})
 
+    def push_error(msg: str):
+        events.append({"type": "error", "message": msg})
+
+    data_store.update_company(company_id, {"enrich_status": "generating"})
+
     try:
         company = data_store.get_company(company_id)
         if not company:
@@ -385,12 +422,8 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
             else:
                 enrichment = await gcis_client.fetch_company_data(name)
             matched_name: str = enrichment.pop("matched_name", "")
-            data_store.update_company(company_id, enrichment)
-            directors_count = len(enrichment.get("directors", []))
-            push_data({k: v for k, v in enrichment.items()})
-            push(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
-
-            # Correct stored name to API-returned short name (strip legal suffix)
+            clean = _nonempty_fields(enrichment)
+            # 修正公司名為 API 短名（去法律尾綴），併進同一次寫入（省一次全檔重寫）
             if matched_name:
                 short = matched_name
                 for sfx in ("股份有限公司", "有限公司"):
@@ -398,11 +431,19 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
                         short = short[:-len(sfx)]
                         break
                 if short and short != name:
-                    data_store.update_company(company_id, {"name": short})
-                    push_data({"name": short})
-                    push(f"公司名稱更新為：{short}")
+                    clean["name"] = short
+            if clean:
+                data_store.update_company(company_id, clean)
+                directors_count = len(clean.get("directors", []))
+                push_data(clean)
+                push(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
+                if clean.get("name"):
+                    push(f"公司名稱更新為：{clean['name']}")
+            else:
+                push("政府登記資料暫時查無，保留既有資料")
         except Exception as e:
-            push(f"資料查詢失敗：{e}，跳過繼續")
+            log.warning("GCIS enrichment failed for %s: %s", name, e)
+            push("政府登記資料查詢暫時失敗，將僅生成簡介")
 
         push("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
         company = data_store.get_company(company_id)
@@ -416,13 +457,22 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
             result = await report_generator.generate_summary(
                 company, engine=engine, competitor_context=ctx or None
             )
-            saved = _save_summary_result(company_id, result)
+            saved = _save_summary_result(company_id, result, extra={
+                "enrich_status": "ok",
+                "enriched_at": datetime.now(timezone.utc).isoformat(),
+                "enrich_error": "",
+            })
             push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
             push("公司簡介已生成完成")
             # Reverse link: if this company appears in other companies' competitor lists, fill company_id
             competitor_service.backlink_competitor(company_id, company["name"])
         except Exception as e:
-            push(f"簡介生成失敗：{e}")
+            log.warning("summary generation failed for %s: %s", name, e)
+            data_store.update_company(company_id, {
+                "enrich_status": "failed",
+                "enrich_error": "公司簡介生成失敗，可在卡片點『重試』重新生成",
+            })
+            push_error("公司簡介生成失敗，可在卡片點『重試』重新生成")
 
         try:
             from services.jk_nb_exporter import export_company_to_jk_nb

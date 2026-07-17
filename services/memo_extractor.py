@@ -1,6 +1,6 @@
 """
 Extract Call Memo fields from a meeting transcript using Claude CLI.
-Returns a dict matching the 20-field template schema.
+Returns a dict matching the 24-field template schema (+ interview_date on extraction).
 """
 import asyncio
 import json
@@ -39,15 +39,53 @@ FIELDS: list[tuple[str, str, str]] = [
 
 FIELD_KEYS = [f[0] for f in FIELDS]
 
+# 抽取時額外請 AI 從逐字稿判斷訪談日期（不併進 FIELDS——FIELDS 是 memo 正文 24 欄的
+# 唯一真理來源，供 MemoSave / DOCX 範本 / serialize_memo 共用；interview_date 另走流程）。
+_EXTRACT_FIELDS = [("interview_date", "訪談日期", "逐字稿中提到的訪談/會議日期，格式 YYYY/MM/DD；未提及請留空")] + FIELDS
+_EXTRACT_KEYS = [f[0] for f in _EXTRACT_FIELDS]
+
+_CHUNK_CHARS = 12000
+_CHUNK_OVERLAP = 500
+
+
+def _split_transcript(transcript: str) -> list[str]:
+    """超長逐字稿切成有重疊的片段，避免在句子中間切斷漏抽。"""
+    if len(transcript) <= _CHUNK_CHARS:
+        return [transcript]
+    chunks, start, step = [], 0, _CHUNK_CHARS - _CHUNK_OVERLAP
+    while start < len(transcript):
+        chunks.append(transcript[start:start + _CHUNK_CHARS])
+        start += step
+    return chunks
+
 
 async def extract_from_transcript(company_name: str, transcript: str, engine: str = "claude") -> dict:
-    """Use Claude to extract all 20 Call Memo fields from a transcript."""
+    """
+    從逐字稿抽取所有 Call Memo 欄位（+ interview_date）。
+    逐字稿超長時分段抽取後合併（每欄取第一個非空值），讓後段的財務/結論不被截斷丟棄。
+    AI 回不出可解析 JSON 時 raise ValueError（不偽裝成 24 欄全空的『成功』）。
+    """
+    chunks = _split_transcript(transcript)
+    merged: dict[str, str] = {k: "" for k in _EXTRACT_KEYS}
+    any_ok = False
+    for chunk in chunks:
+        part = await _extract_once(company_name, chunk, engine)
+        any_ok = True
+        for k, v in part.items():
+            if v and not merged[k]:
+                merged[k] = v
+    if not any_ok:
+        raise ValueError("AI 未回傳可解析的 call memo（請重試或換引擎）")
+    return merged
+
+
+async def _extract_once(company_name: str, transcript: str, engine: str = "claude") -> dict:
     fields_desc = "\n".join(
         f'  "{key}": "{label}（{desc}）"'
-        for key, label, desc in FIELDS
+        for key, label, desc in _EXTRACT_FIELDS
     )
 
-    prompt = f"""你是一位專業的投資分析師助理。以下是與「{company_name}」的訪談逐字稿。
+    prompt = f"""你是一位專業的投資分析師助理。以下是與「{company_name}」的訪談逐字稿（可能是其中一段）。
 
 請從逐字稿中提取以下欄位的資訊，以 JSON 格式回傳。
 - 若某欄位在逐字稿中有提及，請整理成清楚的中文句子或條列。
@@ -61,7 +99,7 @@ async def extract_from_transcript(company_name: str, transcript: str, engine: st
 
 逐字稿內容：
 ---
-{transcript[:12000]}
+{transcript}
 ---
 
 請直接回傳 JSON 物件。"""
@@ -72,14 +110,16 @@ async def extract_from_transcript(company_name: str, transcript: str, engine: st
     raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)
     raw = re.sub(r"\n?```$", "", raw.strip(), flags=re.MULTILINE)
 
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        raise ValueError("AI 未回傳可解析的 call memo（請重試或換引擎）")
     try:
-        m = re.search(r"\{[\s\S]*\}", raw)
-        data = json.loads(m.group()) if m else {}
-    except Exception:
-        data = {}
+        data = json.loads(m.group())
+    except Exception as e:
+        raise ValueError("AI 回傳的 call memo 非合法 JSON（請重試或換引擎）") from e
 
     # Ensure all keys present, unknown keys filtered out
-    return {k: str(data.get(k, "")) for k in FIELD_KEYS}
+    return {k: str(data.get(k, "")) for k in _EXTRACT_KEYS}
 
 
 def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:
@@ -100,35 +140,13 @@ def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:
                     run.text = run.text.replace("2025/X/X", interview_date).replace("X/X", interview_date)
                     break
 
-    # ── Label → field key mapping ─────────────────────────────────────────────
+    # ── Label → field key mapping（單一來源 FIELDS 衍生，不再手抄 24 條）─────────
     LABEL_MAP = {label: key for key, label, _ in FIELDS}
-    # Also add variants that appear in the template
-    LABEL_MAP.update({
-        "案件來源：": "deal_source",
+    LABEL_MAP.update({f"{label}：": key for key, label, _ in FIELDS})  # 範本用「：」結尾
+    LABEL_MAP.update({   # 範本文字與 FIELDS 標籤不同的變體
         "公司名稱：": "_company_name",
-        "受訪人：": "interviewees",
-        "實收資本額：": "paid_in_capital",
-        "地址：": "address",
-        "設立日期：": "founding_date",
-        "承銷商：": "underwriter",
         "會計師：": "auditor",
-        "董事長：": "chairman",
-        "總經理：": "general_manager",
-        "員工人數：": "headcount",
-        "公開發行及上市櫃時程/募資規劃：": "ipo_timeline",
-        "增資計畫或投資條件：": "investment_terms",
-        "主要業務、產品營收比重：": "business_revenue",
-        "財務狀況：": "financials",
-        "經營團隊背景：": "management_team",
         "董監(或主要股東)持股情形：": "board_shareholding",
-        "公司發展近況：": "recent_development",
-        "主要銷貨客戶：": "major_customers",
-        "主要進貨廠商：": "major_suppliers",
-        "廠房及產能使用情形：": "factory_capacity",
-        "國內外主要競爭對手：": "competitors",
-        "產業發展趨勢：": "industry_trends",
-        "風險評估及追蹤事項：": "risk_tracking",
-        "評估結論與建議：": "conclusion",
     })
 
     company_name = company.get("name", "")

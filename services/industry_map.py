@@ -45,7 +45,7 @@ LEAF_MAX_COMPANIES = 70
 
 
 def _industries_of(company: dict) -> list[str]:
-    return company.get("industries") or ([company.get("industry")] if company.get("industry") else [])
+    return data_store.company_industries(company)
 
 
 def _get_children(industry: str) -> list[str]:
@@ -120,7 +120,7 @@ def collect_seed_data(industry: str) -> dict:
     池子依「被幾家已收錄公司列為競業」排序（多家公司獨立提到的候選，比只有一家
     提到的更有代表性），供 _build_prompt 依 breadth 截斷時優先保留重要的。"""
     all_companies = data_store.get_all_companies()
-    in_industry = [c for c in all_companies if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))]
+    in_industry = [c for c in all_companies if industry in (_industries_of(c))]
 
     seen = {data_store.normalize_company_name(c["name"]) for c in in_industry}
     pool_entries: dict[str, dict] = {}

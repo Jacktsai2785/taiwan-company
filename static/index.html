@@ -6,14 +6,14 @@
   <title>台灣產業商情平台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234f46e5'/%3E%3Ctext x='32' y='44' font-size='40' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3E台%3C/text%3E%3C/svg%3E" />
   <!-- style.css 已依區塊拆成以下 8 個檔案（純檔案拆分，無內容變更）；順序不可調換 -->
-  <link rel="stylesheet" href="/static/style-core.css?v=81" />
-  <link rel="stylesheet" href="/static/style-sidebar.css?v=81" />
-  <link rel="stylesheet" href="/static/style-side-panel.css?v=81" />
-  <link rel="stylesheet" href="/static/style-toolbar-grid.css?v=81" />
-  <link rel="stylesheet" href="/static/style-modal.css?v=81" />
-  <link rel="stylesheet" href="/static/style-dialogs.css?v=81" />
-  <link rel="stylesheet" href="/static/style-industry-suggest.css?v=81" />
-  <link rel="stylesheet" href="/static/style-industry-map-settings.css?v=81" />
+  <link rel="stylesheet" href="/static/style-core.css?v=84" />
+  <link rel="stylesheet" href="/static/style-sidebar.css?v=84" />
+  <link rel="stylesheet" href="/static/style-side-panel.css?v=84" />
+  <link rel="stylesheet" href="/static/style-toolbar-grid.css?v=84" />
+  <link rel="stylesheet" href="/static/style-modal.css?v=84" />
+  <link rel="stylesheet" href="/static/style-dialogs.css?v=84" />
+  <link rel="stylesheet" href="/static/style-industry-suggest.css?v=84" />
+  <link rel="stylesheet" href="/static/style-industry-map-settings.css?v=84" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
 </head>
 <body>
@@ -134,6 +134,9 @@
             ↓ 匯出 <span class="gen-caret">▾</span>
           </button>
           <div class="export-dropdown-menu" id="export-dropdown-menu">
+            <label class="export-prov-opt" onclick="event.stopPropagation()" title="在報告末尾加註：非政府登記欄位的具體數字可能為 AI 推估">
+              <input type="checkbox" id="export-provenance" /> 標註數字來源
+            </label>
             <button onclick="exportCompany('docx'); closeExportDropdown()">📄 Word (.docx)</button>
             <button onclick="exportCompany('pdf'); closeExportDropdown()">📋 PDF</button>
           </div>
@@ -549,6 +552,30 @@
   </div>
 </div>
 
+<!-- 批次生成設定（取代原生 confirm/prompt） -->
+<div id="batch-settings-overlay">
+  <div id="batch-settings-dialog">
+    <div class="bs-header">
+      <h3>批次生成設定</h3>
+      <p id="batch-settings-desc"></p>
+    </div>
+    <div class="bs-body">
+      <label class="bs-opt"><input type="radio" name="bs-mode" value="all" checked />
+        <span>一次全跑<small>數量多時 AI 額度可能暫時用滿（用滿會自動等待續跑）</small></span></label>
+      <label class="bs-opt"><input type="radio" name="bs-mode" value="batch" />
+        <span>分批生成<small>控管節奏，避免一次燒太多額度</small></span></label>
+      <div id="bs-batch-opts">
+        <label class="bs-inline">每批幾間：<input type="number" id="bs-batch-size" value="5" min="1" /></label>
+        <label class="bs-inline"><input type="checkbox" id="bs-auto" /> 全部自動跑完（中途可按右下「■ 停止批次」）</label>
+      </div>
+    </div>
+    <div class="bs-footer">
+      <button class="btn btn-ghost" id="bs-cancel">取消</button>
+      <button class="btn btn-primary" id="bs-ok">開始生成</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── 自動抓取 Cloudflare 確認橫幅 ── -->
 <div id="auto-fetch-cf-banner" class="hidden">
   <span id="auto-fetch-cf-msg"></span>
@@ -727,13 +754,13 @@
 <!-- app.js 已依區塊拆成以下 8 個檔案（純檔案拆分，無內容變更）；classic script（非 module），
      共用全域（state/api()/openOverlay 等）在 app-core.js，boot() 呼叫在 app-render-util.js 結尾，
      順序不可調換 -->
-<script src="/static/app-core.js?v=81"></script>
-<script src="/static/app-sidebar.js?v=81"></script>
-<script src="/static/app-digest-grid.js?v=81"></script>
-<script src="/static/app-modal.js?v=81"></script>
-<script src="/static/app-findbiz-upload.js?v=81"></script>
-<script src="/static/app-add-company.js?v=81"></script>
-<script src="/static/app-enrich-graphs.js?v=81"></script>
-<script src="/static/app-render-util.js?v=81"></script>
+<script src="/static/app-core.js?v=84"></script>
+<script src="/static/app-sidebar.js?v=84"></script>
+<script src="/static/app-digest-grid.js?v=84"></script>
+<script src="/static/app-modal.js?v=84"></script>
+<script src="/static/app-findbiz-upload.js?v=84"></script>
+<script src="/static/app-add-company.js?v=84"></script>
+<script src="/static/app-enrich-graphs.js?v=84"></script>
+<script src="/static/app-render-util.js?v=84"></script>
 </body>
 </html>

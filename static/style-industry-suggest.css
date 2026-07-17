@@ -156,6 +156,33 @@
   border-top: 1px solid var(--border);
 }
 
+/* ── Batch settings dialog（取代原生 confirm/prompt）── */
+#batch-settings-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(14,26,46,.65); z-index: 250;
+  align-items: center; justify-content: center; padding: 20px;
+}
+#batch-settings-overlay.open { display: flex; }
+#batch-settings-dialog {
+  background: var(--card); border-radius: 12px;
+  width: 100%; max-width: 460px; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(14,26,46,.25);
+}
+.bs-header { padding: 22px 24px 8px; }
+.bs-header h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+#batch-settings-desc { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.bs-body { padding: 10px 24px 6px; display: flex; flex-direction: column; gap: 10px; }
+.bs-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 14px; }
+.bs-opt small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+#bs-batch-opts { display: none; padding: 4px 0 4px 26px; flex-direction: column; gap: 8px; }
+#bs-batch-opts.open { display: flex; }
+.bs-inline { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+#bs-batch-size { width: 60px; }
+.bs-footer {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 24px; border-top: 1px solid var(--border);
+}
+
 /* ── Bulk Enrich Dialog ── */
 #bulk-enrich-btn {
   display: none;

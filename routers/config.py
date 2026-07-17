@@ -51,7 +51,7 @@ def get_groups():
     companies = data_store.get_all_companies()
     groups: dict[str, list[str]] = {}
     for c in companies:
-        for ind in (c.get("industries") or []) or ([c.get("industry")] if c.get("industry") else [""]):
+        for ind in data_store.company_industries(c):
             grp = c.get("group") or ""
             if ind not in groups:
                 groups[ind] = []
@@ -66,7 +66,7 @@ async def suggest_industry_match(req: IndustrySuggest, ai: dict = Depends(ai_fro
     name = req.name.strip()
     companies = data_store.get_all_companies()
     # Companies already tagged with this exact name (e.g. after delete-and-re-add) are always included.
-    already_tagged = {c["id"] for c in companies if name in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))}
+    already_tagged = {c["id"] for c in companies if name in (data_store.company_industries(c))}
     candidates = [c for c in companies if c["id"] not in already_tagged]
     claude_matched = await company_extractor.suggest_companies_for_industry(name, candidates, **ai)
     matched_ids = list(already_tagged) + [i for i in claude_matched if i not in already_tagged]

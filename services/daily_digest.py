@@ -29,11 +29,23 @@ MIN_DAYS_FOR_TRENDS = 1   # bootstrap fetches 7-day RSS when cache is sparse
 
 # ── Cache I/O ──────────────────────────────────────────────────────────────────
 
+def _backup_corrupt(path: Path) -> None:
+    """把損毀的快取檔改名為 .corrupt 保留，避免後續 _save 用空快取無聲覆蓋掉所有歷史。"""
+    try:
+        if path.exists():
+            bak = path.with_suffix(path.suffix + ".corrupt")
+            path.replace(bak)
+            log.warning("已把損毀的 %s 備份為 %s（歷史可從該檔救回）", path.name, bak.name)
+    except Exception:
+        log.exception("備份損毀檔失敗：%s", path)
+
+
 def _load() -> dict:
     try:
         return data_store.read_json(_DIGEST_PATH, {})
     except Exception:
-        log.warning("daily_digest.json 損毀，回退空快取", exc_info=True)
+        log.warning("daily_digest.json 損毀，備份後回退空快取", exc_info=True)
+        _backup_corrupt(_DIGEST_PATH)
         return {}
 
 
@@ -45,7 +57,8 @@ def _load_trends() -> dict:
     try:
         return data_store.read_json(_TRENDS_PATH, {})
     except Exception:
-        log.warning("industry_trends.json 損毀，回退空快取", exc_info=True)
+        log.warning("industry_trends.json 損毀，備份後回退空快取", exc_info=True)
+        _backup_corrupt(_TRENDS_PATH)
         return {}
 
 
@@ -325,7 +338,7 @@ async def _generate(industry: str, today: str, engine: str) -> dict:
     try:
         from services.data_store import get_all_companies
         watchlist_names = [
-            c["name"] for c in get_all_companies() if industry in (c.get("industries") or ([c.get("industry")] if c.get("industry") else []))
+            c["name"] for c in get_all_companies() if industry in (data_store.company_industries(c))
         ]
 
         industry_arts, company_arts = await asyncio.gather(

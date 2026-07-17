@@ -6,12 +6,14 @@ A global asyncio.Lock serializes calls so two enrichment tasks don't
 spawn competing Claude CLI processes simultaneously.
 """
 import asyncio
+from . import data_store
 import logging
 import re
 
 import httpx
 
 from . import claude_client
+from . import memo_extractor
 from .gcis_client import _ensure_listing_cache, _resolve_listing_status
 
 log = logging.getLogger("report_generator")
@@ -49,7 +51,7 @@ _WEB_TOOLS = ["WebSearch", "WebFetch"]
 
 def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
     name       = company.get("name", "")
-    _inds      = company.get("industries") or ([company.get("industry")] if company.get("industry") else [])
+    _inds      = data_store.company_industries(company)
     industry   = ", ".join(_inds) or "不詳"
     address    = company.get("address", "") or "不詳"
     capital    = company.get("capital", 0)
@@ -337,19 +339,8 @@ async def deep_enrich_summary(company: dict, engine: str = "claude",
             raise RuntimeError(f"深度生成失敗：{e}") from e
 
 
-_MEMO_LABELS = [
-    ("deal_source", "案件來源"), ("interviewees", "受訪人"), ("paid_in_capital", "實收資本額"),
-    ("address", "地址"), ("founding_date", "設立日期"), ("underwriter", "承銷商"),
-    ("auditor", "會計師事務所"), ("chairman", "董事長"), ("general_manager", "總經理"),
-    ("headcount", "員工人數"), ("ipo_timeline", "公開發行及上市櫃時程/募資規劃"),
-    ("investment_terms", "增資計畫或投資條件"), ("business_revenue", "主要業務、產品營收比重"),
-    ("financials", "財務狀況"), ("management_team", "經營團隊背景"),
-    ("board_shareholding", "董監或主要股東持股情形"), ("recent_development", "公司發展近況"),
-    ("major_customers", "主要銷貨客戶"), ("major_suppliers", "主要進貨廠商"),
-    ("factory_capacity", "廠房及產能使用情形"), ("competitors", "國內外主要競爭對手"),
-    ("industry_trends", "產業發展趨勢"), ("risk_tracking", "風險評估及追蹤事項"),
-    ("conclusion", "評估結論與建議"),
-]
+# 單一來源：memo 24 欄 (key, label) 由 memo_extractor.FIELDS 衍生，不再手抄第三份
+_MEMO_LABELS = [(key, label) for key, label, _ in memo_extractor.FIELDS]
 
 
 def serialize_memo(memo: dict | None) -> str:
@@ -385,7 +376,7 @@ def _extract_section(summary: str, heading: str) -> str:
 
 def _build_materials_prompt(company: dict, materials_text: str = "", interview_text: str = "") -> str:
     name     = company.get("name", "")
-    _inds2   = company.get("industries") or ([company.get("industry")] if company.get("industry") else [])
+    _inds2   = data_store.company_industries(company)
     industry = ", ".join(_inds2) or "不詳"
     rep      = company.get("representative", "") or "不詳"
     capital  = company.get("capital", 0)

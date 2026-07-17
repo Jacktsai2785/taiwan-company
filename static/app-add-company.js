@@ -991,30 +991,14 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     }
   }
 
-  // Decide batching strategy
+  // Decide batching strategy（改用自繪對話框，不再一連串原生 confirm/prompt）
   let batchSize = enrich_ids.length;
   let autoRunAll = false;
   if (enrich_ids.length > 10) {
-    const wantBatch = confirm(
-      `本次共需生成 ${enrich_ids.length} 間公司資料。\n` +
-      `數量較多，建議分批，以免 AI 額度暫時用滿造成延遲（用滿時會自動等待續跑）。\n\n` +
-      `是否分批生成？\n[確定] = 分批　[取消] = 一次全跑`
-    );
-    if (wantBatch) {
-      const input = prompt(`每批要同時生成幾間？（建議 3–5）`, "5");
-      const n = parseInt(input, 10);
-      if (!input || isNaN(n) || n < 1) {
-        toast("已取消分批生成", true);
-        return;
-      }
-      batchSize = Math.max(1, n);
-      // 在「初始批次對話」就讓使用者決定要不要全程自動跑完，不用每批盯著點「繼續」
-      autoRunAll = confirm(
-        `要全部自動跑完嗎？\n\n` +
-        `[確定] = 全部自動跑完（中途可按畫面右下「■ 停止批次」喊停）\n` +
-        `[取消] = 每批跑完都問我一次再續`
-      );
-    }
+    const s = await askBatchSettings(enrich_ids.length);
+    if (!s) { toast("已取消生成"); return; }
+    batchSize = s.batchSize;
+    autoRunAll = s.autoRunAll;
   }
 
   await runEnrichmentInBatches(enrich_ids, batchSize, autoRunAll);
@@ -1045,6 +1029,35 @@ function _hideBatchStopButton() {
   if (btn) btn.style.display = "none";
 }
 
+// 統一的批次設定對話框（取代原生 confirm/prompt）。回傳 {batchSize, autoRunAll} 或 null（取消）。
+function askBatchSettings(count) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById("batch-settings-overlay");
+    document.getElementById("batch-settings-desc").textContent =
+      `本次共需生成 ${count} 間公司資料。數量較多，可選擇一次全跑或分批。`;
+    const opts = document.getElementById("bs-batch-opts");
+    const radios = overlay.querySelectorAll('input[name="bs-mode"]');
+    radios.forEach(r => { r.checked = (r.value === "all"); });
+    opts.classList.remove("open");
+    document.getElementById("bs-batch-size").value = "5";
+    document.getElementById("bs-auto").checked = false;
+    radios.forEach(r => r.onchange = () =>
+      opts.classList.toggle("open", document.querySelector('input[name="bs-mode"]:checked')?.value === "batch"));
+    overlay.classList.add("open");
+    const ok = document.getElementById("bs-ok");
+    const cancel = document.getElementById("bs-cancel");
+    const cleanup = (val) => { overlay.classList.remove("open"); ok.onclick = null; cancel.onclick = null; resolve(val); };
+    ok.onclick = () => {
+      const mode = document.querySelector('input[name="bs-mode"]:checked')?.value || "all";
+      if (mode === "all") return cleanup({ batchSize: count, autoRunAll: false });
+      const n = parseInt(document.getElementById("bs-batch-size").value, 10);
+      if (isNaN(n) || n < 1) { toast("每批數量需為正整數", true); return; }
+      cleanup({ batchSize: Math.max(1, n), autoRunAll: document.getElementById("bs-auto").checked });
+    };
+    cancel.onclick = () => cleanup(null);
+  });
+}
+
 async function runEnrichmentInBatches(ids, batchSize, autoRunAll = false) {
   const total = ids.length;
   const chunks = [];
@@ -1069,7 +1082,14 @@ async function runEnrichmentInBatches(ids, batchSize, autoRunAll = false) {
       console.log(`[batch] chunk ${i + 1}/${chunks.length} done, total ${done}/${total}`);
 
       if (i === chunks.length - 1) {
-        toast(`✅ 全部 ${total} 間已完成生成`);
+        // 依 enrich_status 給真實成敗摘要，而非一律報「全部完成」（失敗的卡片上可點「重試」）
+        try { await loadCompanies(); } catch (_) {}
+        const failed = ids.filter(id => state.companies.find(c => c.id === id)?.enrich_status === "failed");
+        if (failed.length) {
+          toast(`批次完成：${total - failed.length} 間成功、${failed.length} 間失敗（失敗卡片可點「重試」）`, true);
+        } else {
+          toast(`✅ 全部 ${total} 間已完成生成`);
+        }
         break;
       }
       const remaining = total - done;

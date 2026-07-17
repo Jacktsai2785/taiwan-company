@@ -68,6 +68,11 @@ function saveSettings() {
 }
 
 function closeSettings() {
+  // 取消＝接受目前引擎（落地預設，避免 ai_engine 停在 null 而反覆彈出）
+  if (localStorage.getItem("ai_engine") === null) {
+    localStorage.setItem("ai_engine", getAiEngine());
+    _updateAiModeLabel();
+  }
   closeOverlay("settings-overlay");
 }
 
@@ -164,8 +169,12 @@ async function boot() {
       stopTitleFlash();
     }
   });
-  // Show engine picker only on very first visit (localStorage never set)
-  if (localStorage.getItem("ai_engine") === null) openSettings();
+  // 首訪不強彈引擎選擇（預設本機 claude 就能用）；空狀態畫面已有「上傳檔案開始」引導。
+  // 要換引擎點右上角 ⚙ 即可。落地預設值，避免每次重整都判定 null 再處理。
+  if (localStorage.getItem("ai_engine") === null) {
+    localStorage.setItem("ai_engine", "claude");
+    _updateAiModeLabel();
+  }
 }
 
 /* ── Notify helper ── */

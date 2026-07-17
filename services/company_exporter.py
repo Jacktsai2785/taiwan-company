@@ -11,6 +11,7 @@ Color palette (matches style.css):
   alt-row      #f7fafd   alternating table row
 """
 import io
+from services import data_store
 import re
 
 from docx import Document
@@ -222,7 +223,7 @@ def _basic_info_rows(company: dict) -> list[tuple[str, str]]:
         ("股份總數",   shares_str),
         ("公司所在地", company.get("address") or "—"),
         ("設立日期",   company.get("setup_date") or "—"),
-        ("產業別",     ", ".join(company.get("industries") or ([company["industry"]] if company.get("industry") else [])) or "—"),
+        ("產業別",     ", ".join(data_store.company_industries(company)) or "—"),
     ]
     if company.get("website"):
         rows.append(("官方網站", company.get("website")))
@@ -718,7 +719,14 @@ def _docx_note_paragraph(doc, text: str, color, size_pt: float = 9,
 
 # ── Main DOCX builder ─────────────────────────────────────────────────────────
 
-def build_docx(company: dict, holders: dict | None = None) -> bytes:
+_PROVENANCE_NOTE = (
+    "※ 本報告的公司簡介與競業分析由 AI 依公開資料與網路搜尋生成；除政府登記欄位"
+    "（統編、資本額、代表人、董監事、上市狀態）外，內文的具體數字（營收、市佔、"
+    "成長率等）可能為 AI 依公開資訊推估，引用前請以公司財報或官方公告核實。"
+)
+
+
+def build_docx(company: dict, holders: dict | None = None, provenance: bool = False) -> bytes:
     doc = Document()
 
     for sec in doc.sections:
@@ -863,6 +871,16 @@ def build_docx(company: dict, holders: dict | None = None) -> bytes:
             _R.MUTED, after=20)
         _docx_render_table(doc, _patent_table_rows(patents))
 
+    if provenance:
+        doc.add_paragraph()
+        note = doc.add_paragraph()
+        r = note.add_run(_PROVENANCE_NOTE)
+        r.italic = True
+        try:
+            r.font.size = Pt(8)
+        except Exception:
+            pass
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -872,7 +890,7 @@ def build_docx(company: dict, holders: dict | None = None) -> bytes:
 #  PDF
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_pdf(company: dict, holders: dict | None = None) -> bytes:
+def build_pdf(company: dict, holders: dict | None = None, provenance: bool = False) -> bytes:
     import fitz
 
     PAGE_W, PAGE_H = 595, 842
@@ -1258,6 +1276,9 @@ def build_pdf(company: dict, holders: dict | None = None) -> bytes:
             size=9, color=_F.MUTED, gap_after=4)
         prows = _patent_table_rows(patents)
         pdf_table(prows, _auto_col_widths(prows, 8.5, CW))
+
+    if provenance:
+        put(_PROVENANCE_NOTE, size=8, color=_F.MUTED, gap_after=4)
 
     buf = io.BytesIO()
     doc.save(buf)

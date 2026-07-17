@@ -60,11 +60,9 @@ async def upload_file(file: UploadFile = File(...), ai: dict = Depends(ai_from_h
 
     # extract_text 內含 tesseract OCR subprocess（最長 60s），必須卸載到 thread，
     # 否則單 worker 的 event loop 被整個佔死、所有請求與 SSE 停擺。
-    text = await asyncio.to_thread(file_parser.extract_text, filename, content)
-    log.info("Extracted %d chars", len(text))
-    log.info("Text preview: %s", text[:300].replace("\n", " "))
-
-    if text.startswith("[") and text.rstrip().endswith("]"):
+    try:
+        text = await asyncio.to_thread(file_parser.extract_text, filename, content)
+    except file_parser.FileParseError as e:
         return {
             "filename": filename,
             "suggested_label": suggested_label,
@@ -73,8 +71,10 @@ async def upload_file(file: UploadFile = File(...), ai: dict = Depends(ai_from_h
             "uncertain": [],
             "extracted_chars": 0,
             "ocr_failed": True,
-            "ocr_message": text[1:-1],
+            "ocr_message": str(e),
         }
+    log.info("Extracted %d chars", len(text))
+    log.info("Text preview: %s", text[:300].replace("\n", " "))
 
     try:
         # 同步鏈內含 claude CLI 呼叫（最長 90s），一樣卸載避免卡 event loop

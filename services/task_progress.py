@@ -55,4 +55,9 @@ async def sse_progress_stream(
             await asyncio.sleep(interval)
         yield 'data: {"type": "done"}\n\n'
     finally:
-        progress_map.pop(key, None)
+        # 只有事件流已達 terminal 才清除；若使用者中途斷線（GeneratorExit）而任務未完成，
+        # 保留 progress_map[key]，讓重連的新串流能從頭接回同一份事件列表（背景任務仍在 append
+        # 同一個 list 物件），而不是讀到空 progress → 轉圈後假 done、看不到任何進度。
+        evs = progress_map.get(key)
+        if not evs or evs[-1].get("type") in terminal:
+            progress_map.pop(key, None)

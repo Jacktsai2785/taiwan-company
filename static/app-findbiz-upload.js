@@ -199,6 +199,9 @@ function _showBatchWebsitePrompt(companyIds) {
             input.value = data.website;
             input.placeholder = "https://example.com";
             if (status) { status.textContent = "找到官網 ✓"; status.className = "bwp-status found"; }
+          } else if (data.engine_error) {
+            input.placeholder = "AI 引擎未就緒，請重試或換引擎";
+            if (status) { status.textContent = "引擎未就緒（非查無）"; status.className = "bwp-status missing"; }
           } else {
             input.placeholder = "找不到，請手動填入";
             if (status) { status.textContent = "找不到官網"; status.className = "bwp-status missing"; }
@@ -355,6 +358,8 @@ function _showWebsitePrompt(companyId, opts = {}) {
           if (data.website) {
             input.value = data.website;
             if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
+          } else if (data.engine_error) {
+            if (hintEl) hintEl.textContent = "AI 引擎未就緒或逾時（不代表沒有官網），請重試或到 ⚙ 換引擎；也可手動填入。";
           } else {
             if (hintEl) hintEl.textContent = "找不到官網，若您知道請手動填入（或留空略過）。";
           }
@@ -434,10 +439,23 @@ async function editWebsite() {
   if (updated) toast(website ? "已更新官方網站" : "已清除官方網站");
 }
 
+// 重新生成公開簡介會整段重建、清掉逐段審核合併進去的簡報/訪談補充。
+// 有已套用的補充段落時先警告（生成後可在「📎 補充資料」面板重新套用）。
+function _confirmMaterialsOverwrite(c) {
+  const applied = (c && c.materials_applied_headings) || [];
+  if (!applied.length) return true;
+  return confirm(
+    `此公司的簡介已合併過補充資料（${applied.join("、")}）。\n\n` +
+    `重新生成公開簡介會覆蓋這些段落。生成完成後可在「📎 補充資料」面板按一次「套用」重新併回。\n\n` +
+    `確定要重新生成嗎？`
+  );
+}
+
 async function regenSummary() {
   const id = _modalCompanyId;
   if (!id) return;
   const c = state.companies.find(x => x.id === id);
+  if (!_confirmMaterialsOverwrite(c)) return;
 
   // 有官網 → 直接生成（官網可在 modal 用「✏️ 編輯」隨時調整）
   // 沒官網 → 先問使用者：搜尋 / 填入 / 略過
@@ -464,6 +482,7 @@ function deepEnrich() {
   const id = _modalCompanyId;
   if (!id) return;
   const c = state.companies.find(x => x.id === id);
+  if (!_confirmMaterialsOverwrite(c)) return;
   let force = false;
   if (c && c.deep_enriched_at) {
     const when = formatTimestamp(c.deep_enriched_at);
