@@ -5,7 +5,7 @@
 # 韌性：偵測到 Claude 用量上限 → 等待後重試同一間；非上限失敗 3 次 → 加入 skip-list。
 # 狀態檔放 repo logs/（持久）。進度：logs/regen_progress.log
 set -u
-cd /home/jacktsai/taiwan-company || exit 1
+cd /home/jacktsai/claude_workspace/taiwan-company || exit 1
 BASE="http://localhost:8003"
 LOG=logs/regen_progress.log
 SKIP=logs/regen_skip.txt

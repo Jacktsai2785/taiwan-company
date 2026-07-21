@@ -123,8 +123,8 @@ make disable   # 取消開機自啟
 # 查看 service log
 journalctl --user -u taiwan-company -f
 # 或查看 append log 檔案
-tail -f /home/jacktsai/taiwan-company/logs/app.log
-tail -f /home/jacktsai/taiwan-company/logs/app-error.log
+tail -f /home/jacktsai/claude_workspace/taiwan-company/logs/app.log
+tail -f /home/jacktsai/claude_workspace/taiwan-company/logs/app-error.log
 ```
 
 Service 檔案位置：`~/.config/systemd/user/taiwan-company.service`

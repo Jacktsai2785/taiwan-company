@@ -1,12 +1,21 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)",
-      "Skill(claude-api)",
-      "Skill(claude-api:*)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:api.github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
-    ]
+    "Bash(*)",
+    "Skill(claude-api)",
+    "Skill(claude-api:*)",
+    "WebFetch(domain:github.com)",
+    "WebFetch(domain:api.github.com)",
+    "WebFetch(domain:raw.githubusercontent.com)",
+    "Bash(python *)",
+    "Bash(python3 *)",
+    "Bash(pip *)",
+    "Bash(pip3 *)",
+    "Bash(uvicorn *)",
+    "Bash(playwright *)",
+    "Bash(python -m playwright *)",
+    "Bash(make *)"
+    ],
+    "deny": []
   }
 }
