@@ -1048,21 +1048,21 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .summary-table tr:nth-child(even) td { background: #f9fbfd; }
 .summary-table tr:first-child td { background: #eef4fb; }   /* 本案 row, subtle */
 
-/* 競業表格欄寬：把空間留給文字欄，狀態/類型欄收窄不換行 */
-.competitor-table td:nth-child(1), .competitor-table th:nth-child(1) { width: 18%; }   /* 公司名稱 */
-.competitor-table td:nth-child(2), .competitor-table th:nth-child(2) { width: 24%; }   /* 核心業務 */
-.competitor-table td:nth-child(4), .competitor-table th:nth-child(4),
-.competitor-table td:nth-child(5), .competitor-table th:nth-child(5) { white-space: nowrap; width: 1%; }  /* 上市狀態 / 競業類型 */
+/* 競業表格欄寬：固定 table-layout，實際寬度由 JS 產生的 <colgroup> 控制
+   （nth-child 在多列情境下對 fixed layout 不可靠，曾造成某欄擠成逐字直排、
+   某欄整欄空白的變形）。上市狀態／競業類型欄故意不設 nowrap——固定寬度欄位
+   一旦內容比欄寬長又不能換行，文字會直接溢出疊到右邊欄位上（曾發生「上市
+   （1712」跟「正面競業」黏在一起），交給瀏覽器正常換行更安全。 */
+.competitor-table { table-layout: fixed; }
 
-/* 多家公司各自一個 chip，垂直堆疊、不在公司名與代號間斷行 */
-.comp-name-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+/* 多家公司各自一個 chip，垂直堆疊 */
+.comp-name-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; }
 
 /* ── 競業表格：可點擊公司名稱 ── */
 .competitor-chip {
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  display: inline;
+  white-space: normal;
+  word-break: break-word;
   cursor: pointer;
   color: var(--accent);
   border-bottom: 1px dashed var(--accent);
@@ -1075,7 +1075,23 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
   font-size: 10px;
   opacity: .6;
   font-weight: 700;
+  margin-left: 3px;
 }
+
+/* ── 核心業務／主要差異化特點：預設收成 3 行，超出才顯示「展開」鈕（跟專利頁一致） ── */
+.comp-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.comp-clamp.expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
+}
+.comp-clamp-toggle { display: block; margin: 3px 0 0; }
+.comp-clamp:hover { background: var(--accent-light); }
 .competitor-chip:hover { background: var(--accent-light); border-bottom-style: solid; }
 .competitor-chip--added {
   color: #16a34a;
@@ -1084,14 +1100,15 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .competitor-chip--added::after { content: "✓"; }
 .competitor-chip--added:hover { background: #f0fdf4; border-bottom-style: solid; }
 
-/* ── 競業列刪除鈕：平時隱藏，hover 該列才浮現 ── */
-.competitor-table th.comp-del-col,
-.competitor-table td.comp-del-col {
-  width: 28px;
-  padding: 0 4px;
-  text-align: center;
-}
+/* ── 競業列刪除鈕：疊在最後一欄右上角，平時隱藏、hover 該列才浮現 ──
+   不再另外佔一整欄——獨立欄位平時是空的，跟旁邊欄位之間又沒有格線，
+   會讓人誤以為短內容的欄位「明明有空間卻還跳行」（其實那塊空白屬於
+   隔壁的刪除鈕欄）。改成疊圖後，欄寬就是內容看到的欄寬，沒有隱藏空間。 */
+.competitor-table td.comp-last-col { position: relative; padding-right: 24px; }
 .comp-del-btn {
+  position: absolute;
+  top: 50%; right: 2px;
+  transform: translateY(-50%);
   opacity: 0;
   width: 20px; height: 20px;
   border: none; background: none;

@@ -68,43 +68,66 @@ function renderSummary(raw, matHeadings) {
     const headerCells = (header || "").split("|").filter((_,i,a) => i>0 && i<a.length-1).map(c => c.trim());
     const isCompetitorTable = headerCells[0] === "公司名稱";
     let ths = headerCells.map(c => `<th>${inlineMarkdown(c)}</th>`).join("");
-    if (isCompetitorTable) ths += `<th class="comp-del-col"></th>`;   // 刪除鈕欄
     const trs = body.map(row => {
       const cells = row.split("|").filter((_,i,a) => i>0 && i<a.length-1);
       const firstContent = (cells[0] || "").trim();
       const isCaseRow = firstContent.includes("（本案）");
+      const lastIdx = cells.length - 1;
       const tds = cells.map((c, ci) => {
         const content = c.trim();
         if (isCompetitorTable && ci === 0) {
+          // 公司名稱也收成 3 行、超長名稱（如英文全名／品牌別名）尾端加展開鈕，
+          // 跟核心業務／主要差異化特點一致，靠共用的 .comp-clamp（見 _setupCompClampButtons）。
           // 本案列：不可點，去尾綴顯示
           if (content.includes("（本案）")) {
-            return `<td>${inlineMarkdown(_displayCompName(content))}</td>`;
+            return `<td><div class="comp-clamp">${inlineMarkdown(_displayCompName(content))}</div></td>`;
           }
           // 一格可能塞多家（如「雙鴻（3324）／奇鋐（3017）」）→ 拆成各自獨立的 chip，
-          // 每家自己一個＋、自己可點，新增流程就只會加被點的那一家。
+          // 每家自己一個＋、自己可點，新增流程就只會加被點的那一家；每個 chip 各自收 3 行。
           const chips = _splitCompCell(content).map(tok => {
             const disp = _displayCompName(tok);
             const rawName = tok.replace(/（[^）]*）/g, "").trim();
             const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
-            const cls   = alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip";
+            const cls   = (alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip") + " comp-clamp";
             const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
             return `<span class="${cls}" data-cname="${escHtml(rawName)}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span>`;
           }).join("");
           return `<td><div class="comp-name-cell">${chips}</div></td>`;
         }
+        // 核心業務／主要差異化特點兩欄收成 3 行，尾端加「展開」鈕看全文（跟專利頁一致），
+        // 避免長文字撐版。是否真的需要展開鈕由 _setupCompClampButtons() 量測後決定。
+        // line-clamp 需要的 display:-webkit-box 只能套在 td 內的 div 上——直接套在 <td>
+        // 會讓它失去 table-cell 顯示型態，被瀏覽器包一層匿名欄位，整張表格因此欄位跑位。
+        if (isCompetitorTable && (ci === 1 || ci === 2)) {
+          return `<td><div class="comp-clamp">${inlineMarkdown(content)}</div></td>`;
+        }
+        // 刪除鈕疊在最後一欄右上角（hover 才浮現），不再獨立佔一整欄——獨立欄位
+        // 平時是空的，跟旁邊短內容的欄位之間又沒有格線，看起來會像是「這欄怎麼
+        // 明明有空間卻還是跳行」的錯覺（其實那塊空白屬於隔壁的刪除鈕欄）。
+        // data-ctype 存原始競業類型文字，供 app-modal.js 的頁籤篩選直接讀取——
+        // 不能再靠 textContent 解析，按鈕的「✕」會混進去。
+        if (isCompetitorTable && ci === lastIdx) {
+          const delBtn = isCaseRow ? "" :
+            `<button class="comp-del-btn" data-cname="${escHtml(firstContent)}" onclick="removeCompetitorRow(this)" title="刪除此競業">✕</button>`;
+          return `<td class="comp-last-col" data-ctype="${escAttr(content)}">${inlineMarkdown(content)}${delBtn}</td>`;
+        }
         return `<td>${inlineMarkdown(content)}</td>`;
       }).join("");
-      // 競業列尾端的刪除鈕（本案列不可刪）
-      let delCell = "";
-      if (isCompetitorTable) {
-        delCell = isCaseRow
-          ? `<td class="comp-del-col"></td>`
-          : `<td class="comp-del-col"><button class="comp-del-btn" data-cname="${escHtml(firstContent)}" onclick="removeCompetitorRow(this)" title="刪除此競業">✕</button></td>`;
-      }
-      return `<tr>${tds}${delCell}</tr>`;
+      return `<tr>${tds}</tr>`;
     }).join("");
     const tcls = "summary-table" + (isCompetitorTable ? " competitor-table" : "");
-    out.push(`<table class="${tcls}"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
+    // table-layout:fixed 只吃 <colgroup>／第一列的欄寬設定才準；純靠 nth-child CSS
+    // 在多列情境下會跑掉（曾出現某欄擠成逐字直排、某欄整欄空白的變形）。
+    // 欄數要跟實際 <th> 數一致（刪除鈕已併入最後一欄，不再是獨立欄位）；
+    // 百分比務必精準加總 = 100%，否則瀏覽器會把差額塞到某一欄（通常是最後一欄）。
+    const colgroup = isCompetitorTable
+      ? (headerCells.length === 5
+          ? `<colgroup><col style="width:14%"><col style="width:28%"><col style="width:28%">` +
+            `<col style="width:15%"><col style="width:15%"></colgroup>`
+          : `<colgroup><col style="width:18%"><col style="width:30%"><col style="width:30%">` +
+            `<col style="width:22%"></colgroup>`)
+      : "";
+    out.push(`<table class="${tcls}">${colgroup}<thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`);
     tableRows = [];
     inTable = false;
   };

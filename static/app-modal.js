@@ -332,9 +332,39 @@ const _COMP_TYPE_DEFS = {
   "垂直整合": "重要客戶或上游供應商有可能自行發展相同能力者",
 };
 
+// 核心業務／主要差異化特點兩欄收成 3 行；文字真的超出才在尾端加「展開」鈕
+// （跟「專利資料」頁的簡要說明一致），沒超出就不加，避免空按鈕。
+//
+// 這裡呼叫時，表格所在的頁籤（公司簡介 modal-section／競業分析 sub-tab）
+// 通常都還是 display:none（預設先開「基本資料」頁），此時 scrollHeight/
+// clientHeight 一律量到 0，會誤判成「沒有截斷」而漏掉展開鈕。改用
+// ResizeObserver：等元素真的被顯示、有實際版面尺寸時才量測一次，
+// 不管使用者先切到哪個頁籤都量得到。
+function _setupCompClampButtons(table) {
+  table.querySelectorAll(".comp-clamp").forEach(el => {
+    const ro = new ResizeObserver(() => {
+      if (!el.clientHeight) return;   // 還沒真的顯示出來，等下一次尺寸變化
+      ro.disconnect();
+      if (el.scrollHeight <= el.clientHeight + 1) return;   // 沒被截斷，不需要展開鈕
+      const btn = document.createElement("button");
+      btn.className = "brief-toggle comp-clamp-toggle";
+      btn.textContent = "展開";
+      btn.onclick = () => {
+        const open = el.classList.toggle("expanded");
+        btn.textContent = open ? "收合" : "展開";
+      };
+      el.after(btn);
+    });
+    ro.observe(el);
+  });
+}
+
 function _setupCompetitorTabs(page) {
   const table = page.querySelector(".competitor-table");
   if (!table) { page.appendChild(_addCompetitorForm()); return; }
+
+  // 此時所有列都還沒被競業類型頁籤隱藏，量測才準（display:none 元素 scrollHeight 為 0）
+  _setupCompClampButtons(table);
 
   // Legacy 4-column tables have no 競業類型 → no type sub-tabs, just the add button.
   const headers = [...table.querySelectorAll("thead th")].map(h => h.textContent.trim());
@@ -356,11 +386,13 @@ function _setupCompetitorTabs(page) {
   // 否則差異化特點寫到「本案客戶」之類的競業列會被誤判成本案列。
   const rows = [...table.querySelectorAll("tbody tr")];
   rows.forEach(tr => {
-    // exclude comp-del-col (delete button appended during render) so the last data cell is 競業類型
-    const cells = [...tr.querySelectorAll("td")].filter(td => !td.classList.contains("comp-del-col"));
+    const cells = [...tr.querySelectorAll("td")];
     const firstCell = cells.length ? cells[0].textContent : "";
     if (firstCell.includes("（本案）")) { tr.dataset.ctype = "__case__"; return; }
-    const last = cells.length ? cells[cells.length - 1].textContent.trim() : "";
+    // 最後一欄現在跟刪除鈕共用同一個 <td>（見 app-render-util.js），
+    // 不能再用 textContent（會混進按鈕的「✕」）——直接讀 data-ctype。
+    const lastCell = cells.length ? cells[cells.length - 1] : null;
+    const last = (lastCell?.dataset.ctype || lastCell?.textContent || "").trim();
     tr.dataset.ctype = _COMP_TYPES.includes(last) ? last : "其他";
   });
 
