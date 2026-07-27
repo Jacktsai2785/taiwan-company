@@ -5,7 +5,7 @@
 # 韌性：偵測到 Claude 用量上限 → 等待後重試同一間；非上限失敗 3 次 → 加入 skip-list。
 # 狀態檔放 repo logs/（持久）。進度：logs/regen_progress.log
 set -u
-cd /home/jacktsai/claude_workspace/taiwan-company || exit 1
+cd /home/jacktsai/taiwan-company || exit 1
 BASE="http://localhost:8003"
 LOG=logs/regen_progress.log
 SKIP=logs/regen_skip.txt
@@ -61,7 +61,14 @@ PYEOF
 TOTAL=${#ROWS[@]}
 echo "=== 批次開始：尚需 $TOTAL 間（$(date '+%F %T')）===" >> "$LOG"
 
-is_limit() { grep -qiE "limit reached|usage limit|rate limit|will reset|resets|額度|流量上限|用量上限|請稍後再試|too many requests|overloaded|429|529" ; }
+# 優先看後端送出的 machine-readable code（enrichment.py 的 push_error 現在會帶
+# code: "ai_usage_limit"，見 services/claude_client.classify_ai_error）；只有在
+# code 缺席（例如 curl 本身逾時、連不上 server，SSE 內容根本沒送到）時才退回
+# 舊的人類可讀文字比對，避免額度上限被誤判成一般失敗、白白燒掉 skip-list 名額。
+is_limit() {
+  grep -qE '"code":[[:space:]]*"ai_usage_limit"' \
+    || grep -qiE "limit reached|usage limit|rate limit|will reset|resets|額度|流量上限|用量上限|請稍後再試|too many requests|overloaded|429|529"
+}
 
 i=0; ok=0; fail=0
 for row in "${ROWS[@]}"; do

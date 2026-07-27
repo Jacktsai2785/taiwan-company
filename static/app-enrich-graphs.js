@@ -217,69 +217,54 @@ function subscribeEnrichment(companyId) {
 
   const sseUrl = `/api/companies/enrich/${companyId}?engine=${encodeURIComponent(getAiEngine())}`;
 
-  return new Promise(resolve => {
-    const es = new EventSource(sseUrl);
-    let settled = false;
-    const settle = () => { if (!settled) { settled = true; resolve(); } };
-
-    es.onmessage = async e => {
-      const event = JSON.parse(e.data);
-
-      if (event.type === "data") {
-        const company = state.companies.find(c => c.id === companyId);
-        if (company) {
-          Object.assign(company, event.fields);
-          renderGrid();
-          if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
-            openModal(companyId);
-            _expandSummarySection();
-          }
-        }
-
-      } else if (event.type === "progress") {
-        toast(event.message);
-
-      } else if (event.type === "error") {
-        // enrich 失敗：標記狀態、常駐紅字提示，不當成功（不加綠勾）
-        const company = state.companies.find(c => c.id === companyId);
-        if (company) company.enrich_status = "failed";
-        toast(event.message || "公司簡介生成失敗", true);
+  return subscribeSSE(sseUrl, {
+    onData: event => {
+      const company = state.companies.find(c => c.id === companyId);
+      if (company) {
+        Object.assign(company, event.fields);
         renderGrid();
-
-      } else if (event.type === "done") {
-        es.close();
-        settle();
-        state.enrichingIds.delete(companyId);
-        // done 前若已標 failed 就不要蓋成綠勾「已完成」
-        const failed = state.companies.find(c => c.id === companyId)?.enrich_status === "failed";
-        if (!failed) state.doneIds.add(companyId);
-        // Notify if user isn't looking at the page（失敗就不要報成功）
-        if (!failed) alertDone("(!) 摘要生成完成", `✅ ${state.companies.find(c => c.id === companyId)?.name ?? "公司"} 摘要已生成完成`);
-        try {
-          await loadCompanies();
-          computeGroups();
-          renderSidebar();
-          renderGrid();
-          if (_modalCompanyId === companyId) openModal(companyId);
-          // 生成完成後自動補抓每股金額（有 persistent cookie 時完全無需人工）
-          const fresh = state.companies.find(x => x.id === companyId);
-          if (fresh && _needsAutoFetch(fresh)) _enqueueAutoFetch(companyId);
-        } catch (err) {
-          console.error("post-enrichment refresh failed:", err);
+        if (_modalCompanyId === companyId && document.getElementById("modal-overlay").classList.contains("open")) {
+          openModal(companyId);
+          _expandSummarySection();
         }
-        setTimeout(() => {
-          state.doneIds.delete(companyId);
-          stopTitleFlash();
-          renderGrid();
-        }, 3000);
       }
-    };
-    es.onerror = () => {
-      es.close();
+    },
+    onProgress: event => toast(event.message),
+    onError: event => {
+      // enrich 失敗：標記狀態、常駐紅字提示，不當成功（不加綠勾）
+      const company = state.companies.find(c => c.id === companyId);
+      if (company) company.enrich_status = "failed";
+      toast(event.message || "公司簡介生成失敗", true);
+      renderGrid();
+    },
+    onDone: async ok => {
+      state.enrichingIds.delete(companyId);
+      // ok 直接來自後端 done.ok（error 事件後仍會送 done，不再靠 enrich_status 反推）
+      if (ok) state.doneIds.add(companyId);
+      // Notify if user isn't looking at the page（失敗就不要報成功）
+      if (ok) alertDone("(!) 摘要生成完成", `✅ ${state.companies.find(c => c.id === companyId)?.name ?? "公司"} 摘要已生成完成`);
+      try {
+        await loadCompanies();
+        computeGroups();
+        renderSidebar();
+        renderGrid();
+        if (_modalCompanyId === companyId) openModal(companyId);
+        // 生成完成後自動補抓每股金額（有 persistent cookie 時完全無需人工）
+        const fresh = state.companies.find(x => x.id === companyId);
+        if (fresh && _needsAutoFetch(fresh)) _enqueueAutoFetch(companyId);
+      } catch (err) {
+        console.error("post-enrichment refresh failed:", err);
+      }
+      setTimeout(() => {
+        state.doneIds.delete(companyId);
+        stopTitleFlash();
+        renderGrid();
+      }, 3000);
+    },
+    onTransportError: () => {
       state.enrichingIds.delete(companyId);
       renderGrid();
-      settle();
-    };
+    },
   });
 }
 
@@ -656,46 +641,39 @@ async function buildRelationship(directorIndex) {
     ? `/api/companies/${id}/build-relationship?director_index=${directorIndex}`
     : `/api/companies/${id}/build-relationship`;
 
-  await new Promise(resolve => {
-    const es = new EventSource(url);
-    es.onmessage = async e => {
-      const event = JSON.parse(e.data);
-      if (event.type === "progress" && statusEl) {
-        statusEl.innerHTML = `<div class="rel-progress">${escHtml(event.message)}</div>`;
-      } else if (event.type === "done") {
-        es.close();
-        try { await loadCompanies(); } catch (_) {}
-        if (_relGraphCompanyId === id) {
-          // Refresh subtitle with new anchor info
-          const c = state.companies.find(x => x.id === id);
-          const sub = document.getElementById("rel-graph-subtitle");
-          const parent = c?.relationship_graph?.parent;
-          if (sub && parent) {
-            const kindLbl = parent.kind === "person" ? "自然人" : "法人";
-            sub.textContent = `當前錨點：${parent.name}（${kindLbl}）`;
-          }
-          await renderOwnershipGraph(id);
+  await subscribeSSE(url, {
+    onProgress: event => {
+      if (statusEl) statusEl.innerHTML = `<div class="rel-progress">${escHtml(event.message)}</div>`;
+    },
+    onDone: async () => {
+      try { await loadCompanies(); } catch (_) {}
+      if (_relGraphCompanyId === id) {
+        // Refresh subtitle with new anchor info
+        const c = state.companies.find(x => x.id === id);
+        const sub = document.getElementById("rel-graph-subtitle");
+        const parent = c?.relationship_graph?.parent;
+        if (sub && parent) {
+          const kindLbl = parent.kind === "person" ? "自然人" : "法人";
+          sub.textContent = `當前錨點：${parent.name}（${kindLbl}）`;
         }
-        // Also refresh the detail modal so the director ⊕/✓ marker updates
-        if (_modalCompanyId === id && document.getElementById("modal-overlay").classList.contains("open")) {
-          openModal(id);
-          // If relationship graph is still open, restore expanded state that openModal reset
-          if (document.getElementById("rel-graph-overlay").classList.contains("open")) {
-            _expandParentRows();
-          }
-        }
-        if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
-        _relBuildingId = null;
-        resolve();
+        await renderOwnershipGraph(id);
       }
-    };
-    es.onerror = () => {
-      es.close();
+      // Also refresh the detail modal so the director ⊕/✓ marker updates
+      if (_modalCompanyId === id && document.getElementById("modal-overlay").classList.contains("open")) {
+        openModal(id);
+        // If relationship graph is still open, restore expanded state that openModal reset
+        if (document.getElementById("rel-graph-overlay").classList.contains("open")) {
+          _expandParentRows();
+        }
+      }
+      if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
+      _relBuildingId = null;
+    },
+    onTransportError: () => {
       if (statusEl) statusEl.innerHTML = `<div class="rel-error">分析中斷，請重試</div>`;
       if (btn) { btn.disabled = false; btn.textContent = "🔗 重新分析"; }
       _relBuildingId = null;
-      resolve();
-    };
+    },
   });
 }
 
@@ -918,34 +896,26 @@ async function generateIndustryMap() {
   const params = new URLSearchParams({ engine: getAiEngine() });
   const url = `/api/industry-map/${encodeURIComponent(industry)}/generate?${params.toString()}`;
 
-  await new Promise(resolve => {
-    const es = new EventSource(url);
-    _imState.evtSrc = es;
-    es.onmessage = async e => {
-      let event;
-      try { event = JSON.parse(e.data); } catch (_) { return; }
-      if (event.type === "progress") {
-        statusEl.innerHTML = `<div class="im-progress">${escHtml(event.message)}</div>`;
-      } else if (event.type === "done") {
-        es.close();
-        _imState.evtSrc = null;
-        _imState.data = event.data;
-        statusEl.innerHTML = "";
-        _renderIndustryMap(event.data);
-        resolve();
-      } else if (event.type === "error") {
-        es.close();
-        _imState.evtSrc = null;
-        statusEl.innerHTML = `<div class="im-error">生成失敗：${escHtml(event.message)}</div>`;
-        resolve();
-      }
-    };
-    es.onerror = () => {
-      es.close();
+  await subscribeSSE(url, {
+    errorIsTerminal: true,  // 這個端點 error 後不會再送 done，error 本身就是終止
+    onOpen: es => { _imState.evtSrc = es; },
+    onProgress: event => {
+      statusEl.innerHTML = `<div class="im-progress">${escHtml(event.message)}</div>`;
+    },
+    onError: event => {
+      _imState.evtSrc = null;
+      statusEl.innerHTML = `<div class="im-error">生成失敗：${escHtml(event.message)}</div>`;
+    },
+    onDone: (ok, event) => {
+      _imState.evtSrc = null;
+      _imState.data = event.data;
+      statusEl.innerHTML = "";
+      _renderIndustryMap(event.data);
+    },
+    onTransportError: () => {
       _imState.evtSrc = null;
       statusEl.innerHTML = `<div class="im-error">連線中斷，請重試</div>`;
-      resolve();
-    };
+    },
   });
 
   _imResetGenerateBtn(!!_imState.data);  // 成功→有 data→「重新生成」；失敗/斷線→維持原有
@@ -1244,17 +1214,17 @@ function _imSubdivide() {
 
 function _imStartSubdivideJob(industry) {
   const url = `/api/industry-map/${encodeURIComponent(industry)}/subdivide/propose?engine=${encodeURIComponent(getAiEngine())}`;
-  const es = new EventSource(url);
-  _imBgJob = { industry, es, status: "running" };
+  _imBgJob = { industry, es: null, status: "running" };
   _imRenderBgJob({ industry, state: "running", message: "啟動中…" });
 
-  es.onmessage = e => {
-    let ev; try { ev = JSON.parse(e.data); } catch (_) { return; }
-    if (ev.type === "progress") {
+  subscribeSSE(url, {
+    errorIsTerminal: true,  // 這個端點 error 後不會再送 done
+    onOpen: es => { if (_imBgJob) _imBgJob.es = es; },
+    onProgress: ev => {
       if (_imBgJob && _imBgJob.status === "running")
         _imRenderBgJob({ industry, state: "running", message: ev.message });
-    } else if (ev.type === "done") {
-      es.close();
+    },
+    onDone: (ok, ev) => {
       const groups = ev.data?.groups || [];
       if (groups.length) {
         _imBgJob = { industry, es: null, status: "done", groups };
@@ -1263,19 +1233,18 @@ function _imStartSubdivideJob(industry) {
         _imBgJob = { industry, es: null, status: "error" };
         _imRenderBgJob({ industry, state: "error", message: "AI 未能產生有效分組，請重試" });
       }
-    } else if (ev.type === "error") {
-      es.close();
+    },
+    onError: ev => {
       _imBgJob = { industry, es: null, status: "error" };
       _imRenderBgJob({ industry, state: "error", message: ev.message });
-    }
-  };
-  es.onerror = () => {
-    es.close();
-    if (_imBgJob && _imBgJob.status === "running") {
-      _imBgJob = { industry, es: null, status: "error" };
-      _imRenderBgJob({ industry, state: "error", message: "連線中斷，請重試" });
-    }
-  };
+    },
+    onTransportError: () => {
+      if (_imBgJob && _imBgJob.status === "running") {
+        _imBgJob = { industry, es: null, status: "error" };
+        _imRenderBgJob({ industry, state: "error", message: "連線中斷，請重試" });
+      }
+    },
+  });
 }
 
 // 右下角浮動通知（跨視窗、開關地圖都在）

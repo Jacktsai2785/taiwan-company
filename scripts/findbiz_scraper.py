@@ -22,15 +22,20 @@ findbiz_scraper.py — 手動通過 Cloudflare，從 findbiz.nat.gov.tw 抓取�
 """
 
 import asyncio
-import json
 import re
 import sys
 from pathlib import Path
 
+# 讓獨立執行（python scripts/findbiz_scraper.py）也能 import 到 repo root 的
+# services 套件——不管從哪個 cwd 呼叫都能找到，不用再自己手刻 companies.json
+# 的讀寫（原本這裡直接 json.loads/write_text，繞過 data_store 的原子寫+鎖，
+# 且把 envelope dict 當陣列迭代會 AttributeError，--update-missing 因此壞掉）。
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from services import data_store  # noqa: E402
+
 FINDBIZ_BASE = "https://findbiz.nat.gov.tw"
 INIT_URL     = f"{FINDBIZ_BASE}/fts/query/QueryBar/queryInit.do"
 LIST_URL     = f"{FINDBIZ_BASE}/fts/query/QueryList/queryList.do"
-DATA_FILE    = Path(__file__).parent.parent / "data" / "companies.json"
 
 
 # ── 解析公司詳細頁 ──────────────────────────────────────────────────────────────
@@ -166,10 +171,7 @@ async def main():
 
     if update_missing:
         # 從 companies.json 找缺少 par_value 的股份有限公司
-        if not DATA_FILE.exists():
-            print(f"找不到 {DATA_FILE}")
-            sys.exit(1)
-        companies = json.loads(DATA_FILE.read_text())
+        companies = data_store.get_all_companies()
         missing = [
             c for c in companies
             if c.get("name", "").endswith("股份有限公司")
@@ -228,27 +230,30 @@ async def main():
 
     print(f"\n成功抓到 {len(scraped)} 筆。")
 
-    if update_missing and DATA_FILE.exists():
-        # 寫回 companies.json
-        companies = json.loads(DATA_FILE.read_text())
-        idx = {c["tax_id"]: i for i, c in enumerate(companies) if c.get("tax_id")}
-        updated = 0
+    if update_missing:
+        # 寫回 companies.json：一律走 data_store 的原子寫（tmp+os.replace）+
+        # in-process lock，不再自己手刻 read-modify-write。
+        by_tax_id = {c["tax_id"]: c for c in data_store.get_all_companies() if c.get("tax_id")}
+        id_to_fields: dict[str, dict] = {}
         for item in scraped:
-            tid = item["tax_id"]
-            if tid not in idx:
+            co = by_tax_id.get(item["tax_id"])
+            if not co:
                 continue
-            co = companies[idx[tid]]
+            fields: dict = {}
             if item.get("par_value"):
-                co["par_value"] = item["par_value"]
+                fields["par_value"] = item["par_value"]
             if item.get("total_shares"):
-                co["total_shares"] = item["total_shares"]
+                fields["total_shares"] = item["total_shares"]
                 # 重算持股比例
-                for d in co.get("directors", []):
+                directors = co.get("directors", [])
+                for d in directors:
                     shares = d.get("shares", 0) or 0
                     d["ratio"] = round(shares / item["total_shares"], 6)
-            updated += 1
+                fields["directors"] = directors
+            if fields:
+                id_to_fields[co["id"]] = fields
 
-        DATA_FILE.write_text(json.dumps(companies, ensure_ascii=False, indent=2))
+        updated = data_store.update_companies_fields(id_to_fields)
         print(f"已更新 {updated} 家公司的 companies.json。")
     else:
         # 只印 JSON

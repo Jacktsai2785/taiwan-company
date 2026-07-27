@@ -27,42 +27,47 @@ log = logging.getLogger(__name__)
 TAIWAN_TZ = timezone(timedelta(hours=8))
 
 
-async def _daily_digest_scheduler() -> None:
-    """Trigger digest refresh for all industries every day at 08:00 Taiwan time."""
+async def _daily_scheduler() -> None:
+    """每天 08:00 台灣時間依序跑 digests → trends（不是兩個各自獨立、只靠固定
+    時間差錯開的 task——trends 讀的是累積的歷史快取，跟正在寫入當天 digest 的
+    檔案交錯執行沒有幫助，依序執行更乾淨）。
+
+    refresh_all_digests/refresh_all_trends 內部仍會逐產業 try/except（單一產業
+    失敗不影響其他產業），並回傳失敗清單；這裡只對失敗的產業做一次 1 小時後的
+    有界重試，仍失敗才等到隔天——不再是「log 說 1 小時後重試、實際上因為例外
+    早被內層吞掉而要等到隔天」的落差。"""
+    from services.daily_digest import refresh_all_digests, refresh_all_trends
     while True:
         try:
             now = datetime.now(TAIWAN_TZ)
             today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
             next_8am = today_8am if now < today_8am else today_8am + timedelta(days=1)
             wait = (next_8am - now).total_seconds()
-            log.info("Daily digest scheduler: next run in %.0f s", wait)
+            log.info("Daily scheduler: next run in %.0f s", wait)
             await asyncio.sleep(wait)
-            from services.daily_digest import refresh_all_digests
-            await refresh_all_digests()
+
+            failed_digests = await refresh_all_digests()
+            failed_trends = await refresh_all_trends()
+
+            if failed_digests or failed_trends:
+                log.warning(
+                    "Daily scheduler: digest failed for %s, trends failed for %s — retrying in 1h",
+                    failed_digests, failed_trends,
+                )
+                await asyncio.sleep(3600)
+                still_failed_digests = await refresh_all_digests(failed_digests) if failed_digests else []
+                still_failed_trends = await refresh_all_trends(failed_trends) if failed_trends else []
+                if still_failed_digests or still_failed_trends:
+                    log.warning(
+                        "Daily scheduler: retry still failing for digests=%s trends=%s — giving up until tomorrow 08:00",
+                        still_failed_digests, still_failed_trends,
+                    )
         except asyncio.CancelledError:
             raise  # 正常關機路徑，讓它往上傳遞
         except Exception:
-            # 任何單次失敗只記錄、不讓 task 靜默死亡，否則往後每天都不再刷新
-            log.exception("Daily digest scheduler iteration failed; retrying in 1h")
-            await asyncio.sleep(3600)
-
-
-async def _daily_trends_scheduler() -> None:
-    """Trigger trend refresh for all industries every day at 08:05 Taiwan time (5 min after digest)."""
-    while True:
-        try:
-            now = datetime.now(TAIWAN_TZ)
-            today_8_05 = now.replace(hour=8, minute=5, second=0, microsecond=0)
-            next_8_05 = today_8_05 if now < today_8_05 else today_8_05 + timedelta(days=1)
-            wait = (next_8_05 - now).total_seconds()
-            log.info("Daily trends scheduler: next run in %.0f s", wait)
-            await asyncio.sleep(wait)
-            from services.daily_digest import refresh_all_trends
-            await refresh_all_trends()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("Daily trends scheduler iteration failed; retrying in 1h")
+            # 排程本身（非個別產業）出錯才會走到這裡；個別產業失敗已經在
+            # refresh_all_* 內被吞掉並回傳清單，不會讓整條 task 死掉。
+            log.exception("Daily scheduler iteration failed unexpectedly; retrying in 1h")
             await asyncio.sleep(3600)
 
 
@@ -76,10 +81,9 @@ async def lifespan(app: FastAPI):
             log.info("啟動對帳：補回 %d 個殭屍產業標籤到 config", len(r["readded_industries"]))
     except Exception:
         log.exception("啟動產業對帳失敗（非致命）")
-    t1 = asyncio.create_task(_daily_digest_scheduler())
-    t2 = asyncio.create_task(_daily_trends_scheduler())
+    t1 = asyncio.create_task(_daily_scheduler())
     yield
-    for t in (t1, t2):
+    for t in (t1,):
         t.cancel()
         try:
             await t

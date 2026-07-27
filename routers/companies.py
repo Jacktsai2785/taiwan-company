@@ -9,8 +9,8 @@ from pydantic import BaseModel
 
 from services import company_exporter, competitor_service, data_store, gcis_client, patent_scraper
 from services.ai_deps import ai_from_headers
-from services.task_progress import sse_progress_stream
-from routers.enrichment import _enrich_company, _running as _enrich_running, _spawn
+from services.task_progress import ProgressChannel, spawn_background as _spawn
+from routers.enrichment import start_enrichment
 
 # 競業邏輯已抽到 services/competitor_service.py（redteam #10）。競業「端點」本身
 # 已搬到 routers/competitors.py；AI enrich 系列端點搬到 routers/enrichment.py。
@@ -20,10 +20,8 @@ _short = competitor_service.short
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 
-_rel_progress: dict[str, list[dict]] = {}
-_rel_running: set[str] = set()
-_patent_progress: dict[str, list[dict]] = {}
-_patent_running: set[str] = set()
+_rel_channel = ProgressChannel()      # build-relationship 的 SSE 進度
+_patent_channel = ProgressChannel()   # patents 的 SSE 進度
 
 
 class ConfirmItem(BaseModel):
@@ -193,23 +191,20 @@ async def patent_stream(company_id: str):
         raise HTTPException(status_code=404, detail="Company not found")
 
     async def _run():
-        events = _patent_progress.setdefault(company_id, [])
-        try:
-            async def push(evt):
-                events.append(evt)
+        with _patent_channel.session(company_id) as ev:
+            try:
+                async def push(evt):
+                    ev.progress(evt.get("message", ""))
 
-            patents = await patent_scraper.scrape_company_patents(company, push)
-            data_store.update_company(company_id, {"patents": patents})
-            events.append({"type": "done", "patents": patents})
-        except Exception as e:
-            events.append({"type": "error", "message": str(e)})
-        finally:
-            _patent_running.discard(company_id)
+                patents = await patent_scraper.scrape_company_patents(company, push)
+                data_store.update_company(company_id, {"patents": patents})
+                ev.done(True, patents=patents)
+            except Exception as e:
+                ev.error(str(e))
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _patent_progress, _patent_running,
-            lambda: _spawn(_run()),
+        _patent_channel.stream(
+            company_id, lambda: _spawn(_run()),
             max_ticks=7200, terminal=("done", "error"), keepalive=True,
         ),
         media_type="text/event-stream",
@@ -300,19 +295,15 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
         if item.is_new:
             company = data_store.create_company(item.name, item.label, item.industry, item.tax_id or "")
             saved_ids.append(company["id"])
-            if req.enrich:
+            if req.enrich and start_enrichment(company["id"], **ai):
                 enriching.append(company["id"])
-                _enrich_running.add(company["id"])
-                _spawn(_enrich_company(company["id"], **ai))
         else:
             if item.existing_id:
                 updated = data_store.add_label_to_company(item.existing_id, item.label)
                 if updated is not None:
                     saved_ids.append(item.existing_id)
-                    if req.enrich and item.existing_id not in _enrich_running:
+                    if req.enrich and start_enrichment(item.existing_id, **ai):
                         enriching.append(item.existing_id)
-                        _enrich_running.add(item.existing_id)
-                        _spawn(_enrich_company(item.existing_id, **ai))
 
     return {"saved": len(saved_ids), "saved_ids": saved_ids, "enriching": enriching}
 
@@ -347,9 +338,8 @@ async def build_relationship_stream(company_id: str, director_index: int | None 
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _rel_progress, _rel_running,
-            lambda: _spawn(_build_relationship(company_id, director_index)),
+        _rel_channel.stream(
+            company_id, lambda: _spawn(_build_relationship(company_id, director_index)),
             max_ticks=600, interval=0.4,
         ),
         media_type="text/event-stream",
@@ -468,8 +458,7 @@ async def add_company_from_graph(req: FromGraphRequest, ai: dict = Depends(ai_fr
     if tax_id:
         data_store.update_company(company["id"], {"tax_id": tax_id})
 
-    _enrich_running.add(company["id"])
-    _spawn(_enrich_company(company["id"], **ai))
+    start_enrichment(company["id"], **ai)
 
     return {"existed": False, "company_id": company["id"], "name": company["name"]}
 
@@ -496,79 +485,72 @@ def _lookup_local(index: dict, name: str, tax_id: str) -> dict | None:
 
 
 async def _build_relationship(company_id: str, director_index: int | None = None) -> None:
-    events: list[dict] = []
-    _rel_progress[company_id] = events
+    with _rel_channel.session(company_id) as ev:
+        try:
+            companies_snapshot = data_store.get_all_companies()
+            company = next((c for c in companies_snapshot if c["id"] == company_id), None)
+            if not company:
+                ev.done()
+                return
 
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
+            directors = company.get("directors") or []
 
-    try:
-        companies_snapshot = data_store.get_all_companies()
-        company = next((c for c in companies_snapshot if c["id"] == company_id), None)
-        if not company:
-            events.append({"type": "done"})
-            return
+            # If no explicit index, fall back to the last anchor used (so 「重新分析」 keeps the same one)
+            if director_index is None:
+                director_index = (company.get("relationship_graph") or {}).get("director_index")
 
-        directors = company.get("directors") or []
+            target_director: dict | None = None
+            if director_index is not None:
+                if 0 <= director_index < len(directors):
+                    target_director = directors[director_index]
+                else:
+                    ev.progress(f"董事索引 {director_index} 超出範圍，改用自動選擇")
+                    director_index = None
+            if target_director is None:
+                ev.progress("分析董監事名單，自動選擇最大股法人代表…")
+                target_director = gcis_client.pick_largest_legal_director(directors)
+                if target_director is not None:
+                    director_index = directors.index(target_director)
 
-        # If no explicit index, fall back to the last anchor used (so 「重新分析」 keeps the same one)
-        if director_index is None:
-            director_index = (company.get("relationship_graph") or {}).get("director_index")
+            if not target_director:
+                ev.progress("此公司董監事中無法人代表，且未指定董事，無關係可分析")
+                data_store.update_company(company_id, {"relationship_graph": {
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "director_index": None,
+                    "parent": None,
+                    "siblings": [],
+                    "note": "此公司董監事中無法人代表",
+                }})
+                ev.done()
+                return
 
-        target_director: dict | None = None
-        if director_index is not None:
-            if 0 <= director_index < len(directors):
-                target_director = directors[director_index]
+            company_index = _build_company_index(companies_snapshot)
+            # Director represents a legal entity if either:
+            #  (a) `representative_of` is set (natural person as legal-entity proxy), or
+            #  (b) the director's own name looks like a company (法人股東直接任董事)
+            is_legal = bool((target_director.get("representative_of") or "").strip()) \
+                or _looks_like_company_name(target_director.get("name") or "")
+
+            if is_legal:
+                result = await _build_legal_entity_anchor(company, target_director, company_index, ev.progress)
             else:
-                push(f"董事索引 {director_index} 超出範圍，改用自動選擇")
-                director_index = None
-        if target_director is None:
-            push("分析董監事名單，自動選擇最大股法人代表…")
-            target_director = gcis_client.pick_largest_legal_director(directors)
-            if target_director is not None:
-                director_index = directors.index(target_director)
+                result = await _build_person_anchor(company, target_director, company_index, ev.progress)
 
-        if not target_director:
-            push("此公司董監事中無法人代表，且未指定董事，無關係可分析")
-            data_store.update_company(company_id, {"relationship_graph": {
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-                "director_index": None,
-                "parent": None,
-                "siblings": [],
-                "note": "此公司董監事中無法人代表",
-            }})
-            events.append({"type": "done"})
-            return
+            if result is not None:
+                parent_node, siblings, note = result
+                data_store.update_company(company_id, {"relationship_graph": {
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "director_index": director_index,
+                    "parent": parent_node,
+                    "siblings": siblings,
+                    "note": note,
+                }})
+                ev.progress("關係資料補強完成")
 
-        company_index = _build_company_index(companies_snapshot)
-        # Director represents a legal entity if either:
-        #  (a) `representative_of` is set (natural person as legal-entity proxy), or
-        #  (b) the director's own name looks like a company (法人股東直接任董事)
-        is_legal = bool((target_director.get("representative_of") or "").strip()) \
-            or _looks_like_company_name(target_director.get("name") or "")
-
-        if is_legal:
-            result = await _build_legal_entity_anchor(company, target_director, company_index, push)
-        else:
-            result = await _build_person_anchor(company, target_director, company_index, push)
-
-        if result is not None:
-            parent_node, siblings, note = result
-            data_store.update_company(company_id, {"relationship_graph": {
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-                "director_index": director_index,
-                "parent": parent_node,
-                "siblings": siblings,
-                "note": note,
-            }})
-            push("關係資料補強完成")
-
-        events.append({"type": "done"})
-    except Exception as e:
-        push(f"分析失敗:{e}")
-        events.append({"type": "done"})
-    finally:
-        _rel_running.discard(company_id)
+            ev.done()
+        except Exception as e:
+            ev.progress(f"分析失敗:{e}")
+            ev.done()
 
 
 def _looks_like_company_name(name: str) -> bool:

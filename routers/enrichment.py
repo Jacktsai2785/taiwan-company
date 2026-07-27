@@ -2,9 +2,11 @@
 
 Split out of routers/companies.py (which still owns plain CRUD + graphs). Two
 CRUD-flavored endpoints in companies.py — confirm_companies and
-add_company_from_graph — still need to kick off `_enrich_company` and check the
-same `_running` set, so they import both from here (companies.py → enrichment.py,
-one-way; this module never imports from companies.py)."""
+add_company_from_graph — still need to kick off enrichment after creating a
+company; they call the public `start_enrichment()` below instead of reaching
+into this module's private `_enrich_company`/`_enrich_channel.running`/`_spawn`
+(companies.py → enrichment.py, one-way; this module never imports from
+companies.py)."""
 import asyncio
 import ipaddress
 import logging
@@ -20,7 +22,7 @@ from pydantic import BaseModel
 
 from services import claude_client, company_extractor, competitor_service, data_store, gcis_client, report_generator
 from services.ai_deps import ai_from_headers, ai_from_query
-from services.task_progress import sse_progress_stream
+from services.task_progress import ProgressChannel, spawn_background as _spawn
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["enrichment"])
@@ -72,26 +74,26 @@ async def _ssrf_safe_reachable(url: str, *, max_redirects: int = 3) -> bool:
     return False
 
 
-# key = company_id. Four independent progress/running-set pairs — one per SSE
-# kind — passed into services.task_progress.sse_progress_stream.
-_progress: dict[str, list[dict]] = {}
-_running: set[str] = set()
-_deep_progress: dict[str, list[dict]] = {}
-_deep_running: set[str] = set()
-_gcis_progress: dict[str, list[dict]] = {}
-_gcis_running: set[str] = set()
-_summarize_progress: dict[str, list[dict]] = {}
-_summarize_running: set[str] = set()
-
-# 保存 fire-and-forget 任務的強參照，避免 event loop 只持弱參照時被 GC 中途取消
-_BG_TASKS: set[asyncio.Task] = set()
+# 四個獨立的 SSE 進度追蹤 channel（key = company_id），一種 kind 一個。
+# routers/companies.py 另有 2 組同構的（build-relationship 的 rel、patents 的
+# patent），一起收斂進 ProgressChannel（見 services/task_progress.py）——取代
+# 原本 6 處各自手刻的 events/push/push_data/push_error + try/finally discard。
+_enrich_channel = ProgressChannel()
+_deep_channel = ProgressChannel()
+_gcis_channel = ProgressChannel()
+_summarize_channel = ProgressChannel()
 
 
-def _spawn(coro) -> asyncio.Task:
-    t = asyncio.create_task(coro)
-    _BG_TASKS.add(t)
-    t.add_done_callback(_BG_TASKS.discard)
-    return t
+def start_enrichment(company_id: str, engine: str = "claude") -> bool:
+    """公開 API：啟動（或略過重複啟動）某公司的 AI 補全背景任務。回傳是否真的
+    啟動了新任務——False 代表該公司已在跑，呼叫端不用另外處理。取代原本
+    routers/companies.py 直接 import _enrich_company/_running/_spawn 三個私有
+    識別字（router 之間直接互相耦合成 application service）。"""
+    if company_id in _enrich_channel.running:
+        return False
+    _enrich_channel.running.add(company_id)
+    _spawn(_enrich_company(company_id, engine=engine))
+    return True
 
 
 def _nonempty_fields(d: dict) -> dict:
@@ -154,15 +156,7 @@ async def suggest_industries(req: SuggestIndustriesRequest, ai: dict = Depends(a
 async def enrich_batch(req: EnrichBatchRequest, ai: dict = Depends(ai_from_headers)):
     """Spawn enrichment tasks for the given company IDs (skips ones already running)."""
     known = {c["id"] for c in data_store.get_all_companies()}
-    started: list[str] = []
-    for cid in req.company_ids:
-        if cid not in known:
-            continue
-        if cid in _running:
-            continue
-        _running.add(cid)
-        _spawn(_enrich_company(cid, **ai))
-        started.append(cid)
+    started = [cid for cid in req.company_ids if cid in known and start_enrichment(cid, **ai)]
     return {"started": started}
 
 
@@ -173,10 +167,7 @@ async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _progress, _running,
-            lambda: _spawn(_enrich_company(company_id, **ai)),
-        ),
+        _enrich_channel.stream(company_id, lambda: _spawn(_enrich_company(company_id, **ai))),
         media_type="text/event-stream",
     )
 
@@ -195,10 +186,7 @@ async def deep_enrich_stream(company_id: str, force: bool = False, ai: dict = De
         )
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _deep_progress, _deep_running,
-            lambda: _spawn(_deep_enrich_company(company_id, **ai)),
-        ),
+        _deep_channel.stream(company_id, lambda: _spawn(_deep_enrich_company(company_id, **ai))),
         media_type="text/event-stream",
     )
 
@@ -207,34 +195,22 @@ async def _summarize_company(company_id: str, engine: str = "claude", reset: boo
     """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation.
     reset=True clears existing summary/competitors and ignores known competitor context,
     producing a true from-scratch rewrite."""
-    events: list[dict] = []
-    _summarize_progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    def push_error(msg: str):
-        events.append({"type": "error", "message": msg})
-
-    try:
+    with _summarize_channel.session(company_id) as ev:
         company = data_store.get_company(company_id)
         if not company:
-            events.append({"type": "done"})
+            ev.done(True)
             return
 
         if reset:
             data_store.update_company(company_id, {"summary": "", "blurb": "", "competitors": []})
             company = data_store.get_company(company_id)
-            push("已清除舊資料，從零重新生成（約 3–7 分鐘）…")
+            ev.progress("已清除舊資料，從零重新生成（約 3–7 分鐘）…")
             ctx = None
         else:
-            push("正在生成公司簡介（約 3–7 分鐘）…")
+            ev.progress("正在生成公司簡介（約 3–7 分鐘）…")
             ctx = competitor_service.gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+                ev.progress(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
 
         try:
             result = await report_generator.generate_summary(
@@ -245,19 +221,17 @@ async def _summarize_company(company_id: str, engine: str = "claude", reset: boo
                 "enriched_at": datetime.now(timezone.utc).isoformat(),
                 "enrich_error": "",
             })
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
-            push("公司簡介已生成完成")
+            ev.data({"summary": saved["summary"], "blurb": saved["blurb"]})
+            ev.progress("公司簡介已生成完成")
+            ev.done(True)
         except Exception as e:
             log.warning("summarize failed for %s: %s", company_id, e)
             data_store.update_company(company_id, {
                 "enrich_status": "failed",
                 "enrich_error": "公司簡介生成失敗，可在卡片點『重試』重新生成",
             })
-            push_error("公司簡介生成失敗，可在卡片點『重試』重新生成")
-
-        events.append({"type": "done"})
-    finally:
-        _summarize_running.discard(company_id)
+            ev.error("公司簡介生成失敗，可在卡片點『重試』重新生成", code=claude_client.classify_ai_error(e))
+            ev.done(False)
 
 
 @router.get("/{company_id}/summarize")
@@ -269,10 +243,7 @@ async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depe
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _summarize_progress, _summarize_running,
-            lambda: _spawn(_summarize_company(company_id, **ai, reset=reset)),
-        ),
+        _summarize_channel.stream(company_id, lambda: _spawn(_summarize_company(company_id, **ai, reset=reset))),
         media_type="text/event-stream",
     )
 
@@ -323,28 +294,21 @@ async def refresh_gcis_stream(company_id: str):
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        sse_progress_stream(
-            company_id, _gcis_progress, _gcis_running,
-            lambda: _spawn(_refresh_gcis_only(company_id)),
-            max_ticks=120,
-        ),
+        _gcis_channel.stream(company_id, lambda: _spawn(_refresh_gcis_only(company_id)), max_ticks=120),
         media_type="text/event-stream",
     )
 
 
 async def _refresh_gcis_only(company_id: str) -> None:
-    events: list[dict] = []
-    _gcis_progress[company_id] = events
-
-    try:
+    with _gcis_channel.session(company_id) as ev:
         company = data_store.get_company(company_id)
         if not company:
-            events.append({"type": "done"})
+            ev.done(True)
             return
 
         name = company["name"]
         stored_tax_id = company.get("tax_id", "")
-        events.append({"type": "progress", "message": f"正在重新拉取 GCIS 資料：{name}"})
+        ev.progress(f"正在重新拉取 GCIS 資料：{name}")
 
         try:
             if stored_tax_id:
@@ -358,17 +322,16 @@ async def _refresh_gcis_only(company_id: str) -> None:
             if clean:
                 data_store.update_company(company_id, clean)
                 directors_count = len(clean.get("directors", []))
-                events.append({"type": "data", "fields": clean})
-                events.append({"type": "progress", "message": f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）"})
+                ev.data(clean)
+                ev.progress(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
             else:
-                events.append({"type": "progress", "message": "政府登記資料暫時查無，保留既有資料"})
+                ev.progress("政府登記資料暫時查無，保留既有資料")
         except Exception as e:
             log.warning("GCIS refresh failed for %s: %s", name, e)
-            events.append({"type": "progress", "message": "政府登記資料查詢暫時失敗"})
+            ev.progress("政府登記資料查詢暫時失敗")
 
-        events.append({"type": "done"})
-    finally:
-        _gcis_running.discard(company_id)
+        # GCIS 查詢失敗一律降級為「保留既有資料」，不是使用者可感知的失敗，done 恆為 ok。
+        ev.done(True)
 
 
 def _save_summary_result(company_id: str, result: dict, extra: dict | None = None) -> dict:
@@ -391,30 +354,18 @@ def _save_summary_result(company_id: str, result: dict, extra: dict | None = Non
 
 
 async def _enrich_company(company_id: str, engine: str = "claude") -> None:
-    _running.add(company_id)
-    events: list[dict] = []
-    _progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    def push_error(msg: str):
-        events.append({"type": "error", "message": msg})
-
     data_store.update_company(company_id, {"enrich_status": "generating"})
 
-    try:
+    with _enrich_channel.session(company_id) as ev:
+        failed = False
         company = data_store.get_company(company_id)
         if not company:
-            events.append({"type": "done"})
+            ev.done(True)
             return
 
         name = company["name"]
         stored_tax_id = company.get("tax_id", "")
-        push(f"步驟 1/2：查詢政府登記資料（{name}）…")
+        ev.progress(f"步驟 1/2：查詢政府登記資料（{name}）…")
 
         try:
             if stored_tax_id:
@@ -435,25 +386,25 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
             if clean:
                 data_store.update_company(company_id, clean)
                 directors_count = len(clean.get("directors", []))
-                push_data(clean)
-                push(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
+                ev.data(clean)
+                ev.progress(f"基本資料已更新（資本額、代表人、董監事 {directors_count} 人）")
                 if clean.get("name"):
-                    push(f"公司名稱更新為：{clean['name']}")
+                    ev.progress(f"公司名稱更新為：{clean['name']}")
             else:
-                push("政府登記資料暫時查無，保留既有資料")
+                ev.progress("政府登記資料暫時查無，保留既有資料")
         except Exception as e:
             log.warning("GCIS enrichment failed for %s: %s", name, e)
-            push("政府登記資料查詢暫時失敗，將僅生成簡介")
+            ev.progress("政府登記資料查詢暫時失敗，將僅生成簡介")
 
-        push("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
+        ev.progress("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
         company = data_store.get_company(company_id)
         if not company:
-            events.append({"type": "done"})
+            ev.done(True)
             return
         try:
             ctx = competitor_service.gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+                ev.progress(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
             result = await report_generator.generate_summary(
                 company, engine=engine, competitor_context=ctx or None
             )
@@ -462,17 +413,18 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
                 "enriched_at": datetime.now(timezone.utc).isoformat(),
                 "enrich_error": "",
             })
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"]})
-            push("公司簡介已生成完成")
+            ev.data({"summary": saved["summary"], "blurb": saved["blurb"]})
+            ev.progress("公司簡介已生成完成")
             # Reverse link: if this company appears in other companies' competitor lists, fill company_id
             competitor_service.backlink_competitor(company_id, company["name"])
         except Exception as e:
+            failed = True
             log.warning("summary generation failed for %s: %s", name, e)
             data_store.update_company(company_id, {
                 "enrich_status": "failed",
                 "enrich_error": "公司簡介生成失敗，可在卡片點『重試』重新生成",
             })
-            push_error("公司簡介生成失敗，可在卡片點『重試』重新生成")
+            ev.error("公司簡介生成失敗，可在卡片點『重試』重新生成", code=claude_client.classify_ai_error(e))
 
         try:
             from services.jk_nb_exporter import export_company_to_jk_nb
@@ -480,32 +432,22 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
         except Exception:
             log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
 
-        events.append({"type": "done"})
-    finally:
-        _running.discard(company_id)
+        ev.done(not failed)
 
 
 async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
-    events: list[dict] = []
-    _deep_progress[company_id] = events
-
-    def push(msg: str):
-        events.append({"type": "progress", "message": msg})
-
-    def push_data(fields: dict):
-        events.append({"type": "data", "fields": fields})
-
-    try:
+    with _deep_channel.session(company_id) as ev:
+        failed = False
         company = data_store.get_company(company_id)
         if not company:
-            events.append({"type": "done"})
+            ev.done(True)
             return
 
-        push("正在深度搜尋媒體報導與新聞（約 4–8 分鐘）…")
+        ev.progress("正在深度搜尋媒體報導與新聞（約 4–8 分鐘）…")
         try:
             ctx = competitor_service.gather_competitor_context(company_id, company.get("name", ""))
             if ctx["direct"]:
-                push(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
+                ev.progress(f"偵測到 {len(ctx['direct'])} 家直接競業、{len(ctx['extended'])} 家延伸競業，將一併納入分析…")
             result = await report_generator.deep_enrich_summary(
                 company, engine=engine, competitor_context=ctx or None
             )
@@ -513,10 +455,12 @@ async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
             # re-running it (distinct from last_updated, which any update touches).
             deep_at = datetime.now(timezone.utc).isoformat()
             saved = _save_summary_result(company_id, result, extra={"deep_enriched_at": deep_at})
-            push_data({"summary": saved["summary"], "blurb": saved["blurb"], "deep_enriched_at": deep_at})
-            push("深度生成完成")
+            ev.data({"summary": saved["summary"], "blurb": saved["blurb"], "deep_enriched_at": deep_at})
+            ev.progress("深度生成完成")
         except Exception as e:
-            push(f"深度生成失敗：{e}")
+            failed = True
+            log.warning("deep enrich failed for %s: %s", company_id, e)
+            ev.error(f"深度生成失敗：{e}", code=claude_client.classify_ai_error(e))
 
         try:
             from services.jk_nb_exporter import export_company_to_jk_nb
@@ -524,8 +468,6 @@ async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
         except Exception:
             log.exception("jk_nb export failed for company %s (non-fatal)", company_id)
 
-        events.append({"type": "done"})
-    finally:
-        if not events or events[-1].get("type") != "done":
-            events.append({"type": "done"})
-        _deep_running.discard(company_id)
+        # 若上面意外拋出未捕捉的例外（非預期中止），session() 的 finally 安全網
+        # 會自動補一個 done(ok=False)，不需要在這裡自己再判斷一次。
+        ev.done(not failed)

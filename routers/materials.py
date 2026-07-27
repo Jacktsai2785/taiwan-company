@@ -20,7 +20,7 @@ from services import data_store, report_generator
 from services.ai_deps import ai_from_headers
 from services.file_parser import extract_text
 from services.materials_merge import PUBLIC_SECTIONS, UMBRELLA, normalize_to_umbrella, parse_sections, serialize_sections
-from routers.enrichment import _spawn
+from services.task_progress import spawn_background as _spawn
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["materials"])

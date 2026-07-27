@@ -7,7 +7,7 @@ findbiz.py — 透過 Playwright 手動通過 Cloudflare，抓取 findbiz.nat.go
   POST /api/findbiz/confirm/{session_id} → 使用者通知「已通過 Cloudflare」
 """
 import asyncio
-from routers.enrichment import _spawn
+from services.task_progress import spawn_background as _spawn
 import json
 import logging
 import os

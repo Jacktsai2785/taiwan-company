@@ -46,35 +46,27 @@ async function _runAutoFetch(c) {
 }
 
 function _listenAutoFetchStream(sessionId, companyId, companyName) {
-  return new Promise(resolve => {
-    const es = new EventSource(`/api/findbiz/stream/${sessionId}`);
-    let settled = false;
-    const settle = () => {
-      if (!settled) {
-        settled = true;
-        _hideAutoFetchBanner();
-        es.close();
-        resolve();
-      }
-    };
-
-    es.onmessage = async e => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "heartbeat") return;
-
-      if (msg.type === "browser_ready") {
-        _showAutoFetchBanner(companyName, settle);
-      } else if (msg.type === "done") {
-        settle();
-        toast(`✅ 已自動抓取 ${companyName} 的每股金額`);
-        try { await loadCompanies(); renderGrid(); } catch (_) {}
-      } else if (msg.type === "error") {
-        settle();
-        toast(`⚠️ ${companyName} 自動抓取失敗：${msg.message}`, true);
-      }
-    };
-
-    es.onerror = () => settle();
+  // findbiz 這條串流協定跟其他端點不同（多了 heartbeat/browser_ready，且使用者
+  // 可以按「跳過」提前中止），仍共用 subscribeSSE 的 transport，只是額外事件走
+  // onOther、外部中止走 onOpen 給的 settle。
+  return subscribeSSE(`/api/findbiz/stream/${sessionId}`, {
+    onOpen: (es, settle) => {
+      _autoFetchCfSettle = () => { _hideAutoFetchBanner(); settle(false); };
+    },
+    onOther: msg => {
+      if (msg.type === "browser_ready") _showAutoFetchBanner(companyName, _autoFetchCfSettle);
+      // heartbeat：忽略，只是防 proxy 閒置斷線
+    },
+    onDone: async () => {
+      _hideAutoFetchBanner();
+      toast(`✅ 已自動抓取 ${companyName} 的每股金額`);
+      try { await loadCompanies(); renderGrid(); } catch (_) {}
+    },
+    onError: msg => {
+      _hideAutoFetchBanner();
+      toast(`⚠️ ${companyName} 自動抓取失敗：${msg.message}`, true);
+    },
+    onTransportError: () => { _hideAutoFetchBanner(); },
   });
 }
 
@@ -110,11 +102,9 @@ function refreshGcis() {
   if (btn) btn.disabled = true;
 
   const sseUrl = `/api/companies/${id}/refresh-gcis`;
-  const es = new EventSource(sseUrl);
 
-  es.onmessage = async e => {
-    const event = JSON.parse(e.data);
-    if (event.type === "data") {
+  subscribeSSE(sseUrl, {
+    onData: event => {
       const company = state.companies.find(c => c.id === id);
       if (company) {
         Object.assign(company, event.fields);
@@ -123,20 +113,18 @@ function refreshGcis() {
           openModal(id);
         }
       }
-    } else if (event.type === "progress") {
-      toast(event.message);
-    } else if (event.type === "done") {
-      es.close();
+    },
+    onProgress: event => toast(event.message),
+    onDone: async () => {
       const b = document.querySelector(".gcis-refresh-btn");
       if (b) b.disabled = false;
       try { await loadCompanies(); renderGrid(); if (_modalCompanyId === id) openModal(id); } catch (_) {}
-    }
-  };
-  es.onerror = () => {
-    es.close();
-    const b = document.querySelector(".gcis-refresh-btn");
-    if (b) b.disabled = false;
-  };
+    },
+    onTransportError: () => {
+      const b = document.querySelector(".gcis-refresh-btn");
+      if (b) b.disabled = false;
+    },
+  });
 }
 
 // 共用：呼叫 find-website API，回傳 { website } | { website: "" }。
@@ -635,29 +623,27 @@ function _expandSummarySection() {
 }
 
 function _subscribePatent(companyId) {
-  const es = trackModalES(new EventSource(`/api/companies/${companyId}/patents`));
   const status = document.getElementById("modal-patents-status");
-  const hint   = document.getElementById("modal-patents-hint");
 
-  es.onmessage = (e) => {
-    const d = JSON.parse(e.data);
-    if (d.type === "progress") {
+  subscribeSSE(`/api/companies/${companyId}/patents`, {
+    track: true,          // 關窗即中止：專利串流沒有背景繼續跑的價值
+    errorIsTerminal: true, // 這個端點 error 後不會再送 done
+    onProgress: d => {
       if (status) status.innerHTML = `<p class="summary-placeholder">${escHtml(d.message)}</p>`;
-    } else if (d.type === "done") {
-      es.close();
+    },
+    onDone: (ok, d) => {
       if (status) status.innerHTML = "";
       const c = state.companies.find(x => x.id === companyId);
       if (c && d.patents) c.patents = d.patents;
       _renderPatents(companyId, true);
-    } else if (d.type === "error") {
-      es.close();
+    },
+    onError: d => {
       if (status) status.innerHTML = `<p class="summary-placeholder" style="color:var(--danger)">⚠ ${escHtml(d.message)}</p>`;
-    }
-  };
-  es.onerror = () => {
-    es.close();
-    if (status) status.innerHTML = '<p class="summary-placeholder" style="color:var(--danger)">⚠ 連線中斷</p>';
-  };
+    },
+    onTransportError: () => {
+      if (status) status.innerHTML = '<p class="summary-placeholder" style="color:var(--danger)">⚠ 連線中斷</p>';
+    },
+  });
 }
 
 function _renderPatents(companyId, autoShow = false) {
@@ -738,37 +724,29 @@ function _subscribeSummarize(companyId, reset = false) {
   state.enrichingIds.add(companyId);
   renderGrid();
 
-  return new Promise(resolve => {
-    const es = new EventSource(sseUrl);
-    let settled = false;
-    const settle = () => { if (!settled) { settled = true; resolve(); } };
-
-    es.onmessage = async e => {
-      const event = JSON.parse(e.data);
-      if (event.type === "data") {
-        const company = state.companies.find(c => c.id === companyId);
-        if (company) {
-          Object.assign(company, event.fields);
-          renderGrid();
-          _updateSummaryInModal(company);
-        }
-      } else if (event.type === "progress") {
-        toast(event.message);
-      } else if (event.type === "done") {
-        es.close();
-        settle();
-        state.enrichingIds.delete(companyId);
-        state.doneIds.add(companyId);
-        try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
-        setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
+  return subscribeSSE(sseUrl, {
+    onData: event => {
+      const company = state.companies.find(c => c.id === companyId);
+      if (company) {
+        Object.assign(company, event.fields);
+        renderGrid();
+        _updateSummaryInModal(company);
       }
-    };
-    es.onerror = () => {
-      es.close();
+    },
+    onProgress: event => toast(event.message),
+    // 舊版這裡沒有處理 error：後端失敗時仍會送 done，畫面因此誤標記成功
+    // （綠勾）。現在 error 顯示失敗訊息，done 改看 ok 決定要不要加 doneIds。
+    onError: event => toast(event.message || "公司簡介生成失敗", true),
+    onDone: async ok => {
+      state.enrichingIds.delete(companyId);
+      if (ok) state.doneIds.add(companyId);
+      try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
+      setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
+    },
+    onTransportError: () => {
       state.enrichingIds.delete(companyId);
       renderGrid();
-      settle();
-    };
+    },
   });
 }
 
@@ -779,37 +757,29 @@ function _subscribeDeepEnrich(companyId, force = false) {
   state.enrichingIds.add(companyId);
   renderGrid();
 
-  return new Promise(resolve => {
-    const es = new EventSource(sseUrl);
-    let settled = false;
-    const settle = () => { if (!settled) { settled = true; resolve(); } };
-
-    es.onmessage = async e => {
-      const event = JSON.parse(e.data);
-      if (event.type === "data") {
-        const company = state.companies.find(c => c.id === companyId);
-        if (company) {
-          Object.assign(company, event.fields);
-          renderGrid();
-          _updateSummaryInModal(company);
-        }
-      } else if (event.type === "progress") {
-        toast(event.message);
-      } else if (event.type === "done") {
-        es.close();
-        settle();
-        state.enrichingIds.delete(companyId);
-        state.doneIds.add(companyId);
-        try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
-        setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
+  return subscribeSSE(sseUrl, {
+    onData: event => {
+      const company = state.companies.find(c => c.id === companyId);
+      if (company) {
+        Object.assign(company, event.fields);
+        renderGrid();
+        _updateSummaryInModal(company);
       }
-    };
-    es.onerror = () => {
-      es.close();
+    },
+    onProgress: event => toast(event.message),
+    // 舊版這裡也沒有處理 error（後端原本連 error 事件都沒送，只把失敗文字塞進
+    // progress 訊息裡）：兩邊都修過了，這裡改看真正的 error 事件 + done.ok。
+    onError: event => toast(event.message || "深度生成失敗", true),
+    onDone: async ok => {
+      state.enrichingIds.delete(companyId);
+      if (ok) state.doneIds.add(companyId);
+      try { await loadCompanies(); computeGroups(); renderSidebar(); renderGrid(); } catch (_) {}
+      setTimeout(() => { state.doneIds.delete(companyId); renderGrid(); }, 3000);
+    },
+    onTransportError: () => {
       state.enrichingIds.delete(companyId);
       renderGrid();
-      settle();
-    };
+    },
   });
 }
 

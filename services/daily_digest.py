@@ -90,10 +90,16 @@ async def get_digest(
     return await _generate(industry, today, engine)
 
 
-async def refresh_all_digests() -> None:
+async def refresh_all_digests(industries: list[str] | None = None) -> list[str]:
+    """Refresh digests for `industries` (defaults to all configured industries).
+    Each industry's failure is caught here so one bad industry doesn't abort the
+    rest — returns the list of industries that failed, so the caller (the daily
+    scheduler) can scope a bounded retry to just those instead of re-running
+    everything or silently waiting until tomorrow."""
     from services.data_store import get_industries
     from services.jk_nb_exporter import export_industry_digest_to_jk_nb
-    for ind in get_industries():
+    failed: list[str] = []
+    for ind in (industries if industries is not None else get_industries()):
         try:
             log.info("Scheduler: refreshing digest for %s", ind)
             digest = await _generate(ind, cache_date(), engine="claude")
@@ -103,6 +109,8 @@ async def refresh_all_digests() -> None:
                 log.exception("jk_nb export failed for %s (non-fatal)", ind)
         except Exception as exc:
             log.warning("Scheduler: digest failed for %s: %s", ind, exc)
+            failed.append(ind)
+    return failed
 
 
 async def get_trends(
@@ -116,14 +124,19 @@ async def get_trends(
     return await _generate_trends(industry, engine)
 
 
-async def refresh_all_trends() -> None:
+async def refresh_all_trends(industries: list[str] | None = None) -> list[str]:
+    """Same shape as refresh_all_digests: scoped to `industries` when given,
+    returns the industries that failed."""
     from services.data_store import get_industries
-    for ind in get_industries():
+    failed: list[str] = []
+    for ind in (industries if industries is not None else get_industries()):
         try:
             log.info("Scheduler: refreshing trends for %s", ind)
             await _generate_trends(ind, engine="claude")
         except Exception as exc:
             log.warning("Scheduler: trends failed for %s: %s", ind, exc)
+            failed.append(ind)
+    return failed
 
 
 async def _generate_trends(industry: str, engine: str) -> dict:

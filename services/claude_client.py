@@ -49,8 +49,33 @@ _AUTH_HINTS = (
     "use_vertexai", "use_gca", "login first", "登入", "未登入", "授權",
 )
 
+# 訊息片段代表「CLI 有跑，但撞到額度/流量上限」，跟真正的生成失敗要分開處理
+# （額度上限應該等待重試，不是判定失敗）。同一組關鍵字曾各自散落在
+# scripts/regen_summaries.sh 的 is_limit() 與呼叫端的例外訊息比對裡；
+# 這裡收斂成單一分類函式，SSE 事件直接帶 code，呼叫端不用再重新猜測。
+_USAGE_LIMIT_HINTS = (
+    "limit reached", "usage limit", "rate limit", "will reset", "resets",
+    "額度", "流量上限", "用量上限", "請稍後再試", "too many requests",
+    "overloaded", "429", "529",
+)
+
+
+def classify_ai_error(exc: BaseException | str) -> str:
+    """把 AI 呼叫例外分類成機器可讀的 code，取代到處手動 grep 錯誤文字。
+    目前只分出 "ai_usage_limit"；其餘回傳空字串（一般失敗，呼叫端照舊處理）。"""
+    text = str(exc).lower()
+    if any(h.lower() in text for h in _USAGE_LIMIT_HINTS):
+        return "ai_usage_limit"
+    return ""
+
 _IMAGE_MEDIA = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                 "gif": "image/gif", "webp": "image/webp"}
+
+# 平台定案純地端 CLI 登入，不用雲端 API Key（見 CLAUDE.md）。若 .env 或環境殘留
+# 這些變數，CLI 會優先用它們做 API 認證、蓋過本機登入 session，一壞就是全部
+# 引擎跟著壞且訊息長得像「未登入」，很難查。子行程一律拿掉，斷絕殘留變數的影響。
+_CLOUD_API_KEY_VARS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY")
+_CLI_ENV = {k: v for k, v in os.environ.items() if k not in _CLOUD_API_KEY_VARS}
 
 
 def _normalize_engine(engine: str) -> str:
@@ -78,7 +103,7 @@ def _run_cli_unlocked(cmd: list[str], timeout: int, label: str) -> str:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, start_new_session=True,
+            stdin=subprocess.DEVNULL, start_new_session=True, env=_CLI_ENV,
         )
     except FileNotFoundError:
         raise RuntimeError(

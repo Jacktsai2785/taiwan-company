@@ -846,29 +846,28 @@ function fetchParValue() {
 }
 
 function _listenFindBizStream(sessionId, companyId) {
-  const es = trackModalES(new EventSource(`/api/findbiz/stream/${sessionId}`));
-
-  es.onmessage = async e => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === "heartbeat") return;
-
-    const statusEl = document.getElementById("findbiz-status-msg");
-
-    if (msg.type === "browser_ready") {
-      document.getElementById("findbiz-s1-status").textContent = "✅";
-      document.getElementById("findbiz-s2-status").textContent = "⏳";
-      statusEl.textContent = msg.message;
-      document.getElementById("findbiz-confirm-btn").style.display = "";
-    } else if (msg.type === "progress") {
+  subscribeSSE(`/api/findbiz/stream/${sessionId}`, {
+    track: true,           // 關窗即中止（跟原本 trackModalES 行為一致）
+    errorIsTerminal: true, // 這條串流 error 後不會再送 done
+    onOther: msg => {
+      // heartbeat 忽略；browser_ready 是這條串流自己的協定，走這裡而非標準四型
+      if (msg.type === "browser_ready") {
+        document.getElementById("findbiz-s1-status").textContent = "✅";
+        document.getElementById("findbiz-s2-status").textContent = "⏳";
+        document.getElementById("findbiz-status-msg").textContent = msg.message;
+        document.getElementById("findbiz-confirm-btn").style.display = "";
+      }
+    },
+    onProgress: msg => {
       document.getElementById("findbiz-s2-status").textContent = "✅";
       document.getElementById("findbiz-s3-status").textContent = "⏳";
-      statusEl.textContent = msg.message;
+      document.getElementById("findbiz-status-msg").textContent = msg.message;
       document.getElementById("findbiz-confirm-btn").style.display = "none";
-    } else if (msg.type === "done") {
-      es.close();
+    },
+    onDone: async (ok, msg) => {
       document.getElementById("findbiz-s2-status").textContent = "✅";
       document.getElementById("findbiz-s3-status").textContent = "✅";
-      statusEl.innerHTML = `<span style="color:var(--success)">✅ ${msg.message}</span>`;
+      document.getElementById("findbiz-status-msg").innerHTML = `<span style="color:var(--success)">✅ ${msg.message}</span>`;
       document.getElementById("findbiz-close-btn").textContent = "關閉";
       document.getElementById("findbiz-confirm-btn").style.display = "none";
       // 更新本地 state 並重繪 modal
@@ -879,25 +878,23 @@ function _listenFindBizStream(sessionId, companyId) {
           openModal(companyId);
         }
       } catch (_) {}
-    } else if (msg.type === "error") {
-      es.close();
+    },
+    onError: msg => {
       document.getElementById("findbiz-s1-status").textContent = "";
       document.getElementById("findbiz-s2-status").textContent = "";
       document.getElementById("findbiz-s3-status").textContent = "";
-      statusEl.innerHTML = `<span style="color:var(--danger)">❌ ${msg.message}</span>`;
+      document.getElementById("findbiz-status-msg").innerHTML = `<span style="color:var(--danger)">❌ ${msg.message}</span>`;
       document.getElementById("findbiz-close-btn").textContent = "關閉";
       document.getElementById("findbiz-confirm-btn").style.display = "none";
-    }
-  };
-
-  es.onerror = () => {
-    es.close();
-    const statusEl = document.getElementById("findbiz-status-msg");
-    if (statusEl && !statusEl.textContent.startsWith("✅") && !statusEl.textContent.startsWith("❌")) {
-      statusEl.innerHTML = `<span style="color:var(--danger)">❌ 連線中斷，請重試</span>`;
-    }
-    document.getElementById("findbiz-close-btn").textContent = "關閉";
-  };
+    },
+    onTransportError: () => {
+      const statusEl = document.getElementById("findbiz-status-msg");
+      if (statusEl && !statusEl.textContent.startsWith("✅") && !statusEl.textContent.startsWith("❌")) {
+        statusEl.innerHTML = `<span style="color:var(--danger)">❌ 連線中斷，請重試</span>`;
+      }
+      document.getElementById("findbiz-close-btn").textContent = "關閉";
+    },
+  });
 }
 
 function confirmCloudflare() {

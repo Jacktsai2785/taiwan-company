@@ -123,6 +123,84 @@ function _closeModalStreams() {
   }
 }
 
+/* 共用 SSE transport：只收斂「開 EventSource／JSON.parse／依 type 分派／關閉」這些
+   每個訂閱點都手刻一次的樣板；畫面特有的 toast/DOM 更新留在各 caller 的 handler 裡，
+   不強行塞進這個 helper。
+   後端事件格式固定四種 type：progress / data / error / done（done 帶 ok:true|false，
+   沒帶 ok 視為舊格式、當作成功處理）。
+   回傳 Promise<boolean>：resolve 為 done 事件的 ok 值；連線本身失敗（onerror）resolve false。
+   options：
+     onProgress(event) / onData(event) / onError(event) — 對應三種非終止事件
+     onDone(ok, event) — done 事件觸發時呼叫（在 resolve 前）
+     onOther(event) — type 不在 progress/data/error/done 四種標準值內時呼叫
+       （例如 findbiz 串流自己的 heartbeat/browser_ready，協定跟其他端點不同，
+       仍可共用這裡的 transport，只是額外事件自己處理）
+     onTransportError(err) — EventSource 連線層錯誤或訊息 JSON 解析失敗
+     onOpen(es, settle) — EventSource 一建立就同步呼叫，把原始 handle 跟內部
+       settle(ok) 交給呼叫端；只有需要「外部中止」的情境才用得到（如使用者按
+       按鈕跳過、或關窗時主動關閉），多數呼叫點不需要
+     track — true 時把建立的 EventSource 交給 trackModalES（跟視窗生命週期綁定，
+       關窗即中止；summarize/deep-enrich 等背景生成故意不要這個行為，不要傳 true）
+     errorIsTerminal — 有些端點（如 industry-map generate）error 後不會再送
+       done，error 本身就是唯一終止事件；預設 false（enrichment.py 系列端點
+       固定 error 後仍會送 done，靠 done.ok 判斷成敗，這裡不用提前 settle） */
+function subscribeSSE(url, options = {}) {
+  const {
+    onProgress, onData, onError, onDone, onOther, onTransportError, onOpen,
+    track = false, errorIsTerminal = false,
+  } = options;
+  return new Promise(resolve => {
+    let es;
+    try {
+      es = new EventSource(url);
+    } catch (err) {
+      onTransportError?.(err);
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const settle = ok => {
+      if (settled) return;
+      settled = true;
+      try { es.close(); } catch (_) {}
+      resolve(ok);
+    };
+
+    if (track) trackModalES(es);
+    onOpen?.(es, settle);
+
+    es.onmessage = e => {
+      let event;
+      try {
+        event = JSON.parse(e.data);
+      } catch (err) {
+        onTransportError?.(err);
+        return; // 單一訊息壞掉不中止整條串流，等後續事件或連線層 onerror
+      }
+      switch (event.type) {
+        case "progress": onProgress?.(event); break;
+        case "data": onData?.(event); break;
+        case "error":
+          onError?.(event);
+          if (errorIsTerminal) settle(false);
+          break;
+        case "done": {
+          const ok = event.ok !== false;
+          onDone?.(ok, event);
+          settle(ok);
+          break;
+        }
+        default: onOther?.(event); break;
+      }
+    };
+    es.onerror = () => {
+      onTransportError?.(new Error("SSE connection error"));
+      settle(false);
+    };
+  });
+}
+
 /* ── News blacklist / dismiss ── */
 const _dismissedUrls = new Set();
 

@@ -1,6 +1,6 @@
 """Industry map endpoints: read cached / generate (SSE) / delete / subdivide."""
 import asyncio
-from routers.enrichment import _spawn
+from services.task_progress import spawn_background as _spawn
 import logging
 import subprocess
 from pathlib import Path
