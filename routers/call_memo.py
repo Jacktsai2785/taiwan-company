@@ -90,7 +90,10 @@ async def transcribe_audio_memo(
     content = await file.read()
     if len(content) > _AUDIO_MAX_BYTES:
         raise HTTPException(status_code=413, detail="音檔過大，上限 100MB，請壓縮或分段上傳")
-    transcript = await whisper_transcriber.transcribe_audio(content, suffix)
+    try:
+        transcript = await whisper_transcriber.transcribe_audio(content, suffix)
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     if not transcript.strip():
         raise HTTPException(status_code=422, detail="無法辨識音訊內容，請確認檔案包含清晰語音")

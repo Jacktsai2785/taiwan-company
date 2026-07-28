@@ -30,6 +30,18 @@
   color: var(--sb-muted);
 }
 
+#app-version {
+  font-size: 10px;
+  color: var(--sb-muted);
+  text-align: center;
+  padding: 6px 0 2px;
+  cursor: pointer;
+  opacity: .55;
+  transition: opacity .12s;
+}
+#app-version:hover { opacity: 1; }
+#app-version:empty { display: none; }
+
 /* ── Sidebar rows ── */
 .sb-row {
   display: flex;

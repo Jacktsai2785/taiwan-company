@@ -396,3 +396,43 @@
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
 #sidebar ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); }
 
+
+/* ════════════════════════════════════════
+   CHANGELOG DIALOG
+════════════════════════════════════════ */
+#changelog-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(14,26,46,.65);
+  z-index: 900;
+  align-items: center; justify-content: center;
+  padding: 20px;
+}
+#changelog-overlay.open { display: flex; }
+#changelog-dialog {
+  background: var(--card);
+  border-radius: 12px;
+  width: 100%; max-width: 640px;
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(14,26,46,.25);
+}
+#changelog-header {
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--border);
+}
+#changelog-header h3 { font-size: 16px; font-weight: 700; color: var(--text); }
+#changelog-body { flex: 1; overflow-y: auto; padding: 14px 24px; }
+#changelog-content {
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#changelog-footer {
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end;
+}

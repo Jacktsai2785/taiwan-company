@@ -855,7 +855,29 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   }
 });
 
-/* ── Audio transcription ── */
+/* ── Audio transcription ──
+   Whisper small 在無 GPU 的機器上約需錄音長度 30–60% 的時間轉錄，加上 Claude 抽欄位；
+   1 小時錄音實測跑下來要 20 分鐘以上，遠超過原本寫死的「1–3 分鐘」，使用者等到一半
+   容易誤以為卡死而關分頁、白白中斷掉已經跑了大半的 request。改成讀音檔實際長度動態估算。 */
+function _getAudioDuration(file) {
+  return new Promise((resolve) => {
+    const audio = new Audio();
+    const url = URL.createObjectURL(file);
+    const done = (d) => { URL.revokeObjectURL(url); resolve(d); };
+    audio.addEventListener("loadedmetadata", () => done(Number.isFinite(audio.duration) ? audio.duration : null));
+    audio.addEventListener("error", () => done(null));
+    audio.src = url;
+  });
+}
+
+function _transcribeEtaMessage(durationSec) {
+  if (!durationSec) return "⏳ Whisper 語音辨識中，依錄音長度約需數分鐘，請勿關閉此分頁…";
+  const min = Math.round(durationSec / 60);
+  if (min <= 5) return "⏳ Whisper 語音辨識中，預估 1–3 分鐘…";
+  if (min <= 20) return `⏳ Whisper 語音辨識中，錄音約 ${min} 分鐘，預估需要 5–10 分鐘，請勿關閉此分頁…`;
+  return `⏳ Whisper 語音辨識中，錄音約 ${min} 分鐘，較長錄音可能需要 15–30 分鐘，請勿關閉此分頁（完成後會有通知）…`;
+}
+
 document.getElementById("memo-audio-input").addEventListener("change", async function() {
   const file = this.files[0];
   if (!file) return;
@@ -867,7 +889,10 @@ document.getElementById("memo-audio-input").addEventListener("change", async fun
   const transcriptBox = document.getElementById("memo-transcript-box");
   transcriptBox.style.display = "none";
 
-  status.textContent = "⏳ Whisper 語音辨識中，依錄音長度約需 1–3 分鐘…";
+  status.textContent = "⏳ 讀取音檔長度…";
+  status.className = "memo-status-info";
+  const durationSec = await _getAudioDuration(file);
+  status.textContent = _transcribeEtaMessage(durationSec);
   status.className = "memo-status-info";
 
   const fd = new FormData();

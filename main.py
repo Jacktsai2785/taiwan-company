@@ -26,6 +26,9 @@ from routers import companies, competitors, enrichment, config, upload, call_mem
 log = logging.getLogger(__name__)
 TAIWAN_TZ = timezone(timedelta(hours=8))
 
+BASE_DIR = Path(__file__).parent
+VERSION = (BASE_DIR / "VERSION").read_text().strip()
+
 
 async def _daily_scheduler() -> None:
     """每天 08:00 台灣時間依序跑 digests → trends（不是兩個各自獨立、只靠固定
@@ -91,7 +94,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="台灣產業商情平台", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="台灣產業商情平台", version=VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,3 +134,13 @@ def index():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/version")
+def get_version():
+    return {"version": VERSION}
+
+
+@app.get("/changelog")
+def changelog():
+    return FileResponse(str(BASE_DIR / "CHANGELOG.md"), media_type="text/plain", headers=_NO_CACHE)

@@ -67,6 +67,31 @@ function saveSettings() {
   toast(`已切換為「${AI_ENGINE_LABELS[eng] || eng}」引擎`);
 }
 
+async function loadVersion() {
+  const el = document.getElementById("app-version");
+  if (!el) return;
+  try {
+    const { version } = await api("GET", "/api/version");
+    el.textContent = `v${version}`;
+  } catch {
+    el.textContent = "";
+  }
+}
+
+let _changelogLoaded = false;
+async function openChangelog() {
+  openOverlay("changelog-overlay");
+  if (_changelogLoaded) return;
+  const contentEl = document.getElementById("changelog-content");
+  try {
+    const res = await fetch("/changelog");
+    contentEl.textContent = res.ok ? await res.text() : "無法載入更新紀錄。";
+    _changelogLoaded = res.ok;
+  } catch {
+    contentEl.textContent = "無法載入更新紀錄。";
+  }
+}
+
 function closeSettings() {
   // 取消＝接受目前引擎（落地預設，避免 ai_engine 停在 null 而反覆彈出）
   if (localStorage.getItem("ai_engine") === null) {
@@ -237,6 +262,7 @@ async function boot() {
   renderSidebar();
   renderGrid();
   _updateAiModeLabel();
+  loadVersion();
   // Request notification permission early (must be from a page-load context, not a background task)
   if ("Notification" in window && Notification.permission === "default") {
     Notification.requestPermission();
