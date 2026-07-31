@@ -262,6 +262,17 @@ _NORMAL_MODEL = "claude-sonnet-4-6"
 _DEEP_MODEL = "opus"
 
 
+def _claude_only_model(engine: str, model: str) -> str:
+    """Do not pass Claude model aliases to Codex/Gemini/Ollama.
+
+    The report prompts share one code path across engines, but these model names
+    are Claude-specific.  Returning an empty override lets each other engine use
+    its own configured/default model (for example CODEX_MODEL).
+    """
+    normalized = (engine or "claude").strip().lower()
+    return model if normalized in {"claude", "anthropic", "local"} else ""
+
+
 def _grab_field(raw: str, label: str) -> str:
     """Extract the value after a「label：value」line from model output."""
     m = re.search(rf"^{re.escape(label)}\s*[：:]\s*(.+)$", raw or "", re.MULTILINE)
@@ -291,7 +302,8 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
 
 若完全查無此公司資料，核心業務與差異化請據實標「——（查無公開資料）」。"""
     raw = await asyncio.to_thread(
-        claude_client.ask, prompt, 180, _WEB_TOOLS, engine, 8, _NORMAL_MODEL
+        claude_client.ask, prompt, 180, _WEB_TOOLS, engine, 8,
+        _claude_only_model(engine, _NORMAL_MODEL),
     )
     full_name = _grab_field(raw, "正式登記名稱") or comp_name
     listing_ai = _grab_field(raw, "上市狀態")
@@ -321,7 +333,7 @@ async def deep_enrich_summary(company: dict, engine: str = "claude",
     Uses the latest Opus (via the CLI "opus" alias) for higher-quality deep analysis."""
     name = company.get("name", "")
     prompt = _build_deep_prompt(company, competitor_context)
-    model = _DEEP_MODEL
+    model = _claude_only_model(engine, _DEEP_MODEL)
     async with _CLAUDE_LOCK:
         try:
             raw = await asyncio.to_thread(
@@ -516,7 +528,7 @@ async def generate_summary_from_materials(
     `interview_text` is the serialized call-memo content."""
     name = company.get("name", "")
     prompt = _build_materials_prompt(company, materials_text, interview_text)
-    model = _DEEP_MODEL
+    model = _claude_only_model(engine, _DEEP_MODEL)
     async with _CLAUDE_LOCK:
         try:
             log.info("Generating materials summary for %s (%d files, interview=%s)",
@@ -543,7 +555,7 @@ async def generate_summary(company: dict, engine: str = "claude",
     """
     name = company.get("name", "")
     prompt = _build_prompt(company, competitor_context)
-    model = _NORMAL_MODEL
+    model = _claude_only_model(engine, _NORMAL_MODEL)
 
     last_error: Exception | None = None
     async with _CLAUDE_LOCK:

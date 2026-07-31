@@ -64,6 +64,10 @@ FINDBIZ_BASE = "https://findbiz.nat.gov.tw"
 _sessions: dict[str, dict] = {}
 
 
+class _CloudflareChallenge(RuntimeError):
+    """findbiz returned a Cloudflare challenge instead of the requested page."""
+
+
 class ScrapeRequest(BaseModel):
     company_id: str
     tax_id: str
@@ -73,6 +77,44 @@ def _parse_int(s: str) -> int:
     if not s:
         return 0
     return int(re.sub(r"[^\d]", "", s) or "0")
+
+
+def _is_cloudflare_challenge(html: str) -> bool:
+    """Recognize Cloudflare interstitials without confusing them with no results."""
+    sample = (html or "").lower()
+    return any(marker in sample for marker in (
+        "<title>just a moment",
+        "<title>請稍候",
+        "window._cf_chl_opt",
+    ))
+
+
+async def _wait_for_cloudflare(page, queue: asyncio.Queue, event: asyncio.Event) -> bool:
+    """Wait until the visible Playwright page has actually left the challenge.
+
+    A cf_clearance cookie can exist while already expired or otherwise rejected,
+    so the page content—not cookie presence—is the source of truth.
+    """
+    await queue.put({
+        "type": "browser_ready",
+        "message": (
+            "findbiz 的 Cloudflare 驗證已失效。請在剛開啟的 Chromium 完成"
+            "「驗證您是真人」；通過後系統會自動繼續。"
+        ),
+    })
+    for _ in range(60):
+        try:
+            if not _is_cloudflare_challenge(await page.content()):
+                return True
+            if event.is_set():
+                event.clear()
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+                if not _is_cloudflare_challenge(await page.content()):
+                    return True
+        except Exception as exc:
+            log.debug("findbiz: waiting for Cloudflare page: %s", exc)
+        await asyncio.sleep(2)
+    return False
 
 
 def _parse_detail_html(html: str) -> dict:
@@ -148,10 +190,26 @@ async def _parse_detail_page(page) -> dict:
 
 async def _search_and_load_detail(page, tax_id: str) -> str | None:
     """
-    1. POST 搜尋 → 等搜尋結果頁
-    2. 點擊 <a class="hover"> 連結 → JS 自動 POST detailForm（不能 GET）
-    3. 等 #tabCmpyContent tr 出現 → 回傳 detail 頁 HTML
+    優先直接開新版 `/fts/company/<統編>` 詳細頁；若站方不接受直接 URL，
+    再退回 POST 搜尋 → 點結果的舊流程。
     """
+    # 新版 findbiz 的公司頁已有穩定直連。這條 fast path 少一次 POST、一次
+    # navigation 與固定 2 秒等待，正常 session 下可直接取得詳細頁。
+    direct_url = f"{FINDBIZ_BASE}/fts/company/{tax_id}"
+    try:
+        await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+        direct_html = await page.content()
+        if _is_cloudflare_challenge(direct_html):
+            log.warning("findbiz: Cloudflare challenge on direct detail URL for %s", tax_id)
+            raise _CloudflareChallenge
+        if tax_id in direct_html and ("每股金額" in direct_html or "已發行股份總數" in direct_html):
+            return direct_html
+    except _CloudflareChallenge:
+        raise
+    except Exception as exc:
+        log.info("findbiz direct detail unavailable for %s, falling back to search: %s", tax_id, exc)
+
+    # 舊站相容：提交搜尋，再從結果頁開公司詳細資料。
     params = {
         "errorMsg": "", "validatorOpen": "N", "rlPermit": "0",
         "userResp": "", "curPage": "0", "fhl": "zh_TW",
@@ -185,9 +243,9 @@ async def _search_and_load_detail(page, tax_id: str) -> str | None:
         log.error("findbiz search form submit failed: %s", exc)
         return None
 
-    if "just a moment" in search_html[:300].lower():
+    if _is_cloudflare_challenge(search_html):
         log.warning("findbiz: still cloudflare after search. HTML[:200]=%s", search_html[:200])
-        return None
+        raise _CloudflareChallenge
 
     # Step 2: 點擊第一個公司連結
     # findbiz 改版後，搜尋結果的公司連結改成乾淨 URL `/fts/company/<統編>`，
@@ -256,45 +314,44 @@ async def _run_session(session_id: str) -> None:
             )
             page = await ctx.new_page()
 
-            # 檢查是否有未過期的 cf_clearance
-            cookies = await ctx.cookies("https://findbiz.nat.gov.tw")
-            cf_cookie = next(
-                (c for c in cookies if c["name"] == "cf_clearance"), None
-            )
-            cf_valid = cf_cookie is not None  # 有就先試；失效時底下再處理
-
-            if not cf_valid:
-                await page.goto(FINDBIZ_INIT, timeout=30000)
-                await queue.put({
-                    "type": "browser_ready",
-                    "message": "Chromium 已開啟，請在瀏覽器中完成 Cloudflare 驗證（點擊「驗證您是真人」），完成後系統自動繼續⋯",
-                })
-                # 等待驗證：偵測 cf_clearance cookie 被寫入
-                for _ in range(60):
-                    if event.is_set():
-                        break
-                    cookies = await ctx.cookies("https://findbiz.nat.gov.tw")
-                    if any(c["name"] == "cf_clearance" for c in cookies):
-                        break
-                    await asyncio.sleep(2)
-                # 再次確認
-                cookies = await ctx.cookies("https://findbiz.nat.gov.tw")
-                if not any(c["name"] == "cf_clearance" for c in cookies):
-                    await queue.put({"type": "error", "message": "Cloudflare 驗證超時，請重試"})
+            await page.goto(FINDBIZ_INIT, wait_until="domcontentloaded", timeout=30000)
+            if _is_cloudflare_challenge(await page.content()):
+                if not await _wait_for_cloudflare(page, queue, event):
+                    await queue.put({
+                        "type": "error",
+                        "message": "Cloudflare 驗證尚未通過，請重新執行並在 Chromium 完成驗證",
+                    })
                     await ctx.close()
                     return
             else:
                 await queue.put({"type": "progress", "message": "使用已儲存的 session，跳過 Cloudflare…"})
-                await page.goto(FINDBIZ_INIT, timeout=30000)
 
             await queue.put({"type": "progress", "message": f"驗證通過，正在搜尋統編 {tax_id}…"})
 
-            detail_html = await _search_and_load_detail(page, tax_id)
-            if not detail_html:
+            try:
+                detail_html = await _search_and_load_detail(page, tax_id)
+            except _CloudflareChallenge:
+                # A stale cookie can pass the landing page but fail on the search
+                # POST. Re-authenticate and retry within this same user action.
                 await ctx.clear_cookies()
+                await page.goto(FINDBIZ_INIT, wait_until="domcontentloaded", timeout=30000)
+                if not await _wait_for_cloudflare(page, queue, event):
+                    await queue.put({
+                        "type": "error",
+                        "message": "Cloudflare 驗證尚未通過；findbiz 公司資料並非不存在",
+                    })
+                    await ctx.close()
+                    return
+                await queue.put({
+                    "type": "progress",
+                    "message": f"Cloudflare 驗證通過，重新搜尋統編 {tax_id}…",
+                })
+                detail_html = await _search_and_load_detail(page, tax_id)
+
+            if not detail_html:
                 await queue.put({
                     "type": "error",
-                    "message": f"findbiz 查無統編 {tax_id}（若 session 已過期，再試一次以重新驗證）",
+                    "message": f"findbiz 搜尋未取得統編 {tax_id} 的公司頁面，請稍後重試",
                 })
                 await ctx.close()
                 return
