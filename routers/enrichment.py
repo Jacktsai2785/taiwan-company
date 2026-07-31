@@ -167,7 +167,11 @@ async def enrich_stream(company_id: str, ai: dict = Depends(ai_from_query)):
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        _enrich_channel.stream(company_id, lambda: _spawn(_enrich_company(company_id, **ai))),
+        _enrich_channel.stream(
+            company_id,
+            lambda: _spawn(_enrich_company(company_id, **ai)),
+            keepalive=True,
+        ),
         media_type="text/event-stream",
     )
 
@@ -186,7 +190,11 @@ async def deep_enrich_stream(company_id: str, force: bool = False, ai: dict = De
         )
 
     return StreamingResponse(
-        _deep_channel.stream(company_id, lambda: _spawn(_deep_enrich_company(company_id, **ai))),
+        _deep_channel.stream(
+            company_id,
+            lambda: _spawn(_deep_enrich_company(company_id, **ai)),
+            keepalive=True,
+        ),
         media_type="text/event-stream",
     )
 
@@ -243,7 +251,11 @@ async def summarize_stream(company_id: str, reset: bool = False, ai: dict = Depe
         raise HTTPException(status_code=404, detail="Company not found")
 
     return StreamingResponse(
-        _summarize_channel.stream(company_id, lambda: _spawn(_summarize_company(company_id, **ai, reset=reset))),
+        _summarize_channel.stream(
+            company_id,
+            lambda: _spawn(_summarize_company(company_id, **ai, reset=reset)),
+            keepalive=True,
+        ),
         media_type="text/event-stream",
     )
 

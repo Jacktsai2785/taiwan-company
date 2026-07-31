@@ -218,6 +218,7 @@ function subscribeEnrichment(companyId) {
   const sseUrl = `/api/companies/enrich/${companyId}?engine=${encodeURIComponent(getAiEngine())}`;
 
   return subscribeSSE(sseUrl, {
+    reconnectGraceMs: 30000,
     onData: event => {
       const company = state.companies.find(c => c.id === companyId);
       if (company) {
@@ -1437,4 +1438,3 @@ document.addEventListener("keydown", e => {
     closeIndustryMap();
   }
 });
-

@@ -725,6 +725,7 @@ function _subscribeSummarize(companyId, reset = false) {
   renderGrid();
 
   return subscribeSSE(sseUrl, {
+    reconnectGraceMs: 30000,
     onData: event => {
       const company = state.companies.find(c => c.id === companyId);
       if (company) {
@@ -758,6 +759,7 @@ function _subscribeDeepEnrich(companyId, force = false) {
   renderGrid();
 
   return subscribeSSE(sseUrl, {
+    reconnectGraceMs: 30000,
     onData: event => {
       const company = state.companies.find(c => c.id === companyId);
       if (company) {
@@ -888,4 +890,3 @@ async function handleUpload(file) {
     fileInput.value = "";
   }
 }
-

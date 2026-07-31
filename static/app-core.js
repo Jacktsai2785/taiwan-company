@@ -164,6 +164,9 @@ function _closeModalStreams() {
      onOpen(es, settle) — EventSource 一建立就同步呼叫，把原始 handle 跟內部
        settle(ok) 交給呼叫端；只有需要「外部中止」的情境才用得到（如使用者按
        按鈕跳過、或關窗時主動關閉），多數呼叫點不需要
+     reconnectGraceMs — 暫時斷線時讓 EventSource 原生重連的寬限時間；
+       0 表示沿用舊行為、立即視為 transport failure。長時間 AI 任務應設為
+       30000，避免背景仍成功執行時 UI 先誤顯示失敗
      track — true 時把建立的 EventSource 交給 trackModalES（跟視窗生命週期綁定，
        關窗即中止；summarize/deep-enrich 等背景生成故意不要這個行為，不要傳 true）
      errorIsTerminal — 有些端點（如 industry-map generate）error 後不會再送
@@ -172,7 +175,7 @@ function _closeModalStreams() {
 function subscribeSSE(url, options = {}) {
   const {
     onProgress, onData, onError, onDone, onOther, onTransportError, onOpen,
-    track = false, errorIsTerminal = false,
+    track = false, errorIsTerminal = false, reconnectGraceMs = 0,
   } = options;
   return new Promise(resolve => {
     let es;
@@ -185,15 +188,23 @@ function subscribeSSE(url, options = {}) {
     }
 
     let settled = false;
+    let reconnectTimer = null;
     const settle = ok => {
       if (settled) return;
       settled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       try { es.close(); } catch (_) {}
       resolve(ok);
     };
 
     if (track) trackModalES(es);
     onOpen?.(es, settle);
+    es.onopen = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
 
     es.onmessage = e => {
       let event;
@@ -220,6 +231,16 @@ function subscribeSSE(url, options = {}) {
       }
     };
     es.onerror = () => {
+      if (reconnectGraceMs > 0 && es.readyState !== EventSource.CLOSED) {
+        if (!reconnectTimer) {
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            onTransportError?.(new Error("SSE reconnection timed out"));
+            settle(false);
+          }, reconnectGraceMs);
+        }
+        return; // EventSource 會自動重連；onopen 成功時取消 timer
+      }
       onTransportError?.(new Error("SSE connection error"));
       settle(false);
     };
@@ -396,4 +417,3 @@ function computeGroups() {
   }
   state.groups = g;
 }
-
