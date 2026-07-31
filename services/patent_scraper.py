@@ -195,17 +195,28 @@ def _parse_detail(html: str) -> dict:
     return {"applicant": applicant, "inventors": inventors, "brief": brief, "ipc": sorted(ipc)}
 
 
+def _is_exact_applicant(applicant: str, legal_name: str) -> bool:
+    """Require the TIPO applicant to be the selected legal entity.
+
+    Applicant searches are substring searches, so 東佑達自動化科技 also returns
+    東佑達奈米系統.  Normalising whitespace is safe, but fuzzy/prefix matching is
+    deliberately forbidden here.
+    """
+    normalize = lambda value: re.sub(r"[\s　]", "", value or "")
+    return bool(applicant and legal_name and normalize(applicant) == normalize(legal_name))
+
+
 # ── Main workflow ─────────────────────────────────────────────────────────────
 
 async def scrape_company_patents(company: dict, on_event) -> list[dict]:
     """
     Full TIPO patent workflow:
     1. Search by applicant name (AF)
-    2. Fetch detail pages for first 15 patents → extract inventors + abstract
-    3. Reverse-search by each unique inventor (IV)
-    4. Deduplicate and return sorted list (newest app_date first)
+    2. Fetch every detail page and require an exact legal-entity applicant match
+    3. Deduplicate and return sorted list (newest app_date first)
     """
     company_name = company.get("name", "")
+    identity_since = (company.get("patent_identity_since") or "").strip()
 
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=15) as client:
 
@@ -216,8 +227,14 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
         # ② Company-name search — try multiple name variants to handle short vs full legal names
         suffixes = ["", "股份有限公司", "有限公司", "科技股份有限公司", "生技股份有限公司"]
         base_name = re.sub(r'(股份有限公司|有限公司|股份公司)$', '', company_name).strip()
+        target_legal_name = (
+            company_name
+            if company_name.endswith(("股份有限公司", "有限公司", "股份公司"))
+            else base_name + ("股份有限公司" if company.get("is_corp") else "")
+        )
         candidates = list(dict.fromkeys(
-            [company_name] + [base_name + s for s in suffixes if s and base_name + s != company_name]
+            [target_legal_name, company_name]
+            + [base_name + s for s in suffixes if s and base_name + s != company_name]
         ))
 
         company_patents: list[dict] = []
@@ -240,9 +257,6 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
         await on_event({"type": "progress",
                         "message": f"找到 {len(company_patents)} 筆（{matched_name}），分析發明人…"})
 
-        all_patents: dict[str, dict] = {p["patent_no"]: p for p in company_patents}
-        inventors_found: set[str] = set()
-
         # ③ Build detail-link map from the company search results page directly.
         #    The results page already contains <a href=...>I923838</a> style links —
         #    no need for a per-patent PN re-search (which breaks due to TIPO session
@@ -254,87 +268,35 @@ async def scrape_company_patents(company: dict, on_event) -> list[dict]:
             if txt and txt[0] in "IMD" and txt[1:].isdigit():
                 detail_links[txt] = _BASE + a["href"]
 
-        for i, pat in enumerate(company_patents[:15]):
-            await asyncio.sleep(0.4)
+        verified_patents: list[dict] = []
+        for i, pat in enumerate(company_patents):
+            await asyncio.sleep(0.15)
             pno = pat["patent_no"]
             href = detail_links.get(pno)
             if not href:
                 log.warning("detail link not found for %s", pno)
-                await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pno}"})
+                await on_event({"type": "progress", "message": f"驗證申請人 {i+1}/{len(company_patents)}：{pno}"})
                 continue
             try:
                 r3 = await client.get(href)
                 det = _parse_detail(r3.text)
-                pat["applicant"] = det["applicant"]
-                pat["inventors"] = det["inventors"]
-                pat["brief"]     = det["brief"]
-                pat["ipc"]       = det["ipc"]
-                inventors_found.update(det["inventors"])
+                identity_date_match = (
+                    not identity_since
+                    or (pat.get("app_date") or "") >= identity_since
+                )
+                if (
+                    identity_date_match
+                    and _is_exact_applicant(det["applicant"], target_legal_name)
+                ):
+                    pat["applicant"] = det["applicant"]
+                    pat["inventors"] = det["inventors"]
+                    pat["brief"]     = det["brief"]
+                    pat["ipc"]       = det["ipc"]
+                    verified_patents.append(pat)
             except Exception as exc:
                 log.warning("detail fetch failed for %s: %s", pno, exc)
-            await on_event({"type": "progress", "message": f"讀取發明人 {i+1}/15：{pno}"})
+            await on_event({"type": "progress", "message": f"驗證申請人 {i+1}/{len(company_patents)}：{pno}"})
 
-        # Domain signature: union of IPC main classes seen in the company's
-        # own patents. Used below to recognise "same business" patents filed
-        # under a different applicant (e.g. founder's prior research institute).
-        company_ipc: set[str] = set()
-        for pat in company_patents[:15]:
-            company_ipc.update(pat.get("ipc", []))
-
-        # ④ Inventor reverse-search — keep "same business" patents only.
-        # Common Chinese names (江宏偉, 林沛暘, …) collide across companies, so
-        # raw IV results contain large numbers of unrelated patents (e.g. CNC
-        # machining work by a different person of the same name). We accept a
-        # hit if its detail page shows EITHER:
-        #   (a) the target company as applicant (subsidiary / branch filings), OR
-        #   (b) IPC main-class overlap with the company's own patents
-        #       (founder's prior research institute work, joint filings, etc.)
-        #
-        # NB: each inventor needs a fresh form. Reusing the previous results
-        # page's form makes TIPO treat the next IV= query as an extra AND
-        # condition against the existing result set, returning empty/stale data.
-        for inventor in list(inventors_found)[:8]:
-            await on_event({"type": "progress", "message": f"反查發明人：{inventor}"})
-            await asyncio.sleep(0.5)
-            try:
-                action, base = await _fresh_form(client)
-                r4 = await _search(client, action, base, f"IV=({inventor})")
-                iv_patents = _parse_results(r4.text)
-
-                iv_links: dict[str, str] = {}
-                soup_iv = BeautifulSoup(r4.text, "html.parser")
-                for a in soup_iv.find_all("a", href=True):
-                    txt = a.get_text(strip=True)
-                    if txt and txt[0] in "IMD" and txt[1:].isdigit():
-                        iv_links[txt] = _BASE + a["href"]
-
-                candidates = [p for p in iv_patents if p["patent_no"] not in all_patents][:15]
-                kept = 0
-                for p in candidates:
-                    href = iv_links.get(p["patent_no"])
-                    if not href:
-                        continue
-                    await asyncio.sleep(0.3)
-                    try:
-                        rd = await client.get(href)
-                        det = _parse_detail(rd.text)
-                    except Exception:
-                        continue
-                    applicant_match = bool(det["applicant"] and base_name and base_name in det["applicant"])
-                    ipc_match = bool(company_ipc and set(det["ipc"]) & company_ipc)
-                    if applicant_match or ipc_match:
-                        p["applicant"] = det["applicant"]
-                        p["inventors"] = det["inventors"] or [inventor]
-                        p["brief"]     = det["brief"]
-                        p["ipc"]       = det["ipc"]
-                        all_patents[p["patent_no"]] = p
-                        kept += 1
-                if kept:
-                    await on_event({"type": "progress",
-                                    "message": f"反查 {inventor}：保留 {kept} 筆同領域專利"})
-            except Exception:
-                pass
-
-        result = sorted(all_patents.values(), key=lambda x: x.get("app_date", ""), reverse=True)
+        result = sorted(verified_patents, key=lambda x: x.get("app_date", ""), reverse=True)
         await on_event({"type": "progress", "message": f"完成：共收錄 {len(result)} 筆專利"})
         return result

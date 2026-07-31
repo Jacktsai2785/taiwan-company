@@ -36,6 +36,7 @@ _by_abbrev: dict[str, str] = {}
 _cache_until: datetime | None = None
 _cache_lock = asyncio.Lock()
 _CACHE_TTL = timedelta(hours=24)
+_LISTING_CACHE_VERSION = 2
 # 落地上市狀態快取，重啟後不必冷抓 TWSE/TPEX/GISA 四支 API（開發期頻繁 restart）
 _LISTING_CACHE_FILE = Path(__file__).parent.parent / "data" / "listing_cache.json"
 
@@ -44,6 +45,7 @@ def _save_listing_cache() -> None:
     try:
         _LISTING_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _LISTING_CACHE_FILE.write_text(json.dumps({
+            "version": _LISTING_CACHE_VERSION,
             "until": _cache_until.isoformat() if _cache_until else None,
             "by_taxid": _by_taxid, "by_name": _by_name, "by_abbrev": _by_abbrev,
         }, ensure_ascii=False), encoding="utf-8")
@@ -58,6 +60,8 @@ def _load_listing_cache() -> bool:
         if not _LISTING_CACHE_FILE.exists():
             return False
         d = json.loads(_LISTING_CACHE_FILE.read_text(encoding="utf-8"))
+        if d.get("version") != _LISTING_CACHE_VERSION:
+            return False
         until = d.get("until")
         if not until or datetime.now() >= datetime.fromisoformat(until):
             return False
@@ -78,6 +82,10 @@ _LISTING_SOURCES = [
 ]
 # 創新板(GISA): returns abbreviated names with no tax_id; needs Accept: application/json
 _GISA_URL = "https://www.tpex.org.tw/openapi/v1/tpex_gisa_company"
+# TPEX announces approved emerging-stock registrations before the first trading
+# day. Those companies are not yet present in mopsfin_t187ap03_R, so include the
+# official schedule to avoid temporarily labelling them 非公發.
+_UPCOMING_EMERGING_URL = "https://www.tpex.org.tw/www/zh-tw/company/latestEmerge"
 
 _NAME_SUFFIXES = ("股份有限公司", "有限公司")
 
@@ -121,6 +129,25 @@ async def _load_gisa(client: httpx.AsyncClient) -> None:
         pass
 
 
+async def _load_upcoming_emerging(client: httpx.AsyncClient) -> None:
+    """Load TPEX-approved upcoming emerging registrations by abbreviation."""
+    try:
+        resp = await client.get(
+            _UPCOMING_EMERGING_URL,
+            params={"date": str(datetime.now().year)},
+            timeout=15.0,
+            headers={"Accept": "application/json"},
+        )
+        resp.raise_for_status()
+        tables = resp.json().get("tables") or []
+        for row in (tables[0].get("data") if tables else []) or []:
+            # Fields: sequence, stock code, company abbreviation, registration date, ...
+            if len(row) > 2 and (abbrev := str(row[2]).strip()):
+                _by_abbrev[abbrev] = "興櫃"
+    except Exception:
+        pass
+
+
 async def _ensure_listing_cache(client: httpx.AsyncClient) -> None:
     global _cache_until
     if _cache_until and datetime.now() < _cache_until:
@@ -137,6 +164,7 @@ async def _ensure_listing_cache(client: httpx.AsyncClient) -> None:
         for url, status in _LISTING_SOURCES:
             await _load_listing_source(client, url, status)
         await _load_gisa(client)
+        await _load_upcoming_emerging(client)
         # 來源全失敗（三個 dict 皆空）時不要鎖 24h，否則 24 小時內所有公司都被解析成
         # 『非公發』、摘要裡的『上市』也會被 _fix_competitor_listing 改寫錯。改設短 TTL 重試。
         loaded = len(_by_taxid) + len(_by_name) + len(_by_abbrev)
@@ -152,7 +180,7 @@ def _resolve_listing_status(tax_id: str, name: str) -> str:
     # 2. Full name match (上市/上櫃/興櫃)
     if name and name in _by_name:
         return _by_name[name]
-    # 3. Abbreviated name match for 創新板 (strip company-type suffix)
+    # 3. Abbreviated-name match for 創新板 and approved upcoming 興櫃 companies
     abbrev = name
     for sfx in _NAME_SUFFIXES:
         if abbrev.endswith(sfx):
@@ -160,6 +188,15 @@ def _resolve_listing_status(tax_id: str, name: str) -> str:
             break
     if abbrev and abbrev != name and abbrev in _by_abbrev:
         return _by_abbrev[abbrev]
+    # Exchange abbreviations may omit descriptive words in the legal name
+    # (e.g. 東佑達 vs 東佑達自動化科技股份有限公司).
+    prefix_matches = [
+        (listed_abbrev, status)
+        for listed_abbrev, status in _by_abbrev.items()
+        if len(listed_abbrev) >= 3 and abbrev.startswith(listed_abbrev)
+    ]
+    if prefix_matches:
+        return max(prefix_matches, key=lambda item: len(item[0]))[1]
     return "非公發"
 
 
