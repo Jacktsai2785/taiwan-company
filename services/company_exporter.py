@@ -71,6 +71,11 @@ def _strip_inline_md(text: str) -> str:
     return re.sub(r"\*(.+?)\*", r"\1", text)
 
 
+def _clean_export_text(text: str) -> str:
+    """Remove control characters rejected by DOCX XML and invisible in the modal."""
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text or "").lstrip("\ufeff")
+
+
 def _prose_sentences(text: str) -> list[str]:
     """長段正文依句號拆成數句（短段或單句不拆），對齊前端 _proseParagraphs。"""
     if len(text) < 100:
@@ -222,11 +227,9 @@ def _basic_info_rows(company: dict) -> list[tuple[str, str]]:
         ("每股金額",   par_str),
         ("股份總數",   shares_str),
         ("公司所在地", company.get("address") or "—"),
-        ("設立日期",   company.get("setup_date") or "—"),
         ("產業別",     ", ".join(data_store.company_industries(company)) or "—"),
     ]
-    if company.get("website"):
-        rows.append(("官方網站", company.get("website")))
+    rows.append(("官方網站", (company.get("website") or "—").rstrip("/")))
     return rows
 
 
@@ -242,16 +245,21 @@ def _dir_table_rows(directors: list[dict]) -> tuple[list[list[str]], bool]:
     header.append("持股比例")
 
     total_shares, total_ratio, has_ratio = 0, 0.0, False
+    seen_entities: set[str] = set()
     data: list[list[str]] = []
     for d in directors:
         ratio = d.get("ratio")
         ratio_str = f"{ratio * 100:.2f}%" if ratio is not None else "—"
-        if ratio is not None:
-            total_ratio += ratio
-            has_ratio = True
         sv = d.get("shares")
-        if sv:
-            total_shares += sv
+        entity = (d.get("representative_of") or "").strip()
+        entity_key = entity or f"__individual__{d.get('name') or ''}"
+        if entity_key not in seen_entities:
+            seen_entities.add(entity_key)
+            if ratio is not None:
+                total_ratio += ratio
+                has_ratio = True
+            if sv:
+                total_shares += sv
         row = [d.get("title") or "—", d.get("name") or "—", d.get("representative_of") or "—"]
         if has_shares:
             row.append(f"{int(sv):,}" if sv else "—")
@@ -323,7 +331,16 @@ def _shareholder_block(company: dict, holders: dict | None) -> dict | None:
     Mirrors _renderShareholderSection: only shown when directors carry ratios.
     """
     directors = company.get("directors") or []
-    ratios = [d["ratio"] for d in directors if d.get("ratio") is not None]
+    ratios: list[float] = []
+    seen_entities: set[str] = set()
+    for d in directors:
+        entity = (d.get("representative_of") or "").strip()
+        entity_key = entity or f"__individual__{d.get('name') or ''}"
+        if entity_key in seen_entities:
+            continue
+        seen_entities.add(entity_key)
+        if d.get("ratio") is not None:
+            ratios.append(d["ratio"])
     if not ratios:
         return None
     total_ratio = sum(ratios)
@@ -348,15 +365,21 @@ def _shareholder_block(company: dict, holders: dict | None) -> dict | None:
 
 
 def _patent_table_rows(patents: list[dict]) -> list[list[str]]:
-    header = ["專利號", "名稱", "申請日", "狀態", "發明人"]
+    header = ["專利號", "名稱", "申請日", "狀態", "申請人／發明人", "摘要"]
     rows = [header]
     for p in patents:
+        identity = []
+        if p.get("applicant"):
+            identity.append(f"申請人：{p['applicant']}")
+        if p.get("inventors"):
+            identity.append(f"發明人：{'、'.join(p['inventors'])}")
         rows.append([
             p.get("patent_no") or "—",
             p.get("title") or "—",
             p.get("app_date") or "—",
             p.get("status") or "—",
-            "、".join(p.get("inventors") or []) or "—",
+            "；".join(identity) or "—",
+            _clean_export_text(p.get("brief") or "") or "—",
         ])
     return rows
 
@@ -744,7 +767,7 @@ def build_docx(company: dict, holders: dict | None = None, provenance: bool = Fa
 
     name_para = hcell.paragraphs[0]
     _para_spacing(name_para, before=0, after=80)
-    name_run = name_para.add_run(company.get("name", "—"))
+    name_run = name_para.add_run(_display_comp_name(company.get("name", "—")))
     name_run.bold = True
     name_run.font.size = Pt(18)
     name_run.font.color.rgb = _R.WHITE
@@ -761,7 +784,7 @@ def build_docx(company: dict, holders: dict | None = None, provenance: bool = Fa
     if labels:
         lp = hcell.add_paragraph()
         _para_spacing(lp, before=60, after=0)
-        lr = lp.add_run("  ".join(labels[:8]))
+        lr = lp.add_run("  ".join(labels))
         lr.font.size = Pt(8.5)
         lr.font.color.rgb = RGBColor(0xBB, 0xCC, 0xDD)
 
@@ -1191,7 +1214,7 @@ def build_pdf(company: dict, holders: dict | None = None, provenance: bool = Fal
     HDR_H = 88
     filled_rect(0, 0, PAGE_W, HDR_H, _F.DARK_BG)
 
-    name       = company.get("name", "—")
+    name       = _display_comp_name(company.get("name", "—"))
     name_lines = _wrap_mixed(name, 18, CW)[:2]
     txt(name_lines[0], ML, 32, size=18, color=_F.WHITE)
     if len(name_lines) > 1:
@@ -1200,7 +1223,7 @@ def build_pdf(company: dict, holders: dict | None = None, provenance: bool = Fal
     tags = []
     if company.get("listing_status"):
         tags.append(f"[{company['listing_status']}]")
-    tags += (company.get("labels") or [])[:5]
+    tags += company.get("labels") or []
     if tags:
         txt("  ".join(tags), ML, 76, size=8.5, color=_F.MUTED)
 
@@ -1275,7 +1298,9 @@ def build_pdf(company: dict, holders: dict | None = None, provenance: bool = Fal
         put(f"共 {len(patents)} 筆（更新：{patents[0].get('fetched_at', '')}）",
             size=9, color=_F.MUTED, gap_after=4)
         prows = _patent_table_rows(patents)
-        pdf_table(prows, _auto_col_widths(prows, 8.5, CW))
+        # Keep every modal column readable. Content-based auto sizing lets the
+        # long abstract consume nearly the entire page and collapses other cells.
+        pdf_table(prows, [48, 68, 58, 38, 116, 147])
 
     if provenance:
         put(_PROVENANCE_NOTE, size=8, color=_F.MUTED, gap_after=4)

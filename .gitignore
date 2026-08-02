@@ -28,6 +28,7 @@ nohup.out
 data/daily_digest.json
 data/industry_trends.json
 data/industry_maps.json
+data/listing_cache.json
 
 # Runtime logs
 logs/
