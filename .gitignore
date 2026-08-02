@@ -36,3 +36,7 @@ logs/
 # Chromium browser profile for findbiz scraper
 data/findbiz_profile/
 .gstack/
+
+# Lock files for runtime data (parallel to ignored json above)
+data/*.lock
+data/tasks.json
