@@ -620,7 +620,7 @@ document.getElementById("sp-add-btn").addEventListener("click", async () => {
   // Show suggest dialog in loading state
   const overlay = document.getElementById("ind-suggest-overlay");
   document.getElementById("ind-suggest-title").textContent = `新增「${indName}」`;
-  document.getElementById("ind-suggest-subtitle").textContent = "Claude 正在比對現有公司…";
+  document.getElementById("ind-suggest-subtitle").textContent = "AI 正在比對現有公司…";
   document.getElementById("ind-suggest-loading").style.display = "flex";
   document.getElementById("ind-suggest-rows").innerHTML = "";
   document.getElementById("ind-suggest-ok").disabled = true;
@@ -701,7 +701,7 @@ document.getElementById("sp-add-btn").addEventListener("click", async () => {
 async function openIndustryScanDialog(indName) {
   const overlay = document.getElementById("ind-suggest-overlay");
   document.getElementById("ind-suggest-title").textContent = `掃描「${indName}」遺珠`;
-  document.getElementById("ind-suggest-subtitle").textContent = "Claude 正在比對尚未歸入的公司…";
+  document.getElementById("ind-suggest-subtitle").textContent = "AI 正在比對尚未歸入的公司…";
   document.getElementById("ind-suggest-loading").style.display = "flex";
   document.getElementById("ind-suggest-rows").innerHTML = "";
   document.getElementById("ind-suggest-ok").disabled = true;
@@ -779,7 +779,7 @@ async function runClassify() {
   const rows = document.getElementById("classify-rows");
   const okBtn = document.getElementById("classify-ok");
 
-  subtitle.textContent = "Claude 正在比對既有產業別清單…";
+  subtitle.textContent = "AI 正在比對既有產業別清單…";
   loading.style.display = "flex";
   rows.innerHTML = "";
   okBtn.disabled = true;
@@ -863,4 +863,3 @@ async function runClassify() {
     }
   };
 }
-

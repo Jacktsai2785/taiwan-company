@@ -147,7 +147,7 @@ async def analyze_with_ai() -> dict:
 }}"""
 
     try:
-        raw = await asyncio.to_thread(claude_client.ask, prompt, 60, None, "claude")
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 60, None, "")
         start, end = raw.find("{"), raw.rfind("}")
         data = json.loads(raw[start:end + 1] if start != -1 and end > start else raw)
     except Exception as exc:

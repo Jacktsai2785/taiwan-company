@@ -79,7 +79,7 @@ def _prune(cache: dict, industry: str) -> None:
 
 async def get_digest(
     industry: str,
-    engine: str = "claude",
+    engine: str = "",
     force_refresh: bool = False,
 ) -> dict:
     today = cache_date()
@@ -102,7 +102,7 @@ async def refresh_all_digests(industries: list[str] | None = None) -> list[str]:
     for ind in (industries if industries is not None else get_industries()):
         try:
             log.info("Scheduler: refreshing digest for %s", ind)
-            digest = await _generate(ind, cache_date(), engine="claude")
+            digest = await _generate(ind, cache_date(), engine="")
             try:
                 export_industry_digest_to_jk_nb(ind, digest)
             except Exception:
@@ -115,7 +115,7 @@ async def refresh_all_digests(industries: list[str] | None = None) -> list[str]:
 
 async def get_trends(
     industry: str,
-    engine: str = "claude",
+    engine: str = "",
     force_refresh: bool = False,
 ) -> dict:
     existing = _load_trends().get(industry)
@@ -132,7 +132,7 @@ async def refresh_all_trends(industries: list[str] | None = None) -> list[str]:
     for ind in (industries if industries is not None else get_industries()):
         try:
             log.info("Scheduler: refreshing trends for %s", ind)
-            await _generate_trends(ind, engine="claude")
+            await _generate_trends(ind, engine="")
         except Exception as exc:
             log.warning("Scheduler: trends failed for %s: %s", ind, exc)
             failed.append(ind)
@@ -303,7 +303,7 @@ async def _generate_trends(industry: str, engine: str) -> dict:
 
 async def generate_industry_keywords(
     industry: str,
-    engine: str = "claude",
+    engine: str = "",
 ) -> list[str]:
     """Ask Claude to suggest 5-8 search keywords for the industry, then persist them."""
     from services.data_store import save_industry_keywords

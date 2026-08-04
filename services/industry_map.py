@@ -459,7 +459,7 @@ def _build_subdivide_prompt(industry: str, companies: list[dict]) -> str:
 
 
 async def propose_subdivision(
-    industry: str, *, engine: str = "claude", emit=None,
+    industry: str, *, engine: str = "", emit=None,
 ) -> dict:
     """為「還沒分組」的公司（父產業的未分類堆，或無現成葉圖時的全部公司）用 AI 產生
     子產業分組草稿。**不寫入**——只回傳提議，由前端預覽、使用者確認後才 apply。
@@ -543,7 +543,7 @@ def groups_from_sections(sections: list[dict]) -> list[dict]:
 async def generate(
     industry: str,
     *,
-    engine: str = "claude",
+    engine: str = "",
     progress_cb: Callable[[str], None] | None = None,
 ) -> dict:
     """生成產業地圖。有子產業 → 父模式（總覽 + drill-in）；無子產業 → 葉模式（完整歸位）。

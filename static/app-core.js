@@ -33,7 +33,7 @@ const state = {
 
 let _modalCompanyId = null;
 
-/* ── AI engine selection (localStorage) ── */
+/* ── Platform-wide AI engine selection (server config is authoritative) ── */
 const AI_ENGINE_LABELS = {
   claude: "本機 Claude",
   codex:  "GPT (Codex)",
@@ -41,8 +41,32 @@ const AI_ENGINE_LABELS = {
   ollama: "開源模型 (Ollama)",
 };
 
-function getAiEngine() {
-  return localStorage.getItem("ai_engine") || "claude";
+let _selectedAiEngine = localStorage.getItem("ai_engine") || "claude";
+
+function getAiEngine() { return _selectedAiEngine; }
+
+async function loadAiEngine() {
+  const cached = localStorage.getItem("ai_engine");
+  try {
+    const res = await fetch("/api/config/ai-engine");
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    if (!data.configured && cached && AI_ENGINE_LABELS[cached]) {
+      const migrate = await fetch("/api/config/ai-engine", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine: cached }),
+      });
+      if (!migrate.ok) throw new Error(migrate.statusText);
+      _selectedAiEngine = (await migrate.json()).engine;
+    } else {
+      _selectedAiEngine = data.engine || "claude";
+    }
+    localStorage.setItem("ai_engine", _selectedAiEngine); // UI cache only
+  } catch {
+    // Keep the cached value only while the server is temporarily unavailable.
+  }
+  _updateAiModeLabel();
 }
 
 function _updateAiModeLabel() {
@@ -59,12 +83,27 @@ function openSettings() {
   openOverlay("settings-overlay");
 }
 
-function saveSettings() {
+async function saveSettings() {
   const eng = document.querySelector('input[name="ai-engine"]:checked')?.value || "claude";
-  localStorage.setItem("ai_engine", eng);
-  closeOverlay("settings-overlay");
-  _updateAiModeLabel();
-  toast(`已切換為「${AI_ENGINE_LABELS[eng] || eng}」引擎`);
+  try {
+    const res = await fetch("/api/config/ai-engine", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engine: eng }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+    _selectedAiEngine = data.engine;
+    localStorage.setItem("ai_engine", _selectedAiEngine);
+    closeOverlay("settings-overlay");
+    _updateAiModeLabel();
+    toast(`已將全平台切換為「${AI_ENGINE_LABELS[_selectedAiEngine] || _selectedAiEngine}」`);
+  } catch (err) {
+    toast(`AI 引擎設定失敗：${err.message}`, true);
+  }
 }
 
 async function loadVersion() {
@@ -93,18 +132,12 @@ async function openChangelog() {
 }
 
 function closeSettings() {
-  // 取消＝接受目前引擎（落地預設，避免 ai_engine 停在 null 而反覆彈出）
-  if (localStorage.getItem("ai_engine") === null) {
-    localStorage.setItem("ai_engine", getAiEngine());
-    _updateAiModeLabel();
-  }
   closeOverlay("settings-overlay");
 }
 
 /* ── API helpers ── */
 async function api(method, path, body) {
   const opts = { method, headers: {} };
-  opts.headers["X-AI-Engine"] = getAiEngine();
   if (body instanceof FormData) {
     opts.body = body;
   } else if (body) {
@@ -278,6 +311,7 @@ async function dismissArticle(url, title, source, sourceUrl, btn) {
 
 /* ── Boot ── */
 async function boot() {
+  await loadAiEngine();
   await Promise.all([loadIndustries(), loadIndustryTree(), loadCompanies(), loadLabels(), loadLabelGroups()]);
   computeGroups();
   renderSidebar();
@@ -294,12 +328,6 @@ async function boot() {
       stopTitleFlash();
     }
   });
-  // 首訪不強彈引擎選擇（預設本機 claude 就能用）；空狀態畫面已有「上傳檔案開始」引導。
-  // 要換引擎點右上角 ⚙ 即可。落地預設值，避免每次重整都判定 null 再處理。
-  if (localStorage.getItem("ai_engine") === null) {
-    localStorage.setItem("ai_engine", "claude");
-    _updateAiModeLabel();
-  }
 }
 
 /* ── Notify helper ── */

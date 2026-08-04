@@ -26,7 +26,7 @@ source_repo: ~/taiwan-company
 3. `gemini` — Google 官方 `gemini -p` CLI；檔案/圖片走 prompt 內 `@路徑`
 4. `ollama` — 本機 OpenAI 相容端點（`OLLAMA_BASE_URL`，預設 `localhost:11434`）；圖片需 `OLLAMA_VISION_MODEL`
 
-引擎來源：請求帶 `X-AI-Engine` header / `?engine=`（見 `services/ai_deps.py`），沒帶則用 env `AI_ENGINE`（預設 `claude`）。引擎不認得或對應 CLI/服務未就緒時回可行動錯誤訊息。
+引擎來源：server config 的 `ai_engine` 是唯一真相。UI 透過 `/api/config/ai-engine` 讀寫，所有前景功能與背景排程共用；env `AI_ENGINE` 只在尚未設定時當初始值。舊 request header / query 為相容保留，但不能覆寫全平台選擇。
 
 **多模態退路**：能力不足時（ollama 未設 vision model 的圖片、codex/ollama 的 PDF）自動退到 `_ask_with_local_extraction`（`file_parser` 抽文字 + tesseract OCR），再以選定引擎做純文字補完，行為可預期。
 
@@ -58,7 +58,11 @@ source_repo: ~/taiwan-company
 - **業務概況與主要風險整合**：生成時把現有公開的「業務概況」「主要風險」一併餵給 Opus，要求**完整保留既有內容 + 補充檔案或訪談讀到的額外資訊/風險**（依來源標「（簡報補充）」「（訪談補充）」），輸出單一整合段；亮點獨立成「## 投資亮點」收進營運綜覽。風險因此只集中一處
 
 ### 3. Call memo 抽取（`memo_extractor.py`）
-- `extract_from_transcript(company_name, transcript, source_filename)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）；Markdown 排除既有摘要、長稿分段抽取，檔名日期只在原文沒有訪談日期時補入
+- `extract_with_audit(company_name, transcript, source_filename)` — 把訪談逐字稿映射到 24 個結構化欄位；每段同時跑「按欄位抽取」與「按時間掃描重要事實」，任一路逾時不會丟掉另一路結果
+- 每筆事實必須帶逐字引用，程式確認 quote 實際存在於原文才接受；確定性安全網使用跨產業的通用訊號（任意金額、比例、年份、人數、產能、組織、風險、投資與 IPO 等），不綁特定公司、國家、年份或金額
+- 訪談者的問句及明示為假設／第三方案例的內容只交給 AI 做語意判斷，不會由確定性安全網直接寫成公司事實；這在提高召回率的同時控制誤植與幻覺
+- 最終欄位由程式組裝所有驗證事實，不再交給模型自由總結；完整 evidence 與 coverage 落地 `data/memo_runs/`
+- Markdown 排除既有摘要，檔名日期只在原文沒有訪日期時補入
 - 上傳的逐字稿原檔與 metadata 綁定公司保存，可下載並從畫面重新分析；未提及欄位留空，輸出限定台灣繁體中文
 - 配合 `whisper_transcriber.py` 走「音檔 → 逐字稿 → 結構化欄位」的全自動流程
 
@@ -77,9 +81,9 @@ source_repo: ~/taiwan-company
 
 ## 引擎選擇邏輯
 
-- 預設引擎由 env `AI_ENGINE` 決定（預設 `claude`）
-- UI 右上角 ⚙ 開設定面板，使用者選引擎（claude / codex / gemini / ollama），存 `localStorage.ai_engine`
-- 每次 API 請求由 `ai_from_headers` 從 `X-AI-Engine` header 取出（SSE / EventSource 走 `?engine=` query），傳進 router → service
+- UI 右上角 ⚙ 透過 `/api/config/ai-engine` 讀寫全平台引擎（claude / codex / gemini / ollama）
+- server config 是唯一真相；`localStorage.ai_engine` 僅作顯示快取，env `AI_ENGINE` 僅作首次初始值
+- `ai_from_headers` / `ai_from_query` 統一讀 server 設定，不允許單次請求靜默覆寫
 - 引擎對應的 CLI 未安裝 / Ollama 未啟動時，回可行動的中文錯誤訊息（提示安裝/登入或改選其他引擎）
 
 ## 本機 CLI 探尋路徑（`_find_cli`）

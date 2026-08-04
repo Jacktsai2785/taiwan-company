@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
-from services import data_store, company_extractor
+from services import ai_settings, data_store, company_extractor
 from services.ai_deps import ai_from_headers
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -20,9 +20,29 @@ class IndustrySuggest(BaseModel):
     name: str
 
 
+class AiEngineSave(BaseModel):
+    engine: str
+
+
 @router.get("")
 def get_config():
     return data_store.get_config()
+
+
+@router.get("/ai-engine")
+def get_ai_engine():
+    return {
+        "engine": ai_settings.get_engine(),
+        "configured": ai_settings.is_configured(),
+    }
+
+
+@router.put("/ai-engine")
+def save_ai_engine(req: AiEngineSave):
+    try:
+        return {"engine": ai_settings.set_engine(req.engine)}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.get("/industries")

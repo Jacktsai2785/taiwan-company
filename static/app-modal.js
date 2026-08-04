@@ -471,7 +471,7 @@ async function submitAddCompetitor(btn) {
   if (!name) { status.textContent = "請輸入公司名稱"; status.className = "add-comp-status err"; return; }
 
   btn.disabled = true;
-  status.innerHTML = `🔍 AI 分析中（約 30–60 秒）<span class="dots-anim"><span>.</span><span>.</span><span>.</span></span>`;
+  status.innerHTML = `🔍 AI 分析中，完成後會自動更新<span class="dots-anim"><span>.</span><span>.</span><span>.</span></span>`;
   status.className = "add-comp-status info";
   try {
     const res = await api("POST", `/api/companies/${id}/competitors/add`, { name, competition_type: type });
@@ -914,4 +914,3 @@ function closeFindBizDialog() {
   closeOverlay("findbiz-overlay");
   _findBizSessionId = null;
 }
-

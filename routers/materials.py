@@ -199,7 +199,7 @@ async def generate_from_materials(company_id: str, ai: dict = Depends(ai_from_he
     # 背景執行：立即回應，前端輪詢 GET /materials 直到 materials_generating 轉 false
     _mat_generating.add(company_id)
     data_store.update_company(company_id, {"materials_generating": True, "materials_error": ""})
-    _spawn(_run_materials_generation(company_id, native_paths, materials_text, interview_text, ai.get("engine", "claude")))
+    _spawn(_run_materials_generation(company_id, native_paths, materials_text, interview_text, ai["engine"]))
     return {"started": True}
 
 

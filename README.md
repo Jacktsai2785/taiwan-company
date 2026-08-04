@@ -27,8 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/Jacktsai2785/taiwan-company/main/sc
 claude          # 完成 OAuth 授權
 ```
 
-要改用其他引擎，可在 `.env` 設 `AI_ENGINE`（`claude` / `codex` / `gemini` / `ollama`），
-或在側邊欄 ⚙ 臨時切換。各引擎需各自先安裝並登入對應 CLI（codex / gemini）或啟動 Ollama 服務。
+要改用其他引擎，在側邊欄 ⚙ 選擇（`claude` / `codex` / `gemini` / `ollama`）。
+這是全平台設定，包含背景排程都使用同一引擎；`.env` 的 `AI_ENGINE` 只是尚未選擇時的初始值。各引擎需各自先安裝並登入對應 CLI（codex / gemini）或啟動 Ollama 服務。
 
 ---
 

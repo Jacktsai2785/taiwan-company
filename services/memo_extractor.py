@@ -47,6 +47,31 @@ _EXTRACT_KEYS = [f[0] for f in _EXTRACT_FIELDS]
 
 _CHUNK_CHARS = 12000
 _CHUNK_OVERLAP = 500
+PROMPT_VERSION = "evidence-v5-general"
+
+_QUESTION_CUES = re.compile(r"(?:有沒有|有没有|是不是|會不會|会不会|你覺得|你觉得|嗎|吗|[?？])(?:[。.!！]?)$")
+_THIRD_PARTY_EXAMPLE_CUES = re.compile(r"(?:比如|例如|假設|假设|uber|wechat|特斯拉)", re.I)
+_FIRST_PARTY_CUES = re.compile(r"(?:我們|我们|本公司|我司|本團隊|本团队)")
+
+# Generic investment-signal grammar. No company-, year-, amount-, or country-
+# specific literals belong here.
+_GENERIC_SIGNAL_RULES: tuple[tuple[str, re.Pattern], ...] = (
+    ("financials", re.compile(
+        r"(?:nt\$|us\$|rmb|jpy|usd|twd|新台幣|人民幣|美元|日圓|日元)\s*"
+        r"(?:\d[\d,.]*|[一二三四五六七八九十百千兩两]+)(?:萬|万|億|亿|\s*(?:k|m|million|billion))?|"
+        r"(?:\d[\d,.]*|[一二三四五六七八九十百千兩两]+)"
+        r"(?:(?:萬|万|億|亿)(?:元|塊|美元|日圓|日元)?|(?:元|塊|美元|日圓|日元)|\s*(?:k|m|million|billion)\b)|"
+        r"(?:\d+(?:\.\d+)?\s*%|百分之[一-鿿\d.]+)|"
+        r"(?:營收|营收|淨利|净利|毛利|獲利|获利|成長率|成长率|複合成長|复合成长)")),
+    ("headcount", re.compile(r"(?:\d[\d,]*|[一二三四五六七八九十百千兩两]+)\s*(?:個|个)?(?:人|名)(?:員工|员工|團隊|团队|工程師|工程师|研發|研发|rd)?", re.I)),
+    ("recent_development", re.compile(r"(?:19|20)\d{2}(?:年)?|\bhr\b|行政|財務|财务|組織調整|组织调整|里程碑", re.I)),
+    ("major_customers", re.compile(r"客戶|客户|市場|海外|出口|跨境|國際|国际|全球")),
+    ("management_team", re.compile(r"核心能力|關鍵人員|关键人员|keyman|創辦人|创办人|執行長|执行长|ceo|cto|cfo", re.I)),
+    ("risk_tracking", re.compile(r"風險|风险|商機|商机|下降|流失|離職|离职|法規|現金流|现金流|中斷|取代|不承接|不接")),
+    ("factory_capacity", re.compile(r"產能|产能|良率|廠房|厂房|稼動率|稼动率|月產|月产")),
+    ("ipo_timeline", re.compile(r"\bipo\b|公開發行|公开发行|上市|上櫃|上柜|興櫃|兴柜", re.I)),
+    ("investment_terms", re.compile(r"投資人|投资人|募資|募资|增資|增资|估值|併購|并购|股權|股权|表決|表决|釋股|释股|close", re.I)),
+)
 
 
 def prepare_transcript(transcript: str, source_filename: str = "") -> str:
@@ -89,46 +114,172 @@ def _split_transcript(transcript: str) -> list[str]:
 async def extract_from_transcript(
     company_name: str,
     transcript: str,
-    engine: str = "claude",
+    engine: str = "",
     source_filename: str = "",
 ) -> dict:
+    fields, _audit = await extract_with_audit(
+        company_name, transcript, engine=engine, source_filename=source_filename
+    )
+    return fields
+
+
+async def extract_with_audit(
+    company_name: str,
+    transcript: str,
+    engine: str = "",
+    source_filename: str = "",
+) -> tuple[dict, dict]:
     """
     從逐字稿抽取所有 Call Memo 欄位（+ interview_date）。
-    逐字稿超長時分段抽取後合併（每欄取第一個非空值），讓後段的財務/結論不被截斷丟棄。
+    逐字稿超長時分段抽取「事實 + 原文證據」，累積去重後再統整成 24 欄。
     AI 回不出可解析 JSON 時 raise ValueError（不偽裝成 24 欄全空的『成功』）。
     """
     transcript = prepare_transcript(transcript, source_filename)
     chunks = _split_transcript(transcript)
-    merged: dict[str, str] = {k: "" for k in _EXTRACT_KEYS}
-    any_ok = False
-    for chunk in chunks:
-        part = await _extract_once(company_name, chunk, engine)
-        any_ok = True
-        for k, v in part.items():
-            if v and not merged[k]:
-                merged[k] = v
-    if not any_ok:
+    evidence: dict[str, list[dict[str, str]]] = {k: [] for k in _EXTRACT_KEYS}
+    chunk_results = await asyncio.gather(*(
+        _extract_chunk_dual(company_name, chunk, engine) for chunk in chunks
+    ))
+    candidate_chunks = _split_transcript(_material_candidate_text(transcript))
+    candidate_results = await asyncio.gather(*(
+        _extract_material_facts_once(company_name, chunk, engine)
+        for chunk in candidate_chunks if chunk.strip()
+    ))
+    chunk_results.extend([[result] for result in candidate_results])
+    chunk_results.append([_deterministic_material_evidence(transcript)])
+    for parts in chunk_results:
+        for part in parts:
+            for key, items in part.items():
+                seen = {(e["fact"], e["quote"], e["timestamp"]) for e in evidence[key]}
+                for item in items:
+                    anchor = _normalized_text(str(item.get("anchor_quote") or ""))
+                    if anchor and any(
+                        anchor in _normalized_text(existing["quote"])
+                        for existing in evidence[key]
+                    ):
+                        continue
+                    identity = (item["fact"], item["quote"], item["timestamp"])
+                    if identity not in seen:
+                        evidence[key].append(item)
+                        seen.add(identity)
+
+    evidence_by_id: dict[str, list[dict[str, str]]] = {}
+    for key in _EXTRACT_KEYS:
+        evidence_by_id[key] = [
+            {**item, "id": f"{key}:{index}"}
+            for index, item in enumerate(evidence[key], start=1)
+        ]
+
+    fields, coverage = _render_from_evidence(evidence_by_id)
+    if not fields["interview_date"]:
+        fields["interview_date"] = infer_date_from_filename(source_filename)
+    return fields, {
+        "evidence": evidence_by_id,
+        "coverage": coverage,
+    }
+
+
+async def _extract_chunk_dual(
+    company_name: str, transcript: str, engine: str
+) -> list[dict]:
+    """Run complementary extractors; one timeout must not discard the other."""
+    results = await asyncio.gather(
+        _extract_evidence_once(company_name, transcript, engine),
+        _extract_material_facts_once(company_name, transcript, engine),
+        return_exceptions=True,
+    )
+    successful = [result for result in results if isinstance(result, dict)]
+    if successful:
+        return successful
+    first_error = next((result for result in results if isinstance(result, Exception)), None)
+    raise ValueError(f"AI 無法完成逐字稿分段抽取：{first_error}")
+
+
+def _json_object(raw: str) -> dict:
+    raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)
+    raw = re.sub(r"\n?```$", "", raw.strip(), flags=re.MULTILINE)
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if not match:
         raise ValueError("AI 未回傳可解析的 call memo（請重試或換引擎）")
-    if not merged["interview_date"]:
-        merged["interview_date"] = infer_date_from_filename(source_filename)
-    return merged
+    try:
+        data = json.loads(match.group())
+    except Exception as e:
+        raise ValueError("AI 回傳的 call memo 非合法 JSON（請重試或換引擎）") from e
+    if not isinstance(data, dict):
+        raise ValueError("AI 回傳的 call memo 不是 JSON 物件（請重試或換引擎）")
+    return data
 
 
-async def _extract_once(company_name: str, transcript: str, engine: str = "claude") -> dict:
+def _normalized_text(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
+
+
+def _material_candidate_text(transcript: str) -> str:
+    """Select high-signal transcript windows for a focused omission audit."""
+    lines = transcript.splitlines()
+    selected: set[int] = set()
+    for index, line in enumerate(lines):
+        content = re.sub(r"^\s*\[\d{2}:\d{2}:\d{2}\]\s*", "", line).lower()
+        if any(pattern.search(content) for _, pattern in _GENERIC_SIGNAL_RULES):
+            selected.update(range(max(0, index - 2), min(len(lines), index + 3)))
+    return "\n".join(lines[index] for index in sorted(selected))
+
+
+def _deterministic_material_evidence(transcript: str) -> dict:
+    """Last-resort verbatim capture for facts models commonly omit."""
+    lines = transcript.splitlines()
+    result: dict[str, list[dict[str, str]]] = {key: [] for key in _EXTRACT_KEYS}
+    seen: set[tuple[str, int, int]] = set()
+    for index, line in enumerate(lines):
+        content = re.sub(r"^\s*\[\d{2}:\d{2}:\d{2}\]\s*", "", line)
+        for field, pattern in _GENERIC_SIGNAL_RULES:
+            if not pattern.search(content):
+                continue
+            window_text = "\n".join(lines[max(0, index - 2):min(len(lines), index + 3)])
+            # Questions and unrelated examples are candidates for AI review, but
+            # are unsafe to force directly into the final memo.
+            if _QUESTION_CUES.search(content):
+                continue
+            if _THIRD_PARTY_EXAMPLE_CUES.search(window_text) and not _FIRST_PARTY_CUES.search(window_text):
+                continue
+            start, end = max(0, index - 2), min(len(lines), index + 3)
+            identity = (field, start, end)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            quote = "\n".join(lines[start:end]).strip()
+            # Keep surrounding lines as audit evidence, but only render the
+            # matched assertion as the fact. This avoids turning context and
+            # interviewer chatter into memo prose.
+            fact = content.strip()
+            timestamp_match = re.search(r"\[(\d{2}:\d{2}:\d{2})\]", line)
+            result[field].append({
+                "fact": fact,
+                "quote": quote,
+                "timestamp": timestamp_match.group(1) if timestamp_match else "",
+                "anchor_quote": line.strip(),
+            })
+    return result
+
+
+async def _extract_evidence_once(company_name: str, transcript: str, engine: str) -> dict:
     fields_desc = "\n".join(
         f'  "{key}": "{label}（{desc}）"'
         for key, label, desc in _EXTRACT_FIELDS
     )
 
-    prompt = f"""你是一位專業的投資分析師助理。以下是與「{company_name}」的訪談逐字稿（可能是其中一段）。
+    prompt = f"""你是逐字稿事實抽取器。以下是與「{company_name}」的訪談逐字稿其中一段。
 
-請從逐字稿中提取以下欄位的資訊，以 JSON 格式回傳。
-- 所有內容使用台灣繁體中文，不得輸出簡體字。
-- 若某欄位在逐字稿中有提及，請只整理原文支持的事實，不要補充常識或外部資訊。
-- 若未提及，請回傳空字串 ""。
-- 不要用「未提及」、「未揭露」、「無相關資訊」等句子代替空字串。
-- generated_at、檔案建立時間及逐字稿產生時間不是訪談日期，不得當成 interview_date。
-- 回傳純 JSON，不要加 markdown code block 或其他說明。
+請為每個欄位找出所有明確事實與逐字證據，以 JSON 回傳：
+- 每項格式為 {{"fact":"繁體中文事實", "quote":"原文逐字引用", "timestamp":"HH:MM:SS"}}。
+- quote 必須逐字複製本段內容，不得翻譯、改寫或修正簡繁體；找不到原文引用就不要輸出。
+- fact 只能表達 quote 直接支持的內容，不得加入常識、推測、評價或外部資訊。
+- 同一事實可放入多個真正相關的欄位，以免後續漏掉重要內容。
+- 這是高召回率抽取，不是摘要；寧可多列也不可只挑幾個重點。
+- 逐項檢查：金額與比例、年份與時程、人數、客戶地區與類型、產品與收入模式、核心能力、經營原則、明確不做的事、風險、轉折點、海外布局、募資與 IPO，有提及都要列入。
+- 本段未提及的欄位回傳空陣列 []。
+- generated_at、檔案建立時間及逐字稿產生時間不是訪談日期。
+- 回傳純 JSON，不要加 markdown code block 或說明。
 
 需提取的欄位：
 {{
@@ -140,24 +291,104 @@ async def _extract_once(company_name: str, transcript: str, engine: str = "claud
 {transcript}
 ---
 
-請直接回傳 JSON 物件。"""
+請直接回傳 JSON 物件，每個 key 的 value 都是陣列。"""
 
     raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, engine)
+    data = _json_object(raw)
+    return _validated_evidence(data, transcript)
 
-    # Strip markdown fences if present
-    raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"\n?```$", "", raw.strip(), flags=re.MULTILINE)
 
-    m = re.search(r"\{[\s\S]*\}", raw)
-    if not m:
-        raise ValueError("AI 未回傳可解析的 call memo（請重試或換引擎）")
-    try:
-        data = json.loads(m.group())
-    except Exception as e:
-        raise ValueError("AI 回傳的 call memo 非合法 JSON（請重試或換引擎）") from e
+async def _extract_material_facts_once(
+    company_name: str, transcript: str, engine: str
+) -> dict:
+    field_choices = "\n".join(
+        f'- {key}: {label}' for key, label, _ in _EXTRACT_FIELDS
+    )
+    prompt = f"""你是投資訪談的高召回率事實稽核員。請按原文出現順序，掃描「{company_name}」這段逐字稿的每個投資重要事實。
 
-    # Ensure all keys present, unknown keys filtered out
-    return {k: str(data.get(k, "")) for k in _EXTRACT_KEYS}
+這不是摘要。特別不可漏掉：
+- 金額、比例、人數、年份、時程與成長率
+- 客戶地區與類型、訂單變化、收入模式與海外布局
+- 核心能力、組織變化、關鍵人員、經營原則與明確不做的事
+- 疫情、AI、人才、客戶、競爭、法規、現金流等風險
+- 募資、併購、股權、表決權、IPO 動機與資金用途
+
+每筆事實指定一個最適合的 field，格式：
+{{"facts":[{{"field":"field_key","fact":"繁體中文事實","quote":"原文逐字引用","timestamp":"HH:MM:SS"}}]}}
+
+field 只能從以下選擇：
+{field_choices}
+
+quote 必須逐字存在於本段原文；無法提供引用就不得輸出。只回傳純 JSON。
+
+逐字稿：
+---
+{transcript}
+---
+"""
+    raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, engine)
+    data = _json_object(raw)
+    grouped: dict[str, list[dict]] = {key: [] for key in _EXTRACT_KEYS}
+    for item in data.get("facts", []):
+        if isinstance(item, dict) and item.get("field") in grouped:
+            grouped[item["field"]].append(item)
+    return _validated_evidence(grouped, transcript)
+
+
+def _validated_evidence(data: dict, transcript: str) -> dict:
+    normalized_chunk = _normalized_text(transcript)
+    result: dict[str, list[dict[str, str]]] = {k: [] for k in _EXTRACT_KEYS}
+    for key in _EXTRACT_KEYS:
+        items = data.get(key, [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fact = str(item.get("fact") or "").strip()
+            quote = str(item.get("quote") or "").strip()
+            timestamp = str(item.get("timestamp") or "").strip()
+            # Hard hallucination gate: the cited quote must exist verbatim in this chunk.
+            if fact and quote and _normalized_text(quote) in normalized_chunk:
+                result[key].append({"fact": fact, "quote": quote, "timestamp": timestamp})
+    return result
+
+
+def _render_from_evidence(
+    evidence: dict[str, list[dict[str, str]]],
+) -> tuple[dict, dict]:
+    """Render every verified fact deterministically so synthesis cannot omit it."""
+    fields: dict[str, str] = {}
+    coverage: dict[str, dict] = {}
+    for key in _EXTRACT_KEYS:
+        items = evidence[key]
+        facts: list[str] = []
+        normalized_facts: list[str] = []
+        used_ids: list[str] = []
+        for item in items:
+            normalized = _normalized_text(item["fact"])
+            if normalized:
+                # Collapse exact/containment duplicates while keeping the more
+                # informative wording. This does not ask a model to summarize.
+                contained_at = next(
+                    (i for i, existing in enumerate(normalized_facts)
+                     if normalized in existing or existing in normalized),
+                    None,
+                )
+                if contained_at is None:
+                    facts.append(item["fact"])
+                    normalized_facts.append(normalized)
+                elif len(normalized) > len(normalized_facts[contained_at]):
+                    facts[contained_at] = item["fact"]
+                    normalized_facts[contained_at] = normalized
+            used_ids.append(item["id"])
+        fields[key] = "；".join(facts)
+        coverage[key] = {
+            "evidence_count": len(items),
+            "used_count": len(set(used_ids)),
+            "complete": len(set(used_ids)) == len(items),
+        }
+    return fields, coverage
 
 
 def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:

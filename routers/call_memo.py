@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -8,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from pydantic import create_model
 
-from services import data_store, memo_extractor
+from services import claude_client, data_store, memo_extractor
 from services.ai_deps import ai_from_headers
 from services.file_parser import extract_text, FileParseError
 from services import whisper_transcriber
@@ -18,6 +20,7 @@ router = APIRouter(prefix="/api/companies", tags=["call_memo"])
 _MAX_BYTES = 30 * 1024 * 1024        # 逐字稿文件 30MB（與 upload 一致）
 _AUDIO_MAX_BYTES = 100 * 1024 * 1024  # 音檔放寬到 100MB
 _MEMO_SOURCES_DIR = data_store.DATA_DIR / "uploads"
+_MEMO_RUNS_DIR = data_store.DATA_DIR / "memo_runs"
 
 # 單一來源：欄位定義只在 memo_extractor.FIELDS 維護，MemoSave 由它 + interview_date 動態生成
 MemoSave = create_model(
@@ -65,6 +68,45 @@ def _memo_source_path(company_id: str, source: dict) -> Path:
     return path
 
 
+def _record_memo_run(
+    company_id: str,
+    fields: dict,
+    engine: str,
+    filename: str,
+    content: bytes,
+    transcript: str,
+    audit: dict,
+) -> None:
+    company = data_store.get_company(company_id) or {}
+    runs = list(company.get("call_memo_runs") or [])
+    prepared = memo_extractor.prepare_transcript(transcript, filename)
+    run_id = str(uuid.uuid4())
+    audit_dir = _MEMO_RUNS_DIR / company_id
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / f"{run_id}.json"
+    audit_path.write_text(
+        json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    run = {
+        "id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_filename": Path(filename).name,
+        "source_sha256": hashlib.sha256(content).hexdigest(),
+        "engine": engine,
+        "model": claude_client.model_for_engine(engine),
+        "prompt_version": memo_extractor.PROMPT_VERSION,
+        "chunk_count": len(memo_extractor._split_transcript(prepared)),
+        "evidence_file": str(audit_path.relative_to(data_store.DATA_DIR)),
+        "coverage": audit.get("coverage") or {},
+        "fields": fields,
+    }
+    runs.append(run)
+    data_store.update_company(company_id, {
+        "call_memo_last_run": run,
+        "call_memo_runs": runs[-20:],
+    })
+
+
 @router.get("/{company_id}/memo")
 def get_memo(company_id: str):
     company = data_store.get_company(company_id)
@@ -108,11 +150,12 @@ async def extract_memo(company_id: str, file: UploadFile = File(...), ai: dict =
     _save_memo_source(company_id, filename, content)
 
     try:
-        fields = await memo_extractor.extract_from_transcript(
+        fields, audit = await memo_extractor.extract_with_audit(
             company["name"], transcript, source_filename=filename, **ai
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    _record_memo_run(company_id, fields, ai["engine"], filename, content, transcript, audit)
     return fields
 
 
@@ -129,11 +172,13 @@ async def reextract_memo(company_id: str, ai: dict = Depends(ai_from_headers)):
     if not transcript.strip():
         raise HTTPException(status_code=422, detail="無法從保存的逐字稿中取得文字內容")
     try:
-        return await memo_extractor.extract_from_transcript(
+        fields, audit = await memo_extractor.extract_with_audit(
             company["name"], transcript, source_filename=filename, **ai
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    _record_memo_run(company_id, fields, ai["engine"], filename, content, transcript, audit)
+    return fields
 
 
 @router.post("/{company_id}/memo/transcribe-audio")
@@ -162,11 +207,20 @@ async def transcribe_audio_memo(
         raise HTTPException(status_code=422, detail="無法辨識音訊內容，請確認檔案包含清晰語音")
 
     try:
-        fields = await memo_extractor.extract_from_transcript(
+        fields, audit = await memo_extractor.extract_with_audit(
             company["name"], transcript, source_filename=file.filename or "", **ai
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    _record_memo_run(
+        company_id,
+        fields,
+        ai["engine"],
+        file.filename or f"audio{suffix}",
+        content,
+        transcript,
+        audit,
+    )
     return {"transcript": transcript, "fields": fields}
 
 

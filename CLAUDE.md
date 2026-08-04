@@ -35,7 +35,7 @@ FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude C
 - **gemini**：Google 官方 `gemini -p` CLI（檔案/圖片走 `@路徑`）
 - **ollama**：本機 OpenAI 相容端點（預設 `localhost:11434`，圖片需 vision model）
 
-預設引擎由 `.env` 的 `AI_ENGINE` 決定；側邊欄 ⚙ 可臨時切換（存 localStorage，透過 `X-AI-Engine` header / `?engine=` 傳給後端）。引擎不認得或對應 CLI/服務未就緒時，後端回可行動錯誤訊息。能力不足的多模態（如 ollama 無 vision model、codex/ollama 的 PDF）自動退到本機文字抽取（`file_parser` + tesseract OCR）。
+側邊欄 ⚙ 的選擇會寫入 server config，是所有前景功能與背景排程的唯一引擎來源；`.env` 的 `AI_ENGINE` 只在尚未建立全平台設定時當初始值。`localStorage` 只是顯示快取，request header / query 不能覆寫 server 設定。引擎不認得或對應 CLI/服務未就緒時，後端回可行動錯誤訊息。能力不足的多模態自動退到本機文字抽取。
 
 ## 專案結構
 

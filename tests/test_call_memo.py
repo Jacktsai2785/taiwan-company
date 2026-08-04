@@ -25,15 +25,18 @@ class CallMemoDownloadTests(unittest.TestCase):
 
 
 class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
+    @patch("routers.call_memo._record_memo_run")
     @patch("routers.call_memo._save_memo_source")
-    @patch("routers.call_memo.memo_extractor.extract_from_transcript")
+    @patch("routers.call_memo.memo_extractor.extract_with_audit")
     @patch("routers.call_memo.extract_text")
     @patch("routers.call_memo.data_store.get_company")
     async def test_markdown_is_decoded_as_plain_text(
-        self, get_company, extract_text, extract_from_transcript, save_source
+        self, get_company, extract_text, extract_with_audit, save_source, record_run
     ):
         get_company.return_value = {"name": "測試公司"}
-        extract_from_transcript.return_value = {"interview_date": "2026/08/04"}
+        extract_with_audit.return_value = (
+            {"interview_date": "2026/08/04"}, {"evidence": {}, "coverage": {}}
+        )
         transcript = "# Podcast 逐字稿\n\n營收為新台幣一億元。"
         upload = Mock(filename="podcast.md")
         upload.read = AsyncMock(return_value=transcript.encode("utf-8"))
@@ -44,19 +47,23 @@ class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
         save_source.assert_called_once_with(
             "company-id", "podcast.md", transcript.encode("utf-8")
         )
-        extract_from_transcript.assert_awaited_once_with(
+        extract_with_audit.assert_awaited_once_with(
             "測試公司", transcript, source_filename="podcast.md", engine="claude"
         )
         self.assertEqual(result["interview_date"], "2026/08/04")
+        record_run.assert_called_once()
 
+    @patch("routers.call_memo._record_memo_run")
     @patch("routers.call_memo._save_memo_source")
-    @patch("routers.call_memo.memo_extractor.extract_from_transcript")
+    @patch("routers.call_memo.memo_extractor.extract_with_audit")
     @patch("routers.call_memo.data_store.get_company")
     async def test_missing_interview_date_is_not_replaced_with_today(
-        self, get_company, extract_from_transcript, _save_source
+        self, get_company, extract_with_audit, _save_source, _record_run
     ):
         get_company.return_value = {"name": "測試公司"}
-        extract_from_transcript.return_value = {"interview_date": ""}
+        extract_with_audit.return_value = (
+            {"interview_date": ""}, {"evidence": {}, "coverage": {}}
+        )
         upload = Mock(filename="podcast.txt")
         upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
 

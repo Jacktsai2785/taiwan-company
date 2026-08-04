@@ -79,7 +79,14 @@ _CLI_ENV = {k: v for k, v in os.environ.items() if k not in _CLOUD_API_KEY_VARS}
 
 
 def _normalize_engine(engine: str) -> str:
-    eng = (engine or DEFAULT_ENGINE or "claude").strip().lower()
+    if engine:
+        eng = engine.strip().lower()
+    else:
+        try:
+            from services import ai_settings
+            eng = ai_settings.get_engine()
+        except Exception:
+            eng = DEFAULT_ENGINE
     # Backwards-compat for any stale provider strings.
     eng = {"anthropic": "claude", "local": "claude", "openai": "codex"}.get(eng, eng)
     if eng not in KNOWN_ENGINES:
@@ -87,6 +94,17 @@ def _normalize_engine(engine: str) -> str:
             f"未知的 AI 引擎「{engine}」。可用引擎：{', '.join(KNOWN_ENGINES)}。請點 ⚙ 重新選擇。"
         )
     return eng
+
+
+def model_for_engine(engine: str) -> str:
+    """Return the configured model label used for run audit metadata."""
+    eng = _normalize_engine(engine)
+    return {
+        "claude": MODEL_CLAUDE or "default",
+        "codex": MODEL_CODEX or "default",
+        "gemini": MODEL_GEMINI or "default",
+        "ollama": OLLAMA_MODEL or "default",
+    }[eng]
 
 
 # ── Shared subprocess runner (process-group kill on timeout) ────────────────────

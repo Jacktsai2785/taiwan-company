@@ -59,7 +59,7 @@ source_repo: ~/taiwan-company
 
 1. **上傳逐字稿**（`POST /memo/extract`）— 接受 TXT / Markdown / DOCX / PDF；Markdown 若有 `## 逐字稿`，會排除前置摘要，只分析原始逐字稿。原檔保存至 `data/uploads/{id}/`，metadata 寫入 `call_memo_source`
 2. **或上傳音檔**（`POST /memo/transcribe-audio`）— 走 `whisper_transcriber`（本機 OpenAI Whisper），支援 MP3 / WAV / M4A / OGG / WEBM / FLAC
-3. **AI 抽欄位**（`memo_extractor.extract_from_transcript`）— 把逐字稿映射到 ~24 個結構化欄位（見下）
+3. **AI 抽欄位**（`memo_extractor.extract_with_audit`）— 雙路抽取事實與逐字引用，原文驗證後由程式完整組裝 ~24 個欄位；evidence / coverage 另存 `data/memo_runs/{id}/`
 4. **編輯儲存**（`PUT /memo`）
 5. **下載 DOCX**（`GET /memo/download`）— 把欄位灌進 `data/call_memo_template.docx` 範本，輸出 `Call Memo-<公司名>_<日期>.docx`
 6. **重跑抽取**（`POST /memo/reextract`）— 直接使用已保存的逐字稿來源，不必重新選檔；`GET /memo/source` 回傳檔名、大小、時間與下載 URL
@@ -99,6 +99,8 @@ summary: AI 產的長段 Markdown 分析（業務概況 / 競業分析 / ...）
 watched: bool（追蹤旗標）
 call_memo: { ...Memo 欄位 }
 call_memo_source: { filename, stored_name, url, size, uploaded_at }（最新逐字稿來源；原檔落地 data/uploads/{id}/）
+call_memo_last_run: { source_sha256, engine, model, prompt_version, chunk_count, fields, ... }
+call_memo_runs: [ ... ]（最近 20 次 Call Memo 執行紀錄，供比對引擎與結果）
 patents: [...]（deep-enrich 後有）
 materials: [ { filename, stored_name, url, mime_type, size, uploaded_at } ]（上傳的簡報/介紹/照片，落地在 data/uploads/{id}/，由 /uploads 提供存取）
 materials_summary: 由上傳簡報用 Opus（最新）生成的簡報版簡介（暫存，供逐段審核用）

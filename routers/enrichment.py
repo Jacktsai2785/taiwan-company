@@ -84,7 +84,7 @@ _gcis_channel = ProgressChannel()
 _summarize_channel = ProgressChannel()
 
 
-def start_enrichment(company_id: str, engine: str = "claude") -> bool:
+def start_enrichment(company_id: str, engine: str = "") -> bool:
     """公開 API：啟動（或略過重複啟動）某公司的 AI 補全背景任務。回傳是否真的
     啟動了新任務——False 代表該公司已在跑，呼叫端不用另外處理。取代原本
     routers/companies.py 直接 import _enrich_company/_running/_spawn 三個私有
@@ -199,7 +199,7 @@ async def deep_enrich_stream(company_id: str, force: bool = False, ai: dict = De
     )
 
 
-async def _summarize_company(company_id: str, engine: str = "claude", reset: bool = False) -> None:
+async def _summarize_company(company_id: str, engine: str = "", reset: bool = False) -> None:
     """Summary-only enrichment: skips GCIS fetch, only runs AI summary generation.
     reset=True clears existing summary/competitors and ignores known competitor context,
     producing a true from-scratch rewrite."""
@@ -281,7 +281,7 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
         result = await asyncio.to_thread(
             claude_client.ask,
             prompt, 60, ["WebSearch"],
-            ai.get("engine", "claude"), 6,
+            ai["engine"], 6,
         )
         url = result.strip().split("\n")[0].strip()
         if not url.startswith("http"):
@@ -365,7 +365,7 @@ def _save_summary_result(company_id: str, result: dict, extra: dict | None = Non
     return fields
 
 
-async def _enrich_company(company_id: str, engine: str = "claude") -> None:
+async def _enrich_company(company_id: str, engine: str = "") -> None:
     data_store.update_company(company_id, {"enrich_status": "generating"})
 
     with _enrich_channel.session(company_id) as ev:
@@ -447,7 +447,7 @@ async def _enrich_company(company_id: str, engine: str = "claude") -> None:
         ev.done(not failed)
 
 
-async def _deep_enrich_company(company_id: str, engine: str = "claude") -> None:
+async def _deep_enrich_company(company_id: str, engine: str = "") -> None:
     with _deep_channel.session(company_id) as ev:
         failed = False
         company = data_store.get_company(company_id)

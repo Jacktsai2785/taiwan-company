@@ -52,7 +52,7 @@ def _existing_lookup():
     return find
 
 
-def extract_companies_from_text(text: str, source_label: str, engine: str = "claude") -> dict:
+def extract_companies_from_text(text: str, source_label: str, engine: str = "") -> dict:
     """
     Returns:
     {
@@ -87,7 +87,7 @@ def extract_companies_from_text(text: str, source_label: str, engine: str = "cla
     return result
 
 
-async def extract_companies_from_image(image_content: bytes, image_ext: str, source_label: str, engine: str = "claude") -> dict:
+async def extract_companies_from_image(image_content: bytes, image_ext: str, source_label: str, engine: str = "") -> dict:
     """
     Pass image to Claude CLI for visual recognition.
     If the image contains a 統一編號 column, use GCIS to get the authoritative company name
@@ -171,7 +171,7 @@ async def _resolve_names(items: list[dict]) -> list[str]:
     return list(await asyncio.gather(*[resolve_one(i) for i in items]))
 
 
-async def suggest_companies_for_industry(industry: str, companies: list[dict], engine: str = "claude") -> list[str]:
+async def suggest_companies_for_industry(industry: str, companies: list[dict], engine: str = "") -> list[str]:
     """Ask Claude which companies belong to the given industry. Returns list of matching company IDs."""
     if not companies:
         return []
@@ -207,7 +207,7 @@ async def suggest_companies_for_industry(industry: str, companies: list[dict], e
 async def suggest_industries_for_companies(
     companies: list[dict],
     industries: list[str],
-    engine: str = "claude",
+    engine: str = "",
 ) -> dict[str, str]:
     """For each company, pick the best-fit industry from the given list.
 
@@ -272,7 +272,7 @@ def build_candidate(name: str, source_label: str) -> dict:
     }
 
 
-def _ask_claude(text: str, engine: str = "claude") -> list[str]:
+def _ask_claude(text: str, engine: str = "") -> list[str]:
     """Ask Claude to extract all company-like names from text."""
     if not text or len(text.strip()) < 5:
         log.info("Claude skipped: text too short")

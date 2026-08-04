@@ -280,7 +280,7 @@ def _grab_field(raw: str, label: str) -> str:
 
 
 async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
-                             engine: str = "claude") -> dict:
+                             engine: str = "") -> dict:
     """Research a single named competitor (WebSearch) in the context of the case
     company, and return {core_biz, differentiation, listing}. 競業類型 is supplied
     by the user, not the model."""
@@ -327,7 +327,7 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
     }
 
 
-async def deep_enrich_summary(company: dict, engine: str = "claude",
+async def deep_enrich_summary(company: dict, engine: str = "",
                               competitor_context: dict | None = None) -> dict:
     """Search news/media and refine the existing summary. Returns {summary, blurb}.
     Uses the latest Opus (via the CLI "opus" alias) for higher-quality deep analysis."""
@@ -517,7 +517,7 @@ def _build_materials_prompt(company: dict, materials_text: str = "", interview_t
 
 async def generate_summary_from_materials(
     company: dict, file_paths: list[str], materials_text: str = "",
-    interview_text: str = "", engine: str = "claude",
+    interview_text: str = "", engine: str = "",
 ) -> dict:
     """Scan uploaded supplementary material (slides/intro/photos + interview memo)
     with the latest Opus and produce a company profile that integrates them, tagging
@@ -547,7 +547,7 @@ async def generate_summary_from_materials(
             raise RuntimeError(f"簡報生成失敗：{e}") from e
 
 
-async def generate_summary(company: dict, engine: str = "claude",
+async def generate_summary(company: dict, engine: str = "",
                            competitor_context: dict | None = None) -> dict:
     """
     Returns a due-diligence memo in Traditional Chinese Markdown.
@@ -600,7 +600,7 @@ async def generate_summary(company: dict, engine: str = "claude",
     raise RuntimeError(f"公司簡介生成失敗：{last_error}") from last_error
 
 
-async def _generate_blurb_fallback(summary: str, name: str, engine: str = "claude") -> str:
+async def _generate_blurb_fallback(summary: str, name: str, engine: str = "") -> str:
     """Quick fallback: generate ≤10-char blurb from existing summary text."""
     import re
     prompt = (

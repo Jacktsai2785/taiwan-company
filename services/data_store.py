@@ -299,6 +299,14 @@ def get_config() -> dict:
     return _read(CONFIG_FILE, DEFAULT_CONFIG)
 
 
+def save_ai_engine(engine: str) -> str:
+    with _LOCK:
+        config = get_config()
+        config["ai_engine"] = engine
+        _write(CONFIG_FILE, config)
+        return engine
+
+
 def get_industries() -> list[str]:
     return get_config()["industries"]
 
