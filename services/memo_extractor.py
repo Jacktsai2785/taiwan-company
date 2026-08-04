@@ -5,13 +5,14 @@ Returns a dict matching the 24-field template schema (+ interview_date on extrac
 import asyncio
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from services import claude_client
 
 # Ordered field definitions: key -> (label, short_description)
 FIELDS: list[tuple[str, str, str]] = [
-    ("deal_source",        "案件來源",                   "例：自行開發、某人介紹。若未提及請填「自行開發」"),
+    ("deal_source",        "案件來源",                   "例：自行開發、某人介紹；若未提及請留空"),
     ("interviewees",       "受訪人",                     "受訪者姓名與職稱，多人以頓號分隔"),
     ("paid_in_capital",    "實收資本額",                  "NT$ 金額，例：5,000萬"),
     ("address",            "地址",                       "公司登記地址或廠址"),
@@ -48,6 +49,32 @@ _CHUNK_CHARS = 12000
 _CHUNK_OVERLAP = 500
 
 
+def prepare_transcript(transcript: str, source_filename: str = "") -> str:
+    """Remove generated Markdown summaries/metadata when a raw transcript section exists."""
+    if Path(source_filename).suffix.lower() != ".md":
+        return transcript
+    marker = re.search(r"(?im)^##\s*逐字稿\s*$", transcript)
+    return transcript[marker.end():].lstrip() if marker else transcript
+
+
+def infer_date_from_filename(source_filename: str) -> str:
+    """Infer YYYY/MM/DD from an explicit date token in a filename."""
+    stem = Path(source_filename).stem
+    for pattern in (
+        r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)",
+        r"(?<!\d)(20\d{2})[-_.](\d{1,2})[-_.](\d{1,2})(?!\d)",
+    ):
+        match = re.search(pattern, stem)
+        if not match:
+            continue
+        candidate = "/".join(match.groups())
+        try:
+            return datetime.strptime(candidate, "%Y/%m/%d").strftime("%Y/%m/%d")
+        except ValueError:
+            continue
+    return ""
+
+
 def _split_transcript(transcript: str) -> list[str]:
     """超長逐字稿切成有重疊的片段，避免在句子中間切斷漏抽。"""
     if len(transcript) <= _CHUNK_CHARS:
@@ -59,12 +86,18 @@ def _split_transcript(transcript: str) -> list[str]:
     return chunks
 
 
-async def extract_from_transcript(company_name: str, transcript: str, engine: str = "claude") -> dict:
+async def extract_from_transcript(
+    company_name: str,
+    transcript: str,
+    engine: str = "claude",
+    source_filename: str = "",
+) -> dict:
     """
     從逐字稿抽取所有 Call Memo 欄位（+ interview_date）。
     逐字稿超長時分段抽取後合併（每欄取第一個非空值），讓後段的財務/結論不被截斷丟棄。
     AI 回不出可解析 JSON 時 raise ValueError（不偽裝成 24 欄全空的『成功』）。
     """
+    transcript = prepare_transcript(transcript, source_filename)
     chunks = _split_transcript(transcript)
     merged: dict[str, str] = {k: "" for k in _EXTRACT_KEYS}
     any_ok = False
@@ -76,6 +109,8 @@ async def extract_from_transcript(company_name: str, transcript: str, engine: st
                 merged[k] = v
     if not any_ok:
         raise ValueError("AI 未回傳可解析的 call memo（請重試或換引擎）")
+    if not merged["interview_date"]:
+        merged["interview_date"] = infer_date_from_filename(source_filename)
     return merged
 
 
@@ -88,8 +123,11 @@ async def _extract_once(company_name: str, transcript: str, engine: str = "claud
     prompt = f"""你是一位專業的投資分析師助理。以下是與「{company_name}」的訪談逐字稿（可能是其中一段）。
 
 請從逐字稿中提取以下欄位的資訊，以 JSON 格式回傳。
-- 若某欄位在逐字稿中有提及，請整理成清楚的中文句子或條列。
+- 所有內容使用台灣繁體中文，不得輸出簡體字。
+- 若某欄位在逐字稿中有提及，請只整理原文支持的事實，不要補充常識或外部資訊。
 - 若未提及，請回傳空字串 ""。
+- 不要用「未提及」、「未揭露」、「無相關資訊」等句子代替空字串。
+- generated_at、檔案建立時間及逐字稿產生時間不是訪談日期，不得當成 interview_date。
 - 回傳純 JSON，不要加 markdown code block 或其他說明。
 
 需提取的欄位：

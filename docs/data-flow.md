@@ -1,7 +1,7 @@
 ---
 title: 資料流
 status: living
-last_updated: 2026-05-29
+last_updated: 2026-08-04
 source_repo: ~/taiwan-company
 ---
 
@@ -57,11 +57,12 @@ source_repo: ~/taiwan-company
 
 完整工作流：
 
-1. **上傳逐字稿**（`POST /memo/extract`）— 接受 .txt / DOCX / PDF，走 `file_parser` 抽文字
+1. **上傳逐字稿**（`POST /memo/extract`）— 接受 TXT / Markdown / DOCX / PDF；Markdown 若有 `## 逐字稿`，會排除前置摘要，只分析原始逐字稿。原檔保存至 `data/uploads/{id}/`，metadata 寫入 `call_memo_source`
 2. **或上傳音檔**（`POST /memo/transcribe-audio`）— 走 `whisper_transcriber`（本機 OpenAI Whisper），支援 MP3 / WAV / M4A / OGG / WEBM / FLAC
 3. **AI 抽欄位**（`memo_extractor.extract_from_transcript`）— 把逐字稿映射到 ~24 個結構化欄位（見下）
 4. **編輯儲存**（`PUT /memo`）
 5. **下載 DOCX**（`GET /memo/download`）— 把欄位灌進 `data/call_memo_template.docx` 範本，輸出 `Call Memo-<公司名>_<日期>.docx`
+6. **重跑抽取**（`POST /memo/reextract`）— 直接使用已保存的逐字稿來源，不必重新選檔；`GET /memo/source` 回傳檔名、大小、時間與下載 URL
 
 Memo 欄位（從 `MemoSave` model 得知）：訪談日期、案源、受訪人、實收資本、地址、設立日、承銷商、簽證會計師、董事長、總經理、員工數、IPO 時程、投資條件、業務 / 營收、財務、經營團隊、董監持股、近期發展、主要客戶 / 供應商、產能、競爭者、產業趨勢、風險追蹤、結論。
 
@@ -97,6 +98,7 @@ blurb: 一句話簡介
 summary: AI 產的長段 Markdown 分析（業務概況 / 競業分析 / ...）
 watched: bool（追蹤旗標）
 call_memo: { ...Memo 欄位 }
+call_memo_source: { filename, stored_name, url, size, uploaded_at }（最新逐字稿來源；原檔落地 data/uploads/{id}/）
 patents: [...]（deep-enrich 後有）
 materials: [ { filename, stored_name, url, mime_type, size, uploaded_at } ]（上傳的簡報/介紹/照片，落地在 data/uploads/{id}/，由 /uploads 提供存取）
 materials_summary: 由上傳簡報用 Opus（最新）生成的簡報版簡介（暫存，供逐段審核用）

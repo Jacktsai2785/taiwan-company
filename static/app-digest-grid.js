@@ -757,7 +757,8 @@ const MEMO_FIELDS = [
 function _renderMemoFields(memo) {
   const container = document.getElementById("memo-fields");
   const today = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/\//g, "/");
-  const dateVal = (memo && memo.interview_date) ? memo.interview_date : today;
+  const hasExtractedDate = memo && Object.prototype.hasOwnProperty.call(memo, "interview_date");
+  const dateVal = hasExtractedDate ? (memo.interview_date || "") : today;
 
   const dateField = `
     <div class="memo-fields-grid" style="margin-bottom:10px">
@@ -795,6 +796,7 @@ function openMemoPanel() { openMaterialsPanel(); }
 // Render the 訪談備忘錄 fields into the unified panel (from cache or backend).
 function _loadMemoSection(id) {
   document.getElementById("memo-extract-status").textContent = "";
+  loadMemoSource(id);
   const c = state.companies.find(x => x.id === id);
   if (c && c.call_memo && Object.keys(c.call_memo).length > 0) {
     _renderMemoFields(c.call_memo);
@@ -833,6 +835,51 @@ function downloadMemo() {
   window.location.href = `/api/companies/${id}/memo/download`;
 }
 
+function _renderMemoSource(source) {
+  const card = document.getElementById("memo-source-card");
+  if (!source || !source.filename) {
+    card.style.display = "none";
+    card.innerHTML = "";
+    return;
+  }
+  const size = source.size >= 1024
+    ? `${(source.size / 1024).toFixed(source.size >= 1024 * 1024 ? 0 : 1)} KB`
+    : `${source.size || 0} bytes`;
+  const when = formatTimestamp(source.uploaded_at);
+  card.innerHTML = `
+    <div class="memo-source-info">
+      <span class="memo-source-name" title="${escAttr(source.filename)}">📄 ${escHtml(source.filename)}</span>
+      <span class="memo-source-meta">${escHtml([size, when].filter(Boolean).join(" · "))}</span>
+    </div>
+    <a class="memo-source-action" href="${escAttr(source.url)}" download>下載</a>
+    <button class="memo-source-action" onclick="reextractMemo()">重新分析</button>`;
+  card.style.display = "flex";
+}
+
+async function loadMemoSource(id) {
+  try {
+    const source = await api("GET", `/api/companies/${id}/memo/source`);
+    if (_modalCompanyId === id) _renderMemoSource(source);
+  } catch {
+    if (_modalCompanyId === id) _renderMemoSource({});
+  }
+}
+
+async function reextractMemo() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  const status = document.getElementById("memo-extract-status");
+  status.textContent = "⏳ AI 正在重新分析已保存的逐字稿，較長內容可能需要數分鐘…";
+  try {
+    const fields = await api("POST", `/api/companies/${id}/memo/reextract`);
+    _renderMemoFields(fields);
+    status.textContent = "✅ 重新分析完成，請確認後儲存";
+    alertDone("(!) 逐字稿重新分析完成", "✅ Call Memo 欄位已更新，請確認後儲存");
+  } catch (err) {
+    status.textContent = `❌ ${err.message}`;
+  }
+}
+
 document.getElementById("memo-file-input").addEventListener("change", async function() {
   const file = this.files[0];
   if (!file) return;
@@ -841,7 +888,7 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   if (!id) return;
 
   const status = document.getElementById("memo-extract-status");
-  status.textContent = "⏳ Claude 正在分析逐字稿，約需 30–60 秒…";
+  status.textContent = "⏳ AI 正在從逐字稿產生 Call Memo，較長內容可能需要數分鐘…";
 
   const fd = new FormData();
   fd.append("file", file);
@@ -852,6 +899,8 @@ document.getElementById("memo-file-input").addEventListener("change", async func
     alertDone("(!) 逐字稿分析完成", "✅ 訪談備忘錄欄位已自動填寫，請確認後儲存");
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
+  } finally {
+    await loadMemoSource(id);
   }
 });
 
@@ -1214,4 +1263,3 @@ document.getElementById("materials-file-input").addEventListener("change", async
     status.className = "memo-status-error";
   }
 });
-

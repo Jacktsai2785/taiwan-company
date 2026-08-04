@@ -307,7 +307,7 @@
   <div id="materials-panel-body">
     <div class="materials-tabs">
       <div class="mtab on" data-tab="files" onclick="switchMatTab('files')">檔案<span id="mtab-file-count" class="mtab-count" style="display:none"></span></div>
-      <div class="mtab" data-tab="memo" onclick="switchMatTab('memo')">訪談備忘錄</div>
+      <div class="mtab" data-tab="memo" onclick="switchMatTab('memo')">call memo</div>
     </div>
 
     <!-- 分頁①：上傳檔案（簡報／介紹／照片） -->
@@ -331,11 +331,12 @@
         <button class="memo-tab-btn" onclick="downloadMemo()">⬇ 備忘錄 .docx</button>
       </div>
       <div class="memo-upload-row">
-        <label class="memo-up-btn" for="memo-file-input" title="逐字稿：TXT / PDF / Word">＋ 逐字稿</label>
+        <label class="memo-up-btn" for="memo-file-input" title="選取逐字稿後，AI 會立即分析並填寫 Call Memo（TXT / Markdown / PDF / Word）">＋ 逐字稿 → AI 填 Memo</label>
         <label class="memo-up-btn" for="memo-audio-input" title="錄音：MP3 / WAV / M4A / OGG / WEBM / FLAC">＋ 錄音</label>
       </div>
-      <input type="file" id="memo-file-input" accept=".txt,.pdf,.doc,.docx" style="display:none" />
+      <input type="file" id="memo-file-input" accept=".txt,.md,.pdf,.doc,.docx" style="display:none" />
       <input type="file" id="memo-audio-input" accept=".mp3,.wav,.m4a,.ogg,.webm,.flac,.aac" style="display:none" />
+      <div id="memo-source-card" style="display:none"></div>
       <div id="memo-extract-status"></div>
       <div id="memo-audio-status"></div>
       <div id="memo-transcript-box" style="display:none">
@@ -772,7 +773,7 @@
      順序不可調換 -->
 <script src="/static/app-core.js?v=95"></script>
 <script src="/static/app-sidebar.js?v=94"></script>
-<script src="/static/app-digest-grid.js?v=94"></script>
+<script src="/static/app-digest-grid.js?v=96"></script>
 <script src="/static/app-modal.js?v=94"></script>
 <script src="/static/app-findbiz-upload.js?v=95"></script>
 <script src="/static/app-add-company.js?v=94"></script>

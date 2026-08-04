@@ -1,7 +1,7 @@
 ---
 title: AI 功能清單
 status: living
-last_updated: 2026-06-05
+last_updated: 2026-08-04
 source_repo: ~/taiwan-company
 ---
 
@@ -58,7 +58,8 @@ source_repo: ~/taiwan-company
 - **業務概況與主要風險整合**：生成時把現有公開的「業務概況」「主要風險」一併餵給 Opus，要求**完整保留既有內容 + 補充檔案或訪談讀到的額外資訊/風險**（依來源標「（簡報補充）」「（訪談補充）」），輸出單一整合段；亮點獨立成「## 投資亮點」收進營運綜覽。風險因此只集中一處
 
 ### 3. Call memo 抽取（`memo_extractor.py`）
-- `extract_from_transcript(company_name, transcript)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）
+- `extract_from_transcript(company_name, transcript, source_filename)` — 把訪談逐字稿映射到 24 個結構化欄位（受訪人、財務、客戶、風險、結論…）；Markdown 排除既有摘要、長稿分段抽取，檔名日期只在原文沒有訪談日期時補入
+- 上傳的逐字稿原檔與 metadata 綁定公司保存，可下載並從畫面重新分析；未提及欄位留空，輸出限定台灣繁體中文
 - 配合 `whisper_transcriber.py` 走「音檔 → 逐字稿 → 結構化欄位」的全自動流程
 
 ### 4. 每日新聞 digest（`daily_digest.py`）
