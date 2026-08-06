@@ -104,6 +104,15 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
         second["business_revenue"] = [
             {"fact": "提供乙服務", "quote": "乙", "timestamp": ""}
         ]
+        synthesized = {key: "" for key in memo_extractor._EXTRACT_KEYS}
+        synthesized["business_revenue"] = "提供甲產品，並提供乙服務。"
+        coverage = {
+            key: {"evidence_count": 0, "used_count": 0, "synthesized": False}
+            for key in memo_extractor._EXTRACT_KEYS
+        }
+        coverage["business_revenue"] = {
+            "evidence_count": 2, "used_count": 2, "synthesized": True,
+        }
         with patch(
             "services.memo_extractor._extract_evidence_once",
             new=AsyncMock(side_effect=[first, second]),
@@ -113,6 +122,9 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 {key: [] for key in memo_extractor._EXTRACT_KEYS},
                 {key: [] for key in memo_extractor._EXTRACT_KEYS},
             ]),
+        ), patch(
+            "services.memo_extractor._synthesize_fields_from_evidence",
+            new=AsyncMock(return_value=(synthesized, coverage)),
         ):
             result, audit = await memo_extractor.extract_with_audit(
                 "測試公司", transcript, engine="codex"
@@ -120,12 +132,70 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
 
         evidence = audit["evidence"]
         self.assertEqual(len(evidence["business_revenue"]), 2)
-        self.assertEqual(result["business_revenue"], "提供甲產品；提供乙服務")
-        self.assertTrue(audit["coverage"]["business_revenue"]["complete"])
+        self.assertEqual(result["business_revenue"], "提供甲產品，並提供乙服務。")
+        self.assertTrue(audit["coverage"]["business_revenue"]["synthesized"])
         self.assertEqual(
             [item["id"] for item in evidence["business_revenue"]],
             ["business_revenue:1", "business_revenue:2"],
         )
+
+    def test_safety_net_is_audit_only_when_model_evidence_exists(self):
+        items = [
+            {"id": "headcount:1", "fact": "公司目前約80人。", "quote": "80人"},
+            {
+                "id": "headcount:2",
+                "fact": "八十个人开口等你养",
+                "quote": "八十个人开口等你养",
+                "source": "deterministic_safety_net",
+            },
+        ]
+
+        selected = memo_extractor._deduplicated_facts(items)
+
+        self.assertEqual([item["id"] for item in selected], ["headcount:1"])
+
+    def test_safety_net_never_becomes_published_prose_by_itself(self):
+        items = [{
+            "id": "factory_capacity:1",
+            "fact": "其他半導體公司的產能有限",
+            "quote": "其他半導體公司的產能有限",
+            "source": "deterministic_safety_net",
+        }]
+
+        self.assertEqual(memo_extractor._deduplicated_facts(items), [])
+        self.assertEqual(memo_extractor._fallback_field_text(items), "")
+
+    def test_prose_normalization_removes_broken_punctuation(self):
+        self.assertEqual(
+            memo_extractor._normalize_memo_prose("第一句。；第二句；。第三句。。"),
+            "第一句。第二句。第三句。",
+        )
+
+    async def test_synthesis_requires_valid_evidence_ids(self):
+        evidence = {key: [] for key in memo_extractor._EXTRACT_KEYS}
+        evidence["business_revenue"] = [
+            {
+                "id": "business_revenue:1",
+                "fact": "公司提供企業軟體開發服務。",
+                "quote": "提供企業軟體開發服務",
+                "timestamp": "00:01:00",
+            }
+        ]
+        response = {
+            "business_revenue": {
+                "text": "公司提供企業軟體開發服務。",
+                "evidence_ids": ["business_revenue:1"],
+            }
+        }
+        with patch(
+            "services.memo_extractor.claude_client.ask",
+            return_value=__import__("json").dumps(response, ensure_ascii=False),
+        ):
+            result = await memo_extractor._synthesize_field_group(
+                "測試公司", ("business_revenue",), evidence, "codex"
+            )
+
+        self.assertEqual(result, response)
 
 
 if __name__ == "__main__":

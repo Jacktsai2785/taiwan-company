@@ -47,7 +47,31 @@ _EXTRACT_KEYS = [f[0] for f in _EXTRACT_FIELDS]
 
 _CHUNK_CHARS = 12000
 _CHUNK_OVERLAP = 500
-PROMPT_VERSION = "evidence-v5-general"
+PROMPT_VERSION = "evidence-v6.1-synthesized"
+
+# Keep each synthesis prompt focused enough that the model can actually edit
+# prose instead of falling back to copying a long evidence dump.  Evidence is
+# still stored in full in the audit file; these groups only control the final
+# presentation pass.
+_SYNTHESIS_GROUPS: tuple[tuple[str, ...], ...] = (
+    (
+        "deal_source", "interviewees", "paid_in_capital", "address",
+        "founding_date", "underwriter", "auditor", "chairman",
+        "general_manager", "headcount",
+    ),
+    (
+        "ipo_timeline", "investment_terms", "financials",
+        "board_shareholding",
+    ),
+    (
+        "business_revenue", "recent_development", "major_customers",
+        "major_suppliers", "factory_capacity",
+    ),
+    (
+        "management_team", "competitors", "industry_trends",
+        "risk_tracking", "conclusion",
+    ),
+)
 
 _QUESTION_CUES = re.compile(r"(?:有沒有|有没有|是不是|會不會|会不会|你覺得|你觉得|嗎|吗|[?？])(?:[。.!！]?)$")
 _THIRD_PARTY_EXAMPLE_CUES = re.compile(r"(?:比如|例如|假設|假设|uber|wechat|特斯拉)", re.I)
@@ -146,7 +170,11 @@ async def extract_with_audit(
         for chunk in candidate_chunks if chunk.strip()
     ))
     chunk_results.extend([[result] for result in candidate_results])
-    chunk_results.append([_deterministic_material_evidence(transcript)])
+    deterministic = _deterministic_material_evidence(transcript)
+    for items in deterministic.values():
+        for item in items:
+            item["source"] = "deterministic_safety_net"
+    chunk_results.append([deterministic])
     for parts in chunk_results:
         for part in parts:
             for key, items in part.items():
@@ -170,7 +198,9 @@ async def extract_with_audit(
             for index, item in enumerate(evidence[key], start=1)
         ]
 
-    fields, coverage = _render_from_evidence(evidence_by_id)
+    fields, coverage = await _synthesize_fields_from_evidence(
+        company_name, evidence_by_id, engine
+    )
     if not fields["interview_date"]:
         fields["interview_date"] = infer_date_from_filename(source_filename)
     return fields, {
@@ -354,41 +384,167 @@ def _validated_evidence(data: dict, transcript: str) -> dict:
     return result
 
 
-def _render_from_evidence(
+def _deduplicated_facts(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Select readable evidence and remove exact/containment duplicates.
+
+    Verbatim safety-net captures are always audit-only. They help reviewers find
+    possible omissions, but lack the semantic judgment required for publication
+    (for example, a third-party factory example can mention "產能").
+    """
+    selected: list[dict[str, str]] = []
+    normalized_facts: list[str] = []
+    model_items = [
+        item for item in items
+        if item.get("source") != "deterministic_safety_net"
+    ]
+    for item in model_items:
+        fact = str(item.get("fact") or "").strip()
+        normalized = _normalized_text(fact)
+        if not normalized:
+            continue
+        contained_at = next(
+            (i for i, existing in enumerate(normalized_facts)
+             if normalized in existing or existing in normalized),
+            None,
+        )
+        if contained_at is None:
+            selected.append(item)
+            normalized_facts.append(normalized)
+        elif len(normalized) > len(normalized_facts[contained_at]):
+            selected[contained_at] = item
+            normalized_facts[contained_at] = normalized
+    return selected
+
+
+def _fallback_field_text(items: list[dict[str, str]], limit: int = 8) -> str:
+    """Readable non-AI fallback: no duplicated sentence terminators or raw flood."""
+    facts = []
+    for item in _deduplicated_facts(items):
+        fact = str(item.get("fact") or "").strip().rstrip("。；; ")
+        if fact:
+            facts.append(fact)
+        if len(facts) >= limit:
+            break
+    return ("；".join(facts) + "。") if facts else ""
+
+
+def _interview_date_from_evidence(items: list[dict[str, str]]) -> str:
+    for item in items:
+        fact = str(item.get("fact") or "")
+        match = re.search(r"\b(20\d{2})[/-](\d{1,2})[/-](\d{1,2})\b", fact)
+        if not match:
+            continue
+        try:
+            return datetime.strptime(
+                "/".join(match.groups()), "%Y/%m/%d"
+            ).strftime("%Y/%m/%d")
+        except ValueError:
+            continue
+    return ""
+
+
+async def _synthesize_fields_from_evidence(
+    company_name: str,
     evidence: dict[str, list[dict[str, str]]],
-) -> tuple[dict, dict]:
-    """Render every verified fact deterministically so synthesis cannot omit it."""
-    fields: dict[str, str] = {}
+    engine: str,
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """Turn verified evidence into concise, readable Call Memo prose.
+
+    The model may select and merge evidence, but every non-empty field must cite
+    at least one valid evidence ID. Raw evidence remains in the audit payload.
+    """
+    fields = {key: "" for key in _EXTRACT_KEYS}
     coverage: dict[str, dict] = {}
-    for key in _EXTRACT_KEYS:
-        items = evidence[key]
-        facts: list[str] = []
-        normalized_facts: list[str] = []
-        used_ids: list[str] = []
-        for item in items:
-            normalized = _normalized_text(item["fact"])
-            if normalized:
-                # Collapse exact/containment duplicates while keeping the more
-                # informative wording. This does not ask a model to summarize.
-                contained_at = next(
-                    (i for i, existing in enumerate(normalized_facts)
-                     if normalized in existing or existing in normalized),
-                    None,
-                )
-                if contained_at is None:
-                    facts.append(item["fact"])
-                    normalized_facts.append(normalized)
-                elif len(normalized) > len(normalized_facts[contained_at]):
-                    facts[contained_at] = item["fact"]
-                    normalized_facts[contained_at] = normalized
-            used_ids.append(item["id"])
-        fields[key] = "；".join(facts)
-        coverage[key] = {
-            "evidence_count": len(items),
-            "used_count": len(set(used_ids)),
-            "complete": len(set(used_ids)) == len(items),
-        }
+    fields["interview_date"] = _interview_date_from_evidence(
+        evidence["interview_date"]
+    )
+    coverage["interview_date"] = {
+        "evidence_count": len(evidence["interview_date"]),
+        "used_count": 1 if fields["interview_date"] else 0,
+        "synthesized": False,
+    }
+
+    results = await asyncio.gather(*(
+        _synthesize_field_group(company_name, group, evidence, engine)
+        for group in _SYNTHESIS_GROUPS
+    ), return_exceptions=True)
+
+    for group, result in zip(_SYNTHESIS_GROUPS, results):
+        parsed = result if isinstance(result, dict) else {}
+        for key in group:
+            items = evidence[key]
+            valid_ids = {item["id"] for item in items}
+            entry = parsed.get(key) if isinstance(parsed, dict) else None
+            text = ""
+            used_ids: list[str] = []
+            if isinstance(entry, dict):
+                candidate = str(entry.get("text") or "").strip()
+                cited = entry.get("evidence_ids") or []
+                if isinstance(cited, list):
+                    used_ids = [str(i) for i in cited if str(i) in valid_ids]
+                # A non-empty answer without a real evidence citation is not
+                # trusted. Fall back to bounded deterministic prose instead.
+                if candidate and used_ids:
+                    text = _normalize_memo_prose(candidate)
+            if not text and items:
+                text = _fallback_field_text(items)
+            fields[key] = text
+            coverage[key] = {
+                "evidence_count": len(items),
+                "used_count": len(set(used_ids)),
+                "synthesized": bool(text and used_ids),
+            }
     return fields, coverage
+
+
+async def _synthesize_field_group(
+    company_name: str,
+    keys: tuple[str, ...],
+    evidence: dict[str, list[dict[str, str]]],
+    engine: str,
+) -> dict:
+    payload: dict[str, list[dict[str, str]]] = {}
+    for key in keys:
+        payload[key] = [
+            {"id": item["id"], "fact": item["fact"]}
+            for item in _deduplicated_facts(evidence[key])
+        ]
+
+    prompt = f"""你是台灣私募股權團隊的 Call Memo 編輯。請將「{company_name}」的已驗證事實整理成可直接放進正式備忘錄的欄位文字。
+
+規則：
+1. 只能使用下方 evidence，不得加入外部資訊、推測或常識。
+2. 合併語意重複的事實；不要逐條照抄，不要暴露逐字稿碎片。
+3. 全文使用自然、專業的台灣繁體中文；修正明顯語音辨識用字，但不可改變事實。
+4. 短欄位（姓名、日期、地址、金額）只填直接答案。敘述欄位通常 100–350 字，資訊很多時最多 500 字。
+5. 使用完整句子與正常標點。禁止「。；」「；。」，禁止同一句換句話說重複出現。
+6. 未有 evidence 的欄位輸出空字串。
+7. 每個非空欄位列出實際採用的 evidence_ids；ID 必須來自該欄位。
+8. 只輸出 JSON，格式如下：
+{{"field_key":{{"text":"整理後文字","evidence_ids":["field_key:1"]}}}}
+
+欄位邊界：
+- financials 只放公司已發生的營收、獲利、成長率或明確財務狀況；一般營運風險放 risk_tracking。
+- factory_capacity 只放公司本身的廠房、實體產能、良率或稼動率；軟體交付人力、開發速度及第三方案例均留空。
+- competitors 只整理實際競爭者、替代方案或受訪者明確描述的競爭情境，不要拿公司管理優勢填充。
+
+已驗證 evidence：
+{json.dumps(payload, ensure_ascii=False)}
+"""
+    raw = await asyncio.to_thread(
+        claude_client.ask, prompt, 240, None, engine
+    )
+    data = _json_object(raw)
+    return {key: data.get(key, {}) for key in keys}
+
+
+def _normalize_memo_prose(value: str) -> str:
+    text = re.sub(r"[ \t]+", " ", value or "").strip()
+    text = re.sub(r"。\s*；", "。", text)
+    text = re.sub(r"；\s*。", "。", text)
+    text = re.sub(r"；{2,}", "；", text)
+    text = re.sub(r"。{2,}", "。", text)
+    return text
 
 
 def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:
