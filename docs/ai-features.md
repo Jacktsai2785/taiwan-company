@@ -1,7 +1,7 @@
 ---
 title: AI 功能清單
 status: living
-last_updated: 2026-08-04
+last_updated: 2026-08-05
 source_repo: ~/taiwan-company
 ---
 
@@ -37,7 +37,7 @@ source_repo: ~/taiwan-company
 依 `services/` 反推：
 
 ### 1. 公司清單抽取（`company_extractor.py`）
-- `extract_companies_from_text` — 從 PDF / Word / Excel 抽出的純文字裡，請 AI 判斷哪些字串是「真實公司名」，分 `valid` / `excluded` / `uncertain` 三組
+- `extract_companies_from_text` — 從 PDF / Word / Excel 抽出的純文字裡，依換行邊界切成每批最多 8,000 字元，逐批請 AI 判斷哪些字串是「真實公司名」，最後依原順序合併去重並分成 `valid` / `excluded` / `uncertain` 三組
 - `extract_companies_from_image` — Vision 直接看圖辨識公司名（適合掃描檔、簡報截圖）
 - `suggest_industries_for_companies` — 給一批公司 + 候選產業別，AI 回每家公司的建議分類
 - `suggest_companies_for_industry` — 反向：給產業別與既有名單，建議該產業內值得追蹤的公司

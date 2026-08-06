@@ -79,6 +79,11 @@ def _parse_int(s: str) -> int:
     return int(re.sub(r"[^\d]", "", s) or "0")
 
 
+def _is_no_par_value(value: str) -> bool:
+    """FindBiz 的「無票面金額」是有效狀態，不是數值缺漏。"""
+    return "無票面金額" in (value or "").replace(" ", "")
+
+
 def _is_cloudflare_challenge(html: str) -> bool:
     """Recognize Cloudflare interstitials without confusing them with no results."""
     sample = (html or "").lower()
@@ -361,17 +366,23 @@ async def _run_session(session_id: str) -> None:
             log.info("findbiz detail parsed keys: %s", list(raw.keys()))
             await ctx.close()
 
-        par_value    = _parse_int(raw.get("每股金額(元)", ""))
+        par_raw      = raw.get("每股金額(元)", "")
+        no_par_value = _is_no_par_value(par_raw)
+        par_value    = _parse_int(par_raw)
         total_shares = _parse_int(raw.get("已發行股份總數(股)", ""))
         capital      = _parse_int(raw.get("實收資本額(元)", ""))
 
-        if not par_value and not total_shares:
+        if not no_par_value and not par_value and not total_shares:
             await queue.put({"type": "error", "message": "頁面上找不到每股金額或股份總數"})
             return
 
         # 更新 companies.json，重算持股比例
         updates: dict = {}
-        if par_value:
+        if no_par_value:
+            updates["no_par_value"] = True
+            updates["par_value"] = 0
+        elif par_value:
+            updates["no_par_value"] = False
             updates["par_value"] = par_value
         if total_shares:
             updates["total_shares"] = total_shares
@@ -388,10 +399,15 @@ async def _run_session(session_id: str) -> None:
                     d["ratio"] = round(shares / effective_total, 6)
                 updates["directors"] = directors
             data_store.update_company(company_id, updates)
-            log.info("findbiz: updated company %s par_value=%s total_shares=%s", company_id, par_value, total_shares)
+            log.info(
+                "findbiz: updated company %s par_value=%s no_par_value=%s total_shares=%s",
+                company_id, par_value, no_par_value, total_shares,
+            )
 
         parts = []
-        if par_value:
+        if no_par_value:
+            parts.append("每股金額：無票面金額")
+        elif par_value:
             parts.append(f"每股金額 NT${par_value:,} 元")
         if total_shares:
             parts.append(f"已發行股份 {total_shares:,} 股")

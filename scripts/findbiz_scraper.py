@@ -46,6 +46,10 @@ def _parse_int(s: str) -> int:
     return int(re.sub(r"[^\d]", "", s) or "0")
 
 
+def _is_no_par_value(value: str) -> bool:
+    return "無票面金額" in (value or "").replace(" ", "")
+
+
 async def _parse_detail_page(page) -> dict:
     """從已開啟的 detail page 抽取基本資料 + 董監事。"""
     result = {}
@@ -86,7 +90,9 @@ async def _parse_detail_page(page) -> dict:
 
 def _extract_fields(raw: dict) -> dict:
     """把 findbiz 的中文 key 轉成我們 companies.json 用的 key。"""
-    par   = _parse_int(raw.get("每股金額(元)", ""))
+    par_raw = raw.get("每股金額(元)", "")
+    no_par_value = True if _is_no_par_value(par_raw) else (False if _parse_int(par_raw) else None)
+    par   = _parse_int(par_raw)
     total = _parse_int(raw.get("已發行股份總數(股)", ""))
     cap   = _parse_int(raw.get("實收資本額(元)", ""))
 
@@ -103,13 +109,14 @@ def _extract_fields(raw: dict) -> dict:
 
     return {
         "par_value":    par   or None,
+        "no_par_value": no_par_value,
         "total_shares": total or None,
         "capital":      cap   or None,
         "representative": raw.get("代表人姓名", ""),
         "address":      raw.get("公司所在地", ""),
         "directors_findbiz": directors,   # 獨立 key，不覆蓋原 directors
         # 原始欄位備查
-        "_raw_par":   raw.get("每股金額(元)", ""),
+        "_raw_par":   par_raw,
         "_raw_total": raw.get("已發行股份總數(股)", ""),
     }
 
@@ -176,6 +183,7 @@ async def main():
             c for c in companies
             if c.get("name", "").endswith("股份有限公司")
             and not c.get("par_value")
+            and not c.get("no_par_value")
             and c.get("tax_id")
         ]
         if not missing:
@@ -240,6 +248,10 @@ async def main():
             if not co:
                 continue
             fields: dict = {}
+            if item.get("no_par_value") is not None:
+                fields["no_par_value"] = item["no_par_value"]
+                if item["no_par_value"]:
+                    fields["par_value"] = 0
             if item.get("par_value"):
                 fields["par_value"] = item["par_value"]
             if item.get("total_shares"):

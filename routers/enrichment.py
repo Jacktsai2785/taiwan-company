@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/companies", tags=["enrichment"])
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_WEBSITE_SEARCH_MAX_TURNS = 6
+_WEBSITE_SEARCH_ATTEMPTS = 2
 
 
 def _host_is_public(host: str) -> bool:
@@ -99,7 +101,9 @@ def start_enrichment(company_id: str, engine: str = "") -> bool:
 def _nonempty_fields(d: dict) -> dict:
     """只保留非空/非零欄位。外部 API（g0v/GCIS）全失敗時 gcis 回的是全預設骨架，
     用它整包寫回會洗掉既有的董監事/資本額/代表人等好資料。"""
-    return {k: v for k, v in d.items() if v not in ("", 0, [], None)}
+    # bool 是 int 的子類，False == 0；但 no_par_value=False 是「確定有票面金額」
+    # 的有效狀態，不能當成空值丟掉，否則舊的 True 永遠無法被新資料清除。
+    return {k: v for k, v in d.items() if isinstance(v, bool) or v not in ("", 0, [], None)}
 
 
 class EnrichBatchRequest(BaseModel):
@@ -278,25 +282,49 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
         f"範例輸出：https://example.com"
     )
     try:
-        result = await asyncio.to_thread(
-            claude_client.ask,
-            prompt, 60, ["WebSearch"],
-            ai["engine"], 6,
-        )
+        result = ""
+        for attempt in range(_WEBSITE_SEARCH_ATTEMPTS):
+            try:
+                result = await asyncio.to_thread(
+                    claude_client.ask,
+                    prompt, 60, ["WebSearch"],
+                    ai["engine"], _WEBSITE_SEARCH_MAX_TURNS,
+                )
+                break
+            except Exception as exc:
+                # Reached max turns means the engine and WebSearch were working,
+                # but the agent did not produce its final URL in time. Retry once;
+                # do not misreport this as an unavailable engine.
+                if "reached max turns" not in str(exc).lower() or attempt + 1 >= _WEBSITE_SEARCH_ATTEMPTS:
+                    raise
+                log.info("find-website reached max turns for %s; retrying once", company_id)
+
         url = result.strip().split("\n")[0].strip()
         if not url.startswith("http"):
-            return {"website": ""}
+            return {"website": "", "status": "not_found"}
 
         # 驗證可達性，並擋掉指向私網/本機的 SSRF（逐跳檢查 host）
         if not await _ssrf_safe_reachable(url):
             log.info("find-website URL unreachable or blocked for %s: %s", company_id, url)
-            return {"website": ""}
+            return {"website": "", "status": "candidate_unreachable", "candidate_url": url}
 
-        return {"website": url}
+        return {"website": url, "status": "found"}
     except Exception as exc:
-        # 引擎未就緒/逾時 ≠ 確實查無官網，回 engine_error 讓前端顯示可行動訊息
+        # 搜尋未完成 ≠ 確實查無官網。回傳細分狀態供前端顯示真正原因；
+        # engine_error 暫留作為舊版前端的相容欄位。
         log.warning("find-website failed for %s: %s", company_id, exc)
-        return {"website": "", "engine_error": True}
+        detail = str(exc).lower()
+        if "reached max turns" in detail:
+            status = "search_limit"
+        elif claude_client.classify_ai_error(exc) == "ai_usage_limit":
+            status = "usage_limit"
+        elif "超時" in detail or "timed out" in detail or "timeout" in detail:
+            status = "timeout"
+        elif "尚未登入" in detail or "not logged in" in detail or "authenticate" in detail:
+            status = "auth_error"
+        else:
+            status = "engine_error"
+        return {"website": "", "status": status, "engine_error": True}
 
 
 @router.get("/{company_id}/refresh-gcis")

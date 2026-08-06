@@ -73,6 +73,7 @@ class UpdateRequest(BaseModel):
     capital: int | None = None
     representative: str | None = None
     par_value: int | None = None
+    no_par_value: bool | None = None
     total_shares: int | None = None
     directors: list[dict] | None = None
     address: str | None = None
@@ -671,4 +672,3 @@ def _build_siblings(
             item["represents_legal_entity"] = s.get("represents_legal_entity", "")
         out.append(item)
     return out
-

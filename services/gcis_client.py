@@ -852,11 +852,12 @@ async def fetch_company_data_by_tax_id(tax_id: str) -> dict[str, Any]:
             matched_name = raw_name
             total_shares = _parse_int(show_data.get("已發行股份總數(股)") or "0")
             par_raw = (show_data.get("每股金額(元)") or "").strip()
-            if par_raw == "無票面金額":
+            if "無票面金額" in par_raw.replace(" ", ""):
                 result["no_par_value"] = True
             else:
                 par = _parse_int(par_raw or "0")
                 if par:
+                    result["no_par_value"] = False
                     result["par_value"] = par
             result.update({
                 "representative": show_data.get("代表人姓名", ""),
@@ -919,11 +920,12 @@ async def fetch_company_data(name: str) -> dict[str, Any]:
             show_data = await _fetch_ronny_show(client, show_tax_id)
             if show_data:
                 par_raw = (show_data.get("每股金額(元)") or "").strip()
-                if par_raw == "無票面金額":
+                if "無票面金額" in par_raw.replace(" ", ""):
                     result["no_par_value"] = True   # 明確的無票面金額股，非資料缺失
                 else:
                     par = _parse_int(par_raw or "0")
                     if par and not result.get("par_value"):
+                        result["no_par_value"] = False
                         result["par_value"] = par
                 total = _parse_int(show_data.get("已發行股份總數(股)") or "0")
                 if total and not result.get("total_shares"):
@@ -973,7 +975,9 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
         representative = row.get("代表人姓名", "")
         address = row.get("公司所在地", "")
         capital = _parse_int(row.get("實收資本額(元)") or "0")
-        par_value = _parse_int(row.get("每股金額(元)") or "0")
+        par_raw = str(row.get("每股金額(元)") or "")
+        no_par_value = True if "無票面金額" in par_raw.replace(" ", "") else (False if _parse_int(par_raw) else None)
+        par_value = _parse_int(par_raw or "0")
         total_shares = _parse_int(row.get("已發行股份總數(股)") or "0")
 
         # When total_shares is missing (有限公司 or 股份有限公司 without share data),
@@ -998,6 +1002,7 @@ async def _fetch_ronny(client: httpx.AsyncClient, name: str) -> dict[str, Any] |
             "capital": capital,
             "address": address,
             "par_value": par_value,
+            "no_par_value": no_par_value,
             "total_shares": total_shares,
             "directors": directors,
         }

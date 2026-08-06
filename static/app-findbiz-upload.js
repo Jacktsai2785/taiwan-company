@@ -127,13 +127,35 @@ function refreshGcis() {
   });
 }
 
-// 共用：呼叫 find-website API，回傳 { website } | { website: "" }。
+// 共用：呼叫 find-website API，回傳 website 與可判讀的 status。
 // _showBatchWebsitePrompt（多筆並行）與 _showWebsitePrompt（單筆）都用這個，
 // 差異只在拿到結果後怎麼更新各自的 UI。
 async function _fetchCompanyWebsite(companyId) {
   const findUrl = `/api/companies/${companyId}/find-website?engine=${encodeURIComponent(getAiEngine())}`;
   const r = await fetch(findUrl);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
+}
+
+function _websiteSearchMessage(data) {
+  switch (data.status) {
+    case "search_limit":
+      return { status: "搜尋輪數已達上限", placeholder: "搜尋未完成，可重試或手動填入", hint: "AI 已搜尋但在期限內未完成；系統已自動重試一次。這不代表沒有官網，可稍後重試或手動填入。" };
+    case "timeout":
+      return { status: "AI 搜尋逾時", placeholder: "搜尋逾時，可重試或手動填入", hint: "AI 搜尋逾時（不代表沒有官網），請稍後重試或手動填入。" };
+    case "auth_error":
+      return { status: "AI 引擎尚未登入", placeholder: "請登入引擎或到 ⚙ 換引擎", hint: "目前選擇的 AI 引擎尚未登入，請完成登入或到 ⚙ 更換引擎；也可手動填入。" };
+    case "usage_limit":
+      return { status: "AI 用量已達上限", placeholder: "請稍後重試或到 ⚙ 換引擎", hint: "目前 AI 用量已達上限，請稍後重試或到 ⚙ 更換引擎；也可手動填入。" };
+    case "candidate_unreachable":
+      return { status: "候選網址無法驗證", placeholder: "候選網址無法連線，請手動確認", hint: `AI 找到候選網址${data.candidate_url ? ` ${data.candidate_url}` : ""}，但系統無法確認可連線，請手動確認。` };
+    case "engine_error":
+      return { status: "AI 搜尋失敗", placeholder: "請重試或到 ⚙ 換引擎", hint: "AI 搜尋發生錯誤（不代表沒有官網），請重試或到 ⚙ 更換引擎；也可手動填入。" };
+    default:
+      // 相容尚未更新的後端回應。
+      if (data.engine_error) return { status: "AI 搜尋失敗", placeholder: "請重試或到 ⚙ 換引擎", hint: "AI 搜尋發生錯誤（不代表沒有官網），請重試或到 ⚙ 更換引擎；也可手動填入。" };
+      return { status: "找不到官網", placeholder: "找不到，請手動填入", hint: "AI 搜尋已正常完成，但沒有找到有效官網；若您知道請手動填入（或留空略過）。" };
+  }
 }
 
 function _showBatchWebsitePrompt(companyIds) {
@@ -187,12 +209,10 @@ function _showBatchWebsitePrompt(companyIds) {
             input.value = data.website;
             input.placeholder = "https://example.com";
             if (status) { status.textContent = "找到官網 ✓"; status.className = "bwp-status found"; }
-          } else if (data.engine_error) {
-            input.placeholder = "AI 引擎未就緒，請重試或換引擎";
-            if (status) { status.textContent = "引擎未就緒（非查無）"; status.className = "bwp-status missing"; }
           } else {
-            input.placeholder = "找不到，請手動填入";
-            if (status) { status.textContent = "找不到官網"; status.className = "bwp-status missing"; }
+            const message = _websiteSearchMessage(data);
+            input.placeholder = message.placeholder;
+            if (status) { status.textContent = message.status; status.className = "bwp-status missing"; }
           }
         })
         .catch(() => {
@@ -346,10 +366,8 @@ function _showWebsitePrompt(companyId, opts = {}) {
           if (data.website) {
             input.value = data.website;
             if (hintEl) hintEl.textContent = "提供官網可讓 AI 直接擷取業務資訊，生成更準確的簡介。若無官網可略過。";
-          } else if (data.engine_error) {
-            if (hintEl) hintEl.textContent = "AI 引擎未就緒或逾時（不代表沒有官網），請重試或到 ⚙ 換引擎；也可手動填入。";
           } else {
-            if (hintEl) hintEl.textContent = "找不到官網，若您知道請手動填入（或留空略過）。";
+            if (hintEl) hintEl.textContent = _websiteSearchMessage(data).hint;
           }
           input.focus();
         })

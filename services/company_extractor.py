@@ -14,6 +14,8 @@ from . import claude_client, data_store
 
 log = logging.getLogger("extractor")
 
+_TEXT_CHUNK_CHARS = 8000
+
 
 class ExtractionError(Exception):
     """AI 引擎本身出錯（未登入 / 逾時 / CLI 失敗），而非『檔案裡沒有公司』。
@@ -272,42 +274,74 @@ def build_candidate(name: str, source_label: str) -> dict:
     }
 
 
+def _chunk_text(text: str, max_chars: int = _TEXT_CHUNK_CHARS) -> list[str]:
+    """Split text without dropping content, preferring newline boundaries."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_chars, len(text))
+        if end < len(text):
+            newline = text.rfind("\n", start, end + 1)
+            if newline > start:
+                end = newline + 1
+        chunk = text[start:end]
+        if chunk.strip():
+            chunks.append(chunk)
+        start = end
+    return chunks
+
+
 def _ask_claude(text: str, engine: str = "") -> list[str]:
-    """Ask Claude to extract all company-like names from text."""
+    """Ask the selected AI engine to extract names from every text batch."""
     if not text or len(text.strip()) < 5:
         log.info("Claude skipped: text too short")
         return []
 
-    truncated = text[:8000]
-    prompt = (
-        "請從以下文字中找出所有疑似公司或機構的名稱。\n"
-        "規則：\n"
-        "1. 包含「股份有限公司」或「有限公司」的請完整列出\n"
-        "2. 看起來是公司或組織但沒有標準結尾的名稱也請列出\n"
-        "3. 不要捏造不存在於文字中的名稱\n"
-        "4. 只回傳 JSON 陣列，例如：[\"AA科技股份有限公司\", \"BB有限公司\", \"CC創新\"]\n"
-        "5. 如果文字中沒有任何公司名稱，回傳空陣列 []\n"
-        "6. 不要有任何其他說明文字，只輸出 JSON 陣列\n\n"
-        f"文字內容：\n{truncated}"
-    )
+    chunks = _chunk_text(text)
+    all_names: list[str] = []
+    seen: set[str] = set()
+    for batch_no, chunk in enumerate(chunks, 1):
+        prompt = (
+            "請從以下文字中找出所有疑似公司或機構的名稱。\n"
+            "規則：\n"
+            "1. 包含「股份有限公司」或「有限公司」的請完整列出\n"
+            "2. 看起來是公司或組織但沒有標準結尾的名稱也請列出\n"
+            "3. 不要捏造不存在於文字中的名稱\n"
+            "4. 只回傳 JSON 陣列，例如：[\"AA科技股份有限公司\", \"BB有限公司\", \"CC創新\"]\n"
+            "5. 如果文字中沒有任何公司名稱，回傳空陣列 []\n"
+            "6. 不要有任何其他說明文字，只輸出 JSON 陣列\n\n"
+            f"文字內容：\n{chunk}"
+        )
 
-    try:
-        raw = claude_client.ask(prompt, timeout=90, engine=engine)
-        log.info("Claude response: %s", raw[:300])
+        try:
+            log.info(
+                "Extracting company names: batch %d/%d (%d chars)",
+                batch_no, len(chunks), len(chunk),
+            )
+            raw = claude_client.ask(prompt, timeout=90, engine=engine)
+            log.info("Claude batch %d response: %s", batch_no, raw[:300])
 
-        start = raw.find("[")
-        end = raw.rfind("]")
-        if start != -1 and end > start:
-            try:
-                names = json.loads(raw[start:end + 1])
-                names = [n for n in names if isinstance(n, str) and len(n) >= 3]
-                log.info("Claude extracted %d names: %s", len(names), names)
-                return names
-            except json.JSONDecodeError as e:
-                log.warning("JSON parse failed: %s", e)
-        log.warning("Claude response had no valid JSON array")
-    except Exception as e:
-        log.error("Claude call failed: %s", e)
-        raise ExtractionError(str(e)) from e
+            start = raw.find("[")
+            end = raw.rfind("]")
+            if start != -1 and end > start:
+                try:
+                    names = json.loads(raw[start:end + 1])
+                    names = [n for n in names if isinstance(n, str) and len(n) >= 3]
+                    for name in names:
+                        if name not in seen:
+                            seen.add(name)
+                            all_names.append(name)
+                    log.info("Claude batch %d extracted %d names", batch_no, len(names))
+                    continue
+                except json.JSONDecodeError as e:
+                    log.warning("Batch %d JSON parse failed: %s", batch_no, e)
+            log.warning("Claude batch %d response had no valid JSON array", batch_no)
+        except Exception as e:
+            log.error("Claude batch %d/%d failed: %s", batch_no, len(chunks), e)
+            raise ExtractionError(str(e)) from e
 
-    return []
+    log.info("Claude extracted %d unique names from %d batches", len(all_names), len(chunks))
+    return all_names

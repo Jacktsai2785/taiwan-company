@@ -187,6 +187,7 @@ def create_company(name: str, label: str, industry: str = "", tax_id: str = "") 
         "authorized_capital": 0,
         "representative": "",
         "par_value": 0,
+        "no_par_value": False,
         "total_shares": 0,
         "directors": [],
         "address": "",

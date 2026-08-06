@@ -1,7 +1,7 @@
 ---
 title: 資料流
 status: living
-last_updated: 2026-08-04
+last_updated: 2026-08-05
 source_repo: ~/taiwan-company
 ---
 
@@ -16,7 +16,7 @@ source_repo: ~/taiwan-company
 1. **上傳**（`POST /api/upload`）— 接受 PDF / Word / Excel / 圖片。
    - 圖片走 AI Vision（`extract_companies_from_image`）
    - 文字檔走 `file_parser.extract_text`（PDF / DOCX / XLSX 用各自 lib，圖片型 PDF 走 tesseract OCR）
-   - AI 把文本拆出公司清單，分成 `valid` / `excluded` / `uncertain` 三組
+   - 長文本依換行邊界切成每批最多 8,000 字元，逐批交給 AI；結果依原順序合併去重，再分成 `valid` / `excluded` / `uncertain` 三組
 2. **去重消歧**（`POST /api/companies/name-lookup`）— 對每個候選名稱呼叫 g0v ronnywang 搜尋 API，回最多 5 個候選給前端讓使用者挑（避免「台積電」vs「台積電股份有限公司」這種誤判）。
 3. **確認**（`POST /api/companies/confirm`）— 使用者確認後寫進 `companies.json`，可選同時觸發 `_enrich_company` 背景任務。
 
