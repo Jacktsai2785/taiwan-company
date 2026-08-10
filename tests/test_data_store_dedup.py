@@ -1,3 +1,10 @@
+import json
+import tempfile
+import unittest
+from copy import deepcopy
+from pathlib import Path
+from unittest.mock import patch
+
 from services import data_store
 
 
@@ -92,3 +99,87 @@ def test_create_and_upsert_reuse_existing_legal_entity(monkeypatch, tmp_path):
     assert merged["id"] == first["id"]
     assert merged["summary"] == "補充資料"
     assert len(data_store.get_all_companies()) == 1
+
+
+class CompanyMergeTransactionTests(unittest.TestCase):
+    def _fixture(self, root: Path):
+        companies_file = root / "companies.json"
+        old_store = {
+            "companies": [
+                {"id": "keep", "name": "保留公司", "materials": [{"url": "/uploads/keep/keep.txt"}]},
+                {"id": "drop", "name": "重複公司", "materials": [{"url": "/uploads/drop/drop.txt"}]},
+            ]
+        }
+        companies_file.write_text(json.dumps(old_store, ensure_ascii=False), encoding="utf-8")
+        refs_file = root / "refs.json"
+        refs_file.write_text(json.dumps({"company_id": "drop", "url": "/uploads/drop/drop.txt"}), encoding="utf-8")
+        for company_id, filename, content in (
+            ("keep", "keep.txt", "keep"),
+            ("drop", "drop.txt", "drop"),
+        ):
+            directory = root / "uploads" / company_id
+            directory.mkdir(parents=True)
+            (directory / filename).write_text(content, encoding="utf-8")
+        new_store = deepcopy(old_store)
+        new_store["companies"] = [{
+            "id": "keep",
+            "name": "保留公司",
+            "materials": [
+                {"url": "/uploads/keep/keep.txt"},
+                {"url": "/uploads/keep/drop.txt"},
+            ],
+        }]
+        return companies_file, refs_file, old_store, new_store
+
+    def test_transaction_rolls_back_json_and_uploads_after_partial_move(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companies_file, refs_file, _, new_store = self._fixture(root)
+            before_companies = companies_file.read_bytes()
+            before_refs = refs_file.read_bytes()
+            real_merge = data_store._merge_upload_dirs
+
+            def fail_after_move(id_map):
+                real_merge(id_map)
+                raise RuntimeError("simulated move failure")
+
+            data_store._FILE_CACHE.clear()
+            with patch.object(data_store, "DATA_DIR", root), \
+                 patch.object(data_store, "COMPANIES_FILE", companies_file), \
+                 patch.object(data_store, "_merge_upload_dirs", side_effect=fail_after_move):
+                with self.assertRaisesRegex(RuntimeError, "simulated move failure"):
+                    data_store._commit_company_merge_transaction(new_store, {"drop": "keep"})
+
+            self.assertEqual(companies_file.read_bytes(), before_companies)
+            self.assertEqual(refs_file.read_bytes(), before_refs)
+            self.assertEqual((root / "uploads" / "keep" / "keep.txt").read_text(), "keep")
+            self.assertEqual((root / "uploads" / "drop" / "drop.txt").read_text(), "drop")
+            self.assertFalse(list(root.glob(".company-merge-*")))
+
+    def test_transaction_commits_all_references_and_uploads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companies_file, refs_file, _, new_store = self._fixture(root)
+            data_store._FILE_CACHE.clear()
+            with patch.object(data_store, "DATA_DIR", root), \
+                 patch.object(data_store, "COMPANIES_FILE", companies_file):
+                result = data_store._commit_company_merge_transaction(new_store, {"drop": "keep"})
+
+            saved = json.loads(companies_file.read_text(encoding="utf-8"))
+            refs = json.loads(refs_file.read_text(encoding="utf-8"))
+            self.assertEqual([company["id"] for company in saved["companies"]], ["keep"])
+            self.assertEqual(refs["company_id"], "keep")
+            self.assertEqual(refs["url"], "/uploads/keep/drop.txt")
+            self.assertTrue((root / "uploads" / "keep" / "keep.txt").exists())
+            self.assertTrue((root / "uploads" / "keep" / "drop.txt").exists())
+            self.assertFalse((root / "uploads" / "drop").exists())
+            self.assertEqual(result["external_refs_rewritten"], 2)
+
+    def test_transaction_rejects_upload_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companies_file, _, _, new_store = self._fixture(root)
+            with patch.object(data_store, "DATA_DIR", root), \
+                 patch.object(data_store, "COMPANIES_FILE", companies_file):
+                with self.assertRaises(ValueError):
+                    data_store._commit_company_merge_transaction(new_store, {"../drop": "keep"})

@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import uuid
 from copy import deepcopy
@@ -344,22 +345,116 @@ def _merge_upload_dirs(id_map: dict[str, str]) -> int:
     return moved
 
 
-def _rewrite_external_company_refs(id_map: dict[str, str]) -> tuple[int, list[str]]:
+def _plan_external_company_refs(id_map: dict[str, str]) -> tuple[dict[Path, dict], int]:
+    """Build external JSON rewrites without mutating the shared read cache."""
+    planned: dict[Path, dict] = {}
     count = 0
-    changed_files: list[str] = []
     for path in DATA_DIR.glob("*.json"):
         if path == COMPANIES_FILE:
             continue
         try:
-            data = _read(path, {})
-            data, n = _rewrite_company_id_refs(data, id_map)
+            data = deepcopy(_read(path, {}))
+            data, changed = _rewrite_company_id_refs(data, id_map)
         except Exception:
             continue
-        if n:
-            _write(path, data)
-            count += n
-            changed_files.append(path.name)
-    return count, changed_files
+        if changed:
+            planned[path] = data
+            count += changed
+    return planned, count
+
+
+def _safe_upload_dir(company_id: str) -> Path:
+    """Resolve one upload directory without allowing IDs to escape DATA_DIR/uploads."""
+    company_id = str(company_id or "")
+    if not company_id or Path(company_id).name != company_id or company_id in {".", ".."}:
+        raise ValueError(f"invalid company id for upload migration: {company_id!r}")
+    return DATA_DIR / "uploads" / company_id
+
+
+def _restore_file_bytes(path: Path, content: bytes | None) -> None:
+    """Rollback helper using the same-directory replace guarantee as _write."""
+    if content is None:
+        if path.exists():
+            path.unlink()
+        with _CACHE_LOCK:
+            _FILE_CACHE.pop(path, None)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".rollback.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        tmp.write_bytes(content)
+        os.replace(tmp, path)
+        with _CACHE_LOCK:
+            _FILE_CACHE.pop(path, None)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _commit_company_merge_transaction(store: dict, id_map: dict[str, str]) -> dict:
+    """Commit company, external-reference and upload-directory rewrites as one
+    recoverable transaction. POSIX cannot atomically rename several files and
+    directories together, so every touched target is snapshotted first and fully
+    restored if any write/move fails.
+    """
+    external_plan, external_refs = _plan_external_company_refs(id_map)
+    json_plan = {COMPANIES_FILE: store, **external_plan}
+    upload_paths = {
+        _safe_upload_dir(company_id)
+        for pair in id_map.items()
+        for company_id in pair
+    }
+    json_backups = {
+        path: path.read_bytes() if path.exists() else None
+        for path in json_plan
+    }
+
+    uploads_root = DATA_DIR / "uploads"
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".company-merge-", dir=DATA_DIR) as tmp_name:
+        backup_root = Path(tmp_name) / "uploads"
+        upload_backups: dict[Path, Path | None] = {}
+        for index, path in enumerate(sorted(upload_paths, key=str)):
+            if path.exists():
+                backup = backup_root / str(index)
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(path, backup)
+                upload_backups[path] = backup
+            else:
+                upload_backups[path] = None
+
+        try:
+            for path, data in json_plan.items():
+                _write(path, data)
+            upload_files_moved = _merge_upload_dirs(id_map)
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            for path, content in json_backups.items():
+                try:
+                    _restore_file_bytes(path, content)
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{path.name}: {rollback_exc}")
+            for path, backup in upload_backups.items():
+                try:
+                    if path.exists():
+                        shutil.rmtree(path)
+                    if backup is not None:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(backup, path)
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{path}: {rollback_exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "company merge failed and rollback was incomplete: "
+                    + "; ".join(rollback_errors)
+                ) from exc
+            raise
+
+    return {
+        "external_refs_rewritten": external_refs,
+        "changed_files": [path.name for path in external_plan],
+        "upload_files_moved": upload_files_moved,
+    }
 
 
 def deduplicate_companies(*, dry_run: bool = True) -> dict:
@@ -409,17 +504,13 @@ def deduplicate_companies(*, dry_run: bool = True) -> dict:
         new_companies, internal_refs = _rewrite_company_id_refs(new_companies, id_map)
         stale_competitor_refs = _repair_competitor_company_refs(new_companies)
         store["companies"] = new_companies
-        _write(COMPANIES_FILE, store)
-        upload_files_moved = _merge_upload_dirs(id_map)
-        external_refs, changed_files = _rewrite_external_company_refs(id_map)
+        transaction = _commit_company_merge_transaction(store, id_map)
         result.update({
             "rows_after": len(new_companies),
             "id_map": id_map,
             "internal_refs_rewritten": internal_refs,
             "stale_competitor_refs_repaired": stale_competitor_refs,
-            "external_refs_rewritten": external_refs,
-            "changed_files": changed_files,
-            "upload_files_moved": upload_files_moved,
+            **transaction,
         })
         return result
 
@@ -452,9 +543,7 @@ def upsert_company(company: dict) -> dict:
             companies.append(merged)
             companies, _ = _rewrite_company_id_refs(companies, id_map)
             store["companies"] = companies
-            _write(COMPANIES_FILE, store)
-            _merge_upload_dirs(id_map)
-            _rewrite_external_company_refs(id_map)
+            _commit_company_merge_transaction(store, id_map)
             return merged
         if idx is not None:
             companies[idx] = company
