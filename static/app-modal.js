@@ -227,6 +227,12 @@ async function openModal(id) {
   _refreshModalBookmarks();
   showModalSection("info");   // default page
 
+  // When opened from an industry-map company chip, the detail modal is the
+  // next layer in the user's drill-down path. Raise it above the map while
+  // keeping the map mounted underneath so closing detail returns to the same
+  // map, focus and scroll position.
+  const fromIndustryMap = document.getElementById("industry-map-overlay")?.classList.contains("open");
+  document.body.classList.toggle("industry-map-detail-open", !!fromIndustryMap);
   openOverlay("modal-overlay");
   document.body.classList.add("detail-open");
 }

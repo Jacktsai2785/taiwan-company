@@ -42,7 +42,9 @@ def get_industry_map(industry: str):
     data = industry_map.load_map(industry)
     if not data:
         raise HTTPException(status_code=404, detail="尚未生成")
-    return data
+    # Layout is cached, but collection status is live.  A newly added company
+    # should become clickable without spending another AI map generation.
+    return industry_map.reconcile_company_ids(data)
 
 
 @router.delete("/{industry}")
@@ -151,13 +153,15 @@ class SubdivideRequest(BaseModel):
 def subdivide_industry(industry: str, req: SubdivideRequest):
     """把使用者確認過的分組收成子產業：先備份 → retag companies + 建子產業/掛樹 →
     讓 parent 的舊快取地圖失效（下次打開會以父模式重生成總覽）。"""
-    groups = [
+    requested_groups = [
         {"name": (g.get("name") or "").strip(), "company_ids": g.get("company_ids") or []}
         for g in req.groups
         if (g.get("name") or "").strip() and (g.get("company_ids") or [])
     ]
+    groups, validation_warnings = industry_map.validate_subdivision_groups(requested_groups)
     if not groups:
-        raise HTTPException(status_code=422, detail="沒有可收成子產業的分組")
+        detail = "沒有通過分類證據檢查、可收成子產業的分組" if requested_groups else "沒有可收成子產業的分組"
+        raise HTTPException(status_code=422, detail=detail)
 
     _run_backup()
     result = data_store.apply_subdivision(industry, groups)
@@ -167,6 +171,7 @@ def subdivide_industry(industry: str, req: SubdivideRequest):
         "industry": industry,
         "tree": data_store.get_industry_tree(),
         "industries": data_store.get_industries(),
+        "validation_warnings": validation_warnings,
         **result,
     }
 

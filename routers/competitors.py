@@ -64,7 +64,8 @@ def get_competitor_graph(company_id: str):
         add_node(node_id, _short(name), "competitor",
                  name=name, in_db=in_db, company_id=cid or "",
                  listing_status=comp.get("listing_status", ""),
-                 core_biz=comp.get("core_biz", ""))
+                 core_biz=comp.get("core_biz", ""),
+                 source_url=comp.get("source_url", ""))
         add_edge(self_id, node_id)
 
     # Reverse lookup: companies in DB that list this company as their competitor
@@ -141,9 +142,11 @@ def relink_competitors():
     """
     all_cos = data_store.get_all_companies()
     name_to_id: dict[str, str] = {}
+    id_to_website: dict[str, str] = {}
     for c in all_cos:
         name_to_id[c["name"]] = c["id"]
         name_to_id[_short(c["name"])] = c["id"]
+        id_to_website[c["id"]] = c.get("website") or ""
     updated_companies = 0
     resolved_links = 0
     for co in all_cos:
@@ -169,19 +172,20 @@ def relink_competitors():
 @router.post("/backfill-competitors")
 def backfill_competitors():
     """
-    One-shot: parse existing summaries that have no competitors field yet,
-    fill structured competitors data, and resolve company_id cross-references.
-    Returns a summary of how many companies were updated.
+    Re-parse existing summaries into structured competitor data, including explicit
+    source URLs embedded in Markdown company links. URLs are extracted only; this
+    endpoint never searches for or guesses missing sources.
     """
     all_cos = data_store.get_all_companies()
     name_to_id: dict[str, str] = {}
+    id_to_website: dict[str, str] = {}
     for c in all_cos:
         name_to_id[c["name"]] = c["id"]
         name_to_id[_short(c["name"])] = c["id"]
-    updated = 0
+        id_to_website[c["id"]] = c.get("website") or ""
+    updates: dict[str, dict] = {}
+    linked_rows = 0
     for co in all_cos:
-        if co.get("competitors") is not None:
-            continue
         summary = co.get("summary") or ""
         if not summary:
             continue
@@ -191,9 +195,15 @@ def backfill_competitors():
         for comp in comps:
             n = comp.get("name", "")
             comp["company_id"] = name_to_id.get(n) or name_to_id.get(_short(n)) or None
-        data_store.update_company(co["id"], {"competitors": comps})
-        updated += 1
-    return {"updated": updated, "total": len(all_cos)}
+            if not comp.get("source_url") and comp["company_id"]:
+                website = id_to_website.get(comp["company_id"], "")
+                comp["source_url"] = website if re.match(r"^https?://[^\s]+$", website, re.I) else ""
+        current = [dict(comp, source_url=comp.get("source_url") or "") for comp in (co.get("competitors") or [])]
+        if comps != current:
+            updates[co["id"]] = {"competitors": comps}
+            linked_rows += sum(bool(comp.get("source_url")) for comp in comps)
+    updated = data_store.update_companies_fields(updates)
+    return {"updated": updated, "source_urls": linked_rows, "total": len(all_cos)}
 
 
 class AddCompetitorRequest(BaseModel):
@@ -222,6 +232,9 @@ async def add_competitor(company_id: str, req: AddCompetitorRequest, ai: dict = 
     # listing is already resolved in analyze_competitor, so don't run the downgrading
     # _fix_competitor_listing here (it would clobber short/unmatched names to 非公發).
     row_name = analysis.get("full_name") or name
+    source_url = analysis.get("source_url") or ""
+    if source_url:
+        row_name = f"[{row_name}]({source_url})"
     row = f"| {row_name} | {analysis['core_biz']} | {analysis['differentiation']} | {analysis['listing']} | {ctype} |"
     new_summary = _insert_competitor_row(company.get("summary", ""), row)
     if new_summary == company.get("summary", ""):

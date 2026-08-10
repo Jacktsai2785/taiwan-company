@@ -46,6 +46,48 @@ function _proseParagraphs(text) {
   return parts.map(s => `<p>${s}</p>`).join("");
 }
 
+// Older/generated summaries use two competing shapes after the competitor
+// table: either two named groups, or a flat list whose every bullet repeats
+// 「相對優勢／相對挑戰」. Canonicalise the latter before rendering so every
+// company gets the same visual hierarchy without rewriting stored research.
+function _normalizeCompetitiveAnalysis(text) {
+  const lines = String(text || "").split("\n");
+  const start = lines.findIndex(line => /^##\s+競業分析\s*$/.test(line.trim()));
+  if (start < 0) return text;
+  let end = lines.findIndex((line, i) => i > start && /^##\s+/.test(line.trim()));
+  if (end < 0) end = lines.length;
+
+  const advantages = [];
+  const challenges = [];
+  let first = -1;
+  const remove = new Set();
+  const labelledBullet = /^[-*•]\s+\*\*(?:本案)?相對(優勢|劣勢(?:或挑戰)?|挑戰)\s*\*\*[：:]?\s*(.+)$/;
+  for (let i = start + 1; i < end; i++) {
+    const match = lines[i].trim().match(labelledBullet);
+    if (!match) continue;
+    if (first < 0) first = i;
+    remove.add(i);
+    (match[1] === "優勢" ? advantages : challenges).push(match[2].trim());
+  }
+  if (first < 0) return text;
+
+  const canonical = [];
+  if (advantages.length) {
+    canonical.push("**本案相對優勢：**", "", ...advantages.map(item => `- ${item}`));
+  }
+  if (challenges.length) {
+    if (canonical.length) canonical.push("");
+    canonical.push("**相對劣勢或挑戰：**", "", ...challenges.map(item => `- ${item}`));
+  }
+
+  const result = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === first) result.push(...canonical);
+    if (!remove.has(i)) result.push(lines[i]);
+  }
+  return result.join("\n");
+}
+
 function renderSummary(raw, matHeadings) {
   // Drop any preamble before the first ## heading (e.g. Claude status messages)
   // Also drop "## 公司名稱 公司簡介" opening title if present
@@ -54,6 +96,7 @@ function renderSummary(raw, matHeadings) {
   const hasLeadingJunk = !text.trimStart().startsWith("##") && firstHeading !== -1;
   if (hasLeadingJunk) text = text.slice(firstHeading + 1);
   text = text.trimStart();
+  text = _normalizeCompetitiveAnalysis(text);
 
   const lines = text.split("\n");
   const out = [];
@@ -85,12 +128,17 @@ function renderSummary(raw, matHeadings) {
           // 一格可能塞多家（如「雙鴻（3324）／奇鋐（3017）」）→ 拆成各自獨立的 chip，
           // 每家自己一個＋、自己可點，新增流程就只會加被點的那一家；每個 chip 各自收 3 行。
           const chips = _splitCompCell(content).map(tok => {
-            const disp = _displayCompName(tok);
-            const rawName = tok.replace(/（[^）]*）/g, "").trim();
+            const linked = _markdownLinkParts(tok);
+            const companyText = linked ? linked.label : tok;
+            const disp = _displayCompName(companyText);
+            const rawName = companyText.replace(/（[^）]*）/g, "").trim();
             const alreadyAdded = state.companies.some(co => _coreName(co.name) === _coreName(rawName));
             const cls   = (alreadyAdded ? "competitor-chip competitor-chip--added" : "competitor-chip") + " comp-clamp";
             const title = alreadyAdded ? "已在清單中，點擊開啟" : "點擊新增此公司";
-            return `<span class="${cls}" data-cname="${escHtml(rawName)}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span>`;
+            const source = linked
+              ? `<a class="comp-source-link" href="${escAttr(linked.href)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="開啟公司來源">↗</a>`
+              : "";
+            return `<span class="comp-source-wrap"><span class="${cls}" data-cname="${escHtml(rawName)}" data-added="${alreadyAdded}" onclick="handleCompetitorChip(this)" title="${title}">${inlineMarkdown(disp)}</span>${source}</span>`;
           }).join("");
           return `<td><div class="comp-name-cell">${chips}</div></td>`;
         }
@@ -273,9 +321,22 @@ function renderSummary(raw, matHeadings) {
 }
 
 function inlineMarkdown(str) {
-  return escHtml(str)
+  const links = [];
+  const tokenised = String(str || "").replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_, label, href) => {
+    const token = `\uE000MDLINK${links.length}\uE001`;
+    links.push(`<a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">${escHtml(label)}</a>`);
+    return token;
+  });
+  let html = escHtml(tokenised)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>");
+  links.forEach((link, i) => { html = html.replace(`\uE000MDLINK${i}\uE001`, link); });
+  return html;
+}
+
+function _markdownLinkParts(str) {
+  const match = String(str || "").trim().match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/i);
+  return match ? { label: match[1].trim(), href: match[2] } : null;
 }
 
 // Inline SVG paperclip (consistent across OSes, unlike the 📎 emoji which renders

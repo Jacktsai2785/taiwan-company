@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import shutil
 import threading
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -160,20 +162,318 @@ def find_company_by_name_or_tax_id(name: str, tax_id: str = "") -> dict | None:
     return None
 
 
+_MERGE_UNION_FIELDS = {
+    "labels", "industries", "materials_applied_headings", "call_memo_runs",
+}
+_MERGE_CURATED_FIELDS = (
+    "materials", "call_memo", "patents", "relationship_graph",
+    "materials_summary", "materials_blurb", "deep_enriched_at",
+)
+
+
+def _company_merge_rank(company: dict) -> tuple:
+    """Prefer records carrying irreplaceable user work, then completed/new data."""
+    curated = sum(bool(company.get(k)) for k in _MERGE_CURATED_FIELDS)
+    enriched_ok = company.get("enrich_status") == "ok"
+    updated = max(
+        str(company.get("deep_enriched_at") or ""),
+        str(company.get("enriched_at") or ""),
+        str(company.get("last_updated") or ""),
+    )
+    return curated, enriched_ok, updated, len(company.get("summary") or "")
+
+
+def _merge_list_values(field: str, records: list[dict]) -> list:
+    values: list = []
+    seen: set[str] = set()
+
+    def key(value: Any) -> str:
+        if not isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if field == "competitors":
+            tax = str(value.get("tax_id") or "").strip()
+            name = normalize_company_name(clean_company_name(value.get("name") or ""))
+            return f"tax:{tax}" if tax else f"name:{name}"
+        if field == "patents":
+            return str(value.get("patent_no") or value.get("app_no") or value.get("title") or json.dumps(value, ensure_ascii=False, sort_keys=True))
+        if field == "materials":
+            return str(value.get("stored_name") or value.get("filename") or value.get("url") or json.dumps(value, ensure_ascii=False, sort_keys=True))
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    for record in records:
+        for value in record.get(field) or []:
+            marker = key(value)
+            if marker not in seen:
+                seen.add(marker)
+                values.append(deepcopy(value))
+    return values
+
+
+def _merge_company_records(primary: dict, records: list[dict]) -> dict:
+    """Merge duplicate legal-entity rows without discarding user-created fields.
+
+    ``primary`` wins scalar conflicts. Empty scalar fields are backfilled from
+    donors; list-like evidence is unioned; watched is true if any copy is watched.
+    """
+    ordered = [primary] + [r for r in records if r.get("id") != primary.get("id")]
+    merged = deepcopy(primary)
+    all_fields = {k for record in ordered for k in record}
+
+    for field in all_fields:
+        if field == "id":
+            continue
+        values = [record.get(field) for record in ordered]
+        if field in _MERGE_UNION_FIELDS or any(isinstance(v, list) for v in values if v is not None):
+            # Directors are a current government snapshot, not cumulative history.
+            if field == "directors":
+                if not merged.get(field):
+                    merged[field] = deepcopy(next((v for v in values if v), []))
+            else:
+                merged[field] = _merge_list_values(field, ordered)
+        elif field == "watched":
+            merged[field] = any(v is True for v in values)
+        elif any(isinstance(v, dict) for v in values if v is not None):
+            combined: dict = {}
+            for value in reversed(values):
+                if isinstance(value, dict):
+                    combined.update(deepcopy(value))
+            merged[field] = combined
+        elif merged.get(field) in (None, "", 0):
+            replacement = next((v for v in values[1:] if v not in (None, "", 0)), None)
+            if replacement is not None:
+                merged[field] = deepcopy(replacement)
+
+    donor_ids = [r["id"] for r in records if r.get("id") and r.get("id") != primary.get("id")]
+    prior = [
+        old_id
+        for record in records
+        for old_id in (record.get("merged_from_ids") or [])
+        if old_id != primary.get("id")
+    ]
+    merged["merged_from_ids"] = list(dict.fromkeys([*prior, *donor_ids]))
+    merged["merged_at"] = datetime.now(timezone.utc).isoformat()
+    merged["last_updated"] = merged["merged_at"]
+    return merged
+
+
+def _rewrite_company_id_refs(value: Any, id_map: dict[str, str]) -> tuple[Any, int]:
+    """Recursively rewrite exact IDs and /uploads/{id}/ URL path segments."""
+    changed = 0
+    if isinstance(value, dict):
+        for key, child in list(value.items()):
+            # Audit history, not a live foreign-key reference.
+            if key == "merged_from_ids":
+                continue
+            new_child, count = _rewrite_company_id_refs(child, id_map)
+            value[key] = new_child
+            changed += count
+        return value, changed
+    if isinstance(value, list):
+        for i, child in enumerate(value):
+            value[i], count = _rewrite_company_id_refs(child, id_map)
+            changed += count
+        return value, changed
+    if isinstance(value, str):
+        if value in id_map:
+            return id_map[value], 1
+        new_value = value
+        for old, new in id_map.items():
+            new_value = new_value.replace(f"/uploads/{old}/", f"/uploads/{new}/")
+        return new_value, int(new_value != value)
+    return value, 0
+
+
+def _repair_competitor_company_refs(companies: list[dict]) -> int:
+    """Repair stale competitor IDs only when tax ID or normalized name is exact."""
+    by_id = {c.get("id"): c for c in companies if c.get("id")}
+    by_tax = {
+        str(c.get("tax_id") or "").strip(): c
+        for c in companies
+        if str(c.get("tax_id") or "").strip()
+    }
+    by_name: dict[str, dict] = {}
+    ambiguous_names: set[str] = set()
+    for company in companies:
+        name = normalize_company_name(clean_company_name(company.get("name") or ""))
+        if not name:
+            continue
+        if name in by_name and by_name[name].get("id") != company.get("id"):
+            ambiguous_names.add(name)
+        else:
+            by_name[name] = company
+
+    changed = 0
+    for company in companies:
+        for competitor in company.get("competitors") or []:
+            if not isinstance(competitor, dict):
+                continue
+            old_id = competitor.get("company_id")
+            if not old_id or old_id in by_id:
+                continue
+            tax_id = str(competitor.get("tax_id") or "").strip()
+            name = normalize_company_name(clean_company_name(competitor.get("name") or ""))
+            match = by_tax.get(tax_id) if tax_id else None
+            if match is None and name and name not in ambiguous_names:
+                match = by_name.get(name)
+            if match and match.get("id") != old_id:
+                competitor["company_id"] = match["id"]
+                changed += 1
+    return changed
+
+
+def _merge_upload_dirs(id_map: dict[str, str]) -> int:
+    uploads = DATA_DIR / "uploads"
+    moved = 0
+    for old, new in id_map.items():
+        source = uploads / old
+        target = uploads / new
+        if not source.exists():
+            continue
+        if not target.exists():
+            source.replace(target)
+            moved += 1
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        for item in source.iterdir():
+            destination = target / item.name
+            if destination.exists():
+                destination = target / f"merged_{old[:8]}_{item.name}"
+            shutil.move(str(item), str(destination))
+            moved += 1
+        source.rmdir()
+    return moved
+
+
+def _rewrite_external_company_refs(id_map: dict[str, str]) -> tuple[int, list[str]]:
+    count = 0
+    changed_files: list[str] = []
+    for path in DATA_DIR.glob("*.json"):
+        if path == COMPANIES_FILE:
+            continue
+        try:
+            data = _read(path, {})
+            data, n = _rewrite_company_id_refs(data, id_map)
+        except Exception:
+            continue
+        if n:
+            _write(path, data)
+            count += n
+            changed_files.append(path.name)
+    return count, changed_files
+
+
+def deduplicate_companies(*, dry_run: bool = True) -> dict:
+    """Collapse duplicate non-empty tax IDs and rewrite every known ID reference."""
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        companies, _ = _ensure_industries_field(store["companies"])
+        by_tax: dict[str, list[dict]] = {}
+        for company in companies:
+            tax_id = str(company.get("tax_id") or "").strip()
+            if tax_id:
+                by_tax.setdefault(tax_id, []).append(company)
+        groups = {tax: rows for tax, rows in by_tax.items() if len(rows) > 1}
+
+        plan: list[dict] = []
+        id_map: dict[str, str] = {}
+        merged_by_primary: dict[str, dict] = {}
+        for tax_id, rows in sorted(groups.items()):
+            primary = max(rows, key=_company_merge_rank)
+            merged_by_primary[primary["id"]] = _merge_company_records(primary, rows)
+            donors = [r["id"] for r in rows if r["id"] != primary["id"]]
+            id_map.update({donor: primary["id"] for donor in donors})
+            plan.append({
+                "tax_id": tax_id,
+                "primary_id": primary["id"],
+                "primary_name": primary.get("name", ""),
+                "donor_ids": donors,
+                "labels": merged_by_primary[primary["id"]].get("labels", []),
+                "industries": company_industries(merged_by_primary[primary["id"]]),
+            })
+
+        result = {
+            "duplicate_groups": len(groups),
+            "rows_before": len(companies),
+            "rows_to_remove": len(id_map),
+            "plan": plan,
+        }
+        if dry_run or not id_map:
+            return result
+
+        new_companies: list[dict] = []
+        for company in companies:
+            company_id = company.get("id")
+            if company_id in id_map:
+                continue
+            new_companies.append(merged_by_primary.get(company_id, company))
+        new_companies, internal_refs = _rewrite_company_id_refs(new_companies, id_map)
+        stale_competitor_refs = _repair_competitor_company_refs(new_companies)
+        store["companies"] = new_companies
+        _write(COMPANIES_FILE, store)
+        upload_files_moved = _merge_upload_dirs(id_map)
+        external_refs, changed_files = _rewrite_external_company_refs(id_map)
+        result.update({
+            "rows_after": len(new_companies),
+            "id_map": id_map,
+            "internal_refs_rewritten": internal_refs,
+            "stale_competitor_refs_repaired": stale_competitor_refs,
+            "external_refs_rewritten": external_refs,
+            "changed_files": changed_files,
+            "upload_files_moved": upload_files_moved,
+        })
+        return result
+
+
 def upsert_company(company: dict) -> dict:
     with _LOCK:
         store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
-        companies = store["companies"]
+        companies, _ = _ensure_industries_field(store["companies"])
         idx = next((i for i, c in enumerate(companies) if c.get("id") == company["id"]), None)
+        tax_id = str(company.get("tax_id") or "").strip()
+        normalized_name = normalize_company_name(clean_company_name(company.get("name") or ""))
+
+        def same_entity(candidate: dict) -> bool:
+            if candidate.get("id") == company["id"]:
+                return False
+            candidate_tax = str(candidate.get("tax_id") or "").strip()
+            if tax_id and candidate_tax:
+                return tax_id == candidate_tax
+            candidate_name = normalize_company_name(clean_company_name(candidate.get("name") or ""))
+            return bool(normalized_name and candidate_name == normalized_name)
+
+        collisions = [c for c in companies if same_entity(c)]
+        if collisions:
+            # Existing updates keep their active ID so an in-flight enrichment
+            # task can continue. Brand-new inserts reuse the best existing ID.
+            primary = company if idx is not None else max(collisions, key=_company_merge_rank)
+            merged = _merge_company_records(primary, [primary, company, *collisions])
+            id_map = {c["id"]: primary["id"] for c in [company, *collisions] if c.get("id") != primary["id"]}
+            companies = [c for c in companies if c.get("id") not in id_map and c.get("id") != primary["id"]]
+            companies.append(merged)
+            companies, _ = _rewrite_company_id_refs(companies, id_map)
+            store["companies"] = companies
+            _write(COMPANIES_FILE, store)
+            _merge_upload_dirs(id_map)
+            _rewrite_external_company_refs(id_map)
+            return merged
         if idx is not None:
             companies[idx] = company
         else:
             companies.append(company)
+        store["companies"] = companies
         _write(COMPANIES_FILE, store)
         return company
 
 
 def create_company(name: str, label: str, industry: str = "", tax_id: str = "") -> dict:
+    existing = find_company_by_name_or_tax_id(name, tax_id)
+    if existing:
+        updates = deepcopy(existing)
+        if label and label not in updates.get("labels", []):
+            updates.setdefault("labels", []).append(label)
+        if industry and industry not in company_industries(updates):
+            updates.setdefault("industries", company_industries(updates)).append(industry)
+        return upsert_company(updates)
     inds = [industry] if industry else []
     company = {
         "id": str(uuid.uuid4()),

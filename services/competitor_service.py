@@ -44,6 +44,7 @@ def gather_competitor_context(company_id: str, company_name: str) -> dict:
                         "id": other["id"],
                         "blurb": other.get("blurb") or "",
                         "listing_status": other.get("listing_status") or "",
+                        "website": other.get("website") or "",
                     })
                 break
 
@@ -67,6 +68,7 @@ def gather_competitor_context(company_id: str, company_name: str) -> dict:
                 "id": cid,
                 "blurb": ext.get("blurb") or "",
                 "listing_status": ext.get("listing_status") or "",
+                "website": ext.get("website") or "",
                 "via": direct_co["name"],
             })
 
@@ -80,11 +82,13 @@ def resolve_competitor_ids(competitors: list[dict]) -> list[dict]:
     all_cos = data_store.get_all_companies()
     taxid_to_id: dict[str, str] = {}
     name_to_id: dict[str, str] = {}
+    id_to_website: dict[str, str] = {}
     for c in all_cos:
         if c.get("tax_id"):
             taxid_to_id[c["tax_id"]] = c["id"]
         name_to_id[c["name"]] = c["id"]
         name_to_id[short(c["name"])] = c["id"]
+        id_to_website[c["id"]] = c.get("website") or ""
     for comp in competitors:
         tid = comp.get("tax_id") or ""
         name = comp.get("name", "")
@@ -94,6 +98,9 @@ def resolve_competitor_ids(competitors: list[dict]) -> list[dict]:
             or name_to_id.get(short(name))
             or None
         )
+        if not comp.get("source_url") and comp["company_id"]:
+            website = id_to_website.get(comp["company_id"], "")
+            comp["source_url"] = website if re.match(r"^https?://[^\s]+$", website, re.I) else ""
     return competitors
 
 

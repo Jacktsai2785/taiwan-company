@@ -115,10 +115,7 @@ function renderSidebar() {
       for (const name of topLevelPinned) {
         const pinnedKids = (state.industryTree[name] || []).filter(c => state.industries.includes(c) && _pinnedSet.has(c));
         const hasKids = pinnedKids.length > 0;
-        const fset = _industryFilterSet(name);
-        const count = hasKids
-          ? state.companies.filter(c => (c.industries || []).some(i => fset.has(i))).length
-          : state.companies.filter(c => (c.industries || []).includes(name)).length;
+        const count = _industryCompanyCount(name);
         const isActive = state.activeIndustry === name && state.activeGroup === null;
         const isExpanded = state.expandedTreeNodes.has(name);
 
@@ -133,7 +130,7 @@ function renderSidebar() {
 
         if (hasKids && isExpanded) {
           for (const child of pinnedKids) {
-            const childCount = state.companies.filter(c => (c.industries || []).includes(child)).length;
+            const childCount = _industryCompanyCount(child);
             const isChildActive = state.activeIndustry === child && state.activeGroup === null;
             html += `<div class="sb-row sb-ind-child ${isChildActive ? "active" : ""}" data-pinned="${escHtml(child)}" data-is-label="false">
               <span class="sb-label">${escHtml(child)}</span>
@@ -377,7 +374,7 @@ function renderSidePanel() {
         items.push({ name, count, isChild: false, hasChildren: children.length > 0, isExpanded });
         if (isExpanded) {
           for (const child of children) {
-            const childCount = state.companies.filter(c => (c.industries || []).includes(child)).length;
+            const childCount = _industryCompanyCount(child);
             items.push({ name: child, count: childCount, isChild: true, hasChildren: false, isExpanded: false });
           }
         }
@@ -387,10 +384,7 @@ function renderSidePanel() {
       items = state.industries
         .filter(name => name.toLowerCase().includes(q))
         .map(name => {
-          const isChild = childSet.has(name);
-          const count = isChild
-            ? state.companies.filter(c => (c.industries || []).includes(name)).length
-            : state.companies.filter(c => { const f = _industryFilterSet(name); return (c.industries || []).some(i => f.has(i)); }).length;
+          const count = _industryCompanyCount(name);
           return { name, count, isChild: false, hasChildren: false, isExpanded: false };
         });
       if (state.sidePanelSort === "count") items.sort((a, b) => b.count - a.count);

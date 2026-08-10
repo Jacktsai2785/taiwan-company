@@ -13,6 +13,11 @@
 }
 #modal-overlay.open { display: flex; }
 
+/* Industry map → company detail is a forward drill-down. Keep the map visible
+   underneath, but place detail above the map overlay (115). */
+body.industry-map-detail-open #modal-overlay { z-index: 130; }
+body.industry-map-detail-open #rel-graph-overlay { z-index: 140; }
+
 #modal {
   background: var(--card);
   border-radius: 12px;
@@ -1025,6 +1030,8 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 #modal-summary li { margin-bottom: 4px; }
 #modal-summary hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 #modal-summary strong { color: var(--text); font-weight: 700; }
+#modal-summary a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+#modal-summary a:hover { color: #255d90; }
 .summary-placeholder { color: var(--muted); font-style: italic; }
 
 .summary-table {
@@ -1057,6 +1064,8 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 
 /* 多家公司各自一個 chip，垂直堆疊 */
 .comp-name-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; }
+.comp-source-wrap { display: flex; align-items: flex-start; gap: 4px; max-width: 100%; }
+#modal-summary .comp-source-link { flex: 0 0 auto; margin-top: 1px; text-decoration: none; font-size: 12px; line-height: 1.5; }
 
 /* ── 競業表格：可點擊公司名稱 ── */
 .competitor-chip {
@@ -1122,5 +1131,3 @@ body.detail-open.rel-open #from-graph-overlay { z-index: 1200; }
 .competitor-table tbody tr:hover .comp-del-btn { opacity: 1; }
 .comp-del-btn:hover { color: #dc2626; background: #fee2e2; }
 .comp-del-btn:disabled { opacity: .4; cursor: default; }
-
-

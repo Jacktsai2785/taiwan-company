@@ -112,7 +112,7 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
             f"請在步驟 4 搜尋時一併查閱，並**確保它們出現在競業分析表格中**：\n{direct_list}"
         )
         known_table_rows = "\n".join(
-            f"| {c['name']} | （請根據搜尋結果填入） | （填入差異化特點） | {c.get('listing_status') or '非公發'} | （AI 判斷填入） |"
+            f"| {_markdown_company_name(c['name'], c.get('website', ''))} | （請根據搜尋結果填入） | （填入差異化特點） | {c.get('listing_status') or '非公發'} | （AI 判斷填入） |"
             for c in direct
         ) + "\n"
 
@@ -158,8 +158,9 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 
 【競業表填寫規則（請嚴格遵循；但這些規則本身**禁止輸出到備忘錄裡**，你只能輸出填好的表格與分析）】
 - 競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合。
-- 「公司名稱」欄一律填正式登記名稱（如 ○○股份有限公司／○○有限公司）。若只查到品牌或產品名（例如「超木 GREENuWood」），請查出其背後的法人公司全名填入，可在括號內附註品牌，例如「○○股份有限公司（超木 GREENuWood）」；禁止只填品牌名或英文商標，否則後續無法連結公司登記資料。
+- 「公司名稱」欄一律使用 `[正式登記名稱](可直接佐證該公司的官網或可信來源 URL)` Markdown 連結。若只查到品牌或產品名（例如「超木 GREENuWood」），請查出其背後的法人公司全名，可在括號內附註品牌；若確實找不到可驗證 URL 才保留純文字，嚴禁猜測網址。
 - 一列只填一家公司：每家競業各自一列，不可在同一格用「、」「／」「與」等把多家塞在一起，也不要加「上游」「下游」這類描述詞或「等」字；同一競業類型有多家就拆成多列分別填寫。
+- 業務概況、競業差異與主要風險中的重要可驗證事實，應在相關文字後直接附上 `[來源名稱](URL)`；禁止另列 Sources／References，也禁止為了附連結而使用不相關頁面。
 
 完成搜尋後，用繁體中文撰寫以下格式的投資備忘錄（純 Markdown，不加開頭標題行）：
 
@@ -178,7 +179,15 @@ def _build_prompt(company: dict, competitor_context: dict | None = None) -> str:
 | {full_name}（本案）| （填入） | （填入） | {listing} | — |
 {known_table_rows}（四種類型把關標準一致：每類只填搜尋結果能佐證真實存在的公司，1-3 家皆可；查無實據的類別可以留空，**嚴格禁止為了湊數而捏造、推測，或混合杜撰公司名稱**）
 
-（表格後以條列說明：本案在市場中的相對優勢 2-3 點、相對劣勢或挑戰 2-3 點。若有已知專利或技術壁壘請一併提及。）
+表格後必須嚴格使用以下固定結構（小標文字、粗體與冒號均不可改寫；每個小標只出現一次）：
+
+**本案相對優勢：**
+- （2-3 點，每點直接寫內容；禁止在每一點重複「相對優勢」標籤）
+
+**相對劣勢或挑戰：**
+- （2-3 點，每點直接寫內容；禁止在每一點重複「相對挑戰」標籤）
+
+若有已知專利或技術壁壘，請併入上述最相關的條列，不得另創第三種格式。
 
 ## 主要風險
 （列點，3-5 項，每項以**粗體風險類型標籤**開頭再接具體說明，例如「- **技術風險**：…」「- **市場風險**：…」「- **法規風險**：…」「- **客戶集中風險**：…」；
@@ -242,10 +251,12 @@ def _build_deep_prompt(company: dict, competitor_context: dict | None = None) ->
 **業務概況維持固定格式**：先一句話（不超過 60 字）說明公司在做什麼，再換行逐項以粗體小標分段填寫 **主要產品**：…／**核心技術**：…／**主要客戶群**：…。
 **主要風險**每項以粗體風險類型標籤開頭（例如「- **技術風險**：…」「- **市場風險**：…」）。
 競業分析表格使用五欄：公司名稱 ｜ 核心業務 ｜ 主要差異化特點 ｜ 上市狀態 ｜ 競業類型（四種類型把關標準一致：每類只填搜尋結果能佐證真實存在的公司，1-3 家皆可；查無實據的類別可以留空，**嚴格禁止為了湊數而捏造、推測，或混合杜撰公司名稱**）。
+競業表格後必須固定依序輸出一次 `**本案相對優勢：**` 與一次 `**相對劣勢或挑戰：**`，各接 2-3 個無重複標籤的條列；禁止把「相對優勢／相對挑戰」重複寫在每一個條列開頭。
+所有競業公司名稱必須優先寫成 `[正式登記名稱](可直接佐證該公司的官網或可信來源 URL)`；重要可驗證事實應就近附上 `[來源名稱](URL)`。找不到可信 URL 時保留純文字，嚴禁猜測網址或在文末另列來源清單。
 
 【競業表填寫規則（請遵循，但這些規則文字**禁止輸出到備忘錄裡**，只輸出填好的表格與分析）】
 - 競業類型限填：正面競業／替代路徑／側翼潛入／垂直整合。
-- 「公司名稱」欄一律填正式登記名稱（○○股份有限公司／○○有限公司）；只知品牌時請查出法人公司名，可在括號附品牌，禁止只填品牌或英文商標。
+- 「公司名稱」欄一律使用 `[正式登記名稱](可直接佐證該公司的官網或可信來源 URL)`；只知品牌時請查出法人公司名，可在括號附品牌。找不到可信 URL 才保留純文字，禁止只填品牌、猜測網址或使用不相關頁面。
 - 一列只填一家公司：不可在同一格用「、」「／」「與」把多家塞在一起，也不要加「上游」「下游」描述詞或「等」字；同類有多家就拆成多列。
 
 若新資料提供了原版沒有的具體資訊，更新對應段落；若無新資訊，維持原內容。
@@ -282,7 +293,7 @@ def _grab_field(raw: str, label: str) -> str:
 async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
                              engine: str = "") -> dict:
     """Research a single named competitor (WebSearch) in the context of the case
-    company, and return {core_biz, differentiation, listing}. 競業類型 is supplied
+    company, and return {core_biz, differentiation, listing, source_url}. 競業類型 is supplied
     by the user, not the model."""
     name = company.get("name", "")
     short, full = _company_name_variants(name)
@@ -293,12 +304,13 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
 {biz[:700]}
 
 請用 WebSearch 搜尋「{comp_name}」這家公司（官網、公司介紹、媒體報導、104 公司頁），
-然後以「本案的競爭對手」角度分析它，回傳以下四項，**格式固定、每項一行、不要其他文字**：
+然後以「本案的競爭對手」角度分析它，回傳以下五項，**格式固定、每項一行、不要其他文字**：
 
 正式登記名稱：（該公司的完整登記名稱，如 ○○股份有限公司／○○有限公司；查不到就填你查到的名稱）
 核心業務：（一句話，{comp_name} 的核心產品或服務）
 主要差異化特點：（相對本案，{comp_name} 的差異化或相對優劣勢，1-2 點，具體）
 上市狀態：（只能填 上市／上櫃／興櫃／創新板／非公發 其一，查不到填 非公發）
+來源網址：（優先填公司官網，其次填可直接佐證該公司的可信頁面；必須是完整 http/https URL，找不到填——，嚴禁猜測）
 
 若完全查無此公司資料，核心業務與差異化請據實標「——（查無公開資料）」。"""
     raw = await asyncio.to_thread(
@@ -324,6 +336,7 @@ async def analyze_competitor(company: dict, comp_name: str, comp_type: str,
         "core_biz": _grab_field(raw, "核心業務") or "——",
         "differentiation": _grab_field(raw, "主要差異化特點") or "——",
         "listing": listing,
+        "source_url": _normalise_source_url(_grab_field(raw, "來源網址")),
     }
 
 
@@ -625,6 +638,28 @@ _VALID_LISTING = {"上市", "上櫃", "興櫃", "創新板", "非公發"}
 
 _VALID_COMPETITION_TYPES = {"正面競業", "替代路徑", "側翼潛入", "垂直整合"}
 
+_MARKDOWN_LINK_RE = re.compile(r"^\[([^\]\n]+)\]\((https?://[^\s)]+)\)$", re.IGNORECASE)
+
+
+def _normalise_source_url(value: str) -> str:
+    """Keep only explicit public http(s) URLs; never infer or repair a URL."""
+    value = (value or "").strip().strip("<>")
+    return value if re.match(r"^https?://[^\s]+$", value, re.IGNORECASE) else ""
+
+
+def _markdown_company_name(name: str, source_url: str) -> str:
+    source_url = _normalise_source_url(source_url)
+    return f"[{name}]({source_url})" if source_url else name
+
+
+def _competitor_name_and_source(value: str) -> tuple[str, str]:
+    """Split a full-cell Markdown link into its display name and source URL."""
+    value = (value or "").strip()
+    match = _MARKDOWN_LINK_RE.match(value)
+    if not match:
+        return value, ""
+    return match.group(1).strip(), _normalise_source_url(match.group(2))
+
 
 def _parse_competitor_table(summary: str) -> list[dict]:
     """
@@ -655,7 +690,7 @@ def _parse_competitor_table(summary: str) -> list[dict]:
         if "（本案）" in cells[0]:
             continue
 
-        name = cells[0]
+        name, source_url = _competitor_name_and_source(cells[0])
         if not name:
             continue
 
@@ -675,6 +710,7 @@ def _parse_competitor_table(summary: str) -> list[dict]:
             "core_biz": cells[1],
             "listing_status": listing,
             "competition_type": competition_type,
+            "source_url": source_url,
         })
 
     return competitors

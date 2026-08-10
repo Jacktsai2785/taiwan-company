@@ -806,6 +806,7 @@ function _subscribeDeepEnrich(companyId, force = false) {
 function _closeDetailModal() {
   closeOverlay("modal-overlay");
   document.body.classList.remove("detail-open");
+  document.body.classList.remove("industry-map-detail-open");
   closeMaterialsPanel();
 }
 document.getElementById("modal-close").addEventListener("click", _closeDetailModal);

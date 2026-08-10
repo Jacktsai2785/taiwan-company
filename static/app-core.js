@@ -372,8 +372,26 @@ async function loadIndustryTree() {
 }
 
 function _industryFilterSet(name) {
-  const children = (state.industryTree[name] || []).filter(c => state.industries.includes(c));
-  return new Set([name, ...children]);
+  // Include every descendant, not just one level. AI is itself a child of
+  // 前瞻科技 and also owns nine subindustries, so one-level expansion made its
+  // sidebar count say 1 while clicking it displayed 87 companies.
+  const result = new Set();
+  const visit = current => {
+    if (!current || result.has(current)) return;
+    result.add(current);
+    for (const child of (state.industryTree[current] || [])) {
+      if (state.industries.includes(child)) visit(child);
+    }
+  };
+  visit(name);
+  return result;
+}
+
+function _industryCompanyCount(name) {
+  const filterSet = _industryFilterSet(name);
+  return state.companies.filter(c =>
+    (c.industries || []).some(industry => filterSet.has(industry))
+  ).length;
 }
 
 async function loadLabels() {

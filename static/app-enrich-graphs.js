@@ -905,7 +905,16 @@ async function generateIndustryMap() {
     },
     onError: event => {
       _imState.evtSrc = null;
-      statusEl.innerHTML = `<div class="im-error">生成失敗：${escHtml(event.message)}</div>`;
+      const msg = event.message || "";
+      // 「公司太多無法生成單張地圖」這個錯誤本身就是在叫使用者去按「細分成子產業」，
+      // 但那顆按鈕原本只長在「已成功生成的地圖」的未分類區塊裡——這種情況地圖從頭到尾
+      // 沒生成過，按鈕永遠不會出現，變成死路。細分本來就不依賴既有地圖（直接讀資料庫
+      // 掛該產業標籤的公司），這裡直接把按鈕補在錯誤訊息旁，讓使用者真的按得到。
+      const canSubdivide = msg.includes("細分");
+      statusEl.innerHTML = `<div class="im-error">生成失敗：${escHtml(msg)}</div>`
+        + (canSubdivide
+          ? `<button class="im-subdivide-btn" onclick="_imSubdivide()" title="用 AI 把這些公司細分成子產業（Phase 2）">✨ 細分成子產業</button>`
+          : "");
     },
     onDone: (ok, event) => {
       _imState.evtSrc = null;
@@ -960,25 +969,25 @@ function _renderIndustryMap(data) {
   }
   meta.innerHTML = `
     <div class="im-meta">
-      <span class="im-meta-pill">${layout === "layered" ? "🪜 上下分層" : "🔲 矩陣並列"}</span>
+      <span class="im-meta-pill">🔁 產業流程</span>
       ${statPill}
       ${ts ? `<span class="im-meta-time">生成於 ${escHtml(ts)}</span>` : ""}
       ${data.rationale ? `<div class="im-rationale">${escHtml(data.rationale)}</div>` : ""}
     </div>${actionBanner}`;
 
-  if (isParent) {
-    canvas.className = `im-canvas im-${layout}`;
-    canvas.innerHTML = sections.map(s => _imSectionHtml(s, layout)).join("");
-    canvas.onmouseover = null;
-    canvas.onmouseout = null;
-  } else {
-    // 葉模式：C 版「產業鏈上下游」——左時間軸 + 右面板牆 + 聚焦 + 漸進揭露
-    canvas.className = "im-canvas im-leaf";
-    _imChainSections = sections;
-    _imFocus = null;
-    canvas.innerHTML = _imLeafChainHtml(sections);
-    _imWireChainHover(canvas);
-  }
+  // 以主分類流程作為第一閱讀層，再於下方展開子分類與公司。
+  canvas.className = `im-canvas im-flow-canvas im-${layout} ${isParent ? "im-parent" : "im-leaf"}`;
+  _imChainSections = sections;
+  _imFocus = null;
+  canvas.innerHTML = _imSimpleFlowHtml(sections, data);
+  _imWireChainHover(canvas);
+
+  const legend = document.getElementById("industry-map-legend");
+  if (legend) legend.innerHTML = `
+    <span class="legend-item"><span class="legend-dot legend-comp-in"></span>已收錄（點開詳情）</span>
+    <span class="legend-item"><span class="legend-dot legend-comp-out"></span>未收錄（點即加入）</span>
+    <span class="legend-item"><span class="im-legend-line im-legend-flow"></span>分類順序</span>
+    <span class="legend-item"><span class="im-legend-line im-legend-loop"></span>回饋循環</span>`;
 
   // Wire clicks (delegate on canvas)
   canvas.onclick = ev => {
@@ -988,16 +997,14 @@ function _renderIndustryMap(data) {
       openIndustryMap(drill.dataset.drillTo, { drill: true });
       return;
     }
-    // 葉模式 C：聚焦控制（點左軸環節／面板標題／「還有 N 家」都聚焦；重置鈕還原）
-    if (!isParent) {
-      if (ev.target.closest(".im-chain-reset")) { _imChainSetFocus(null); return; }
-      const more = ev.target.closest(".im-more-chip");
-      if (more) { _imChainSetFocus(+more.dataset.idx); return; }
-      const stop = ev.target.closest(".im-stop");
-      if (stop) { _imChainToggle(+stop.dataset.idx); return; }
-      const ph = ev.target.closest(".im-panel-h");
-      if (ph) { _imChainToggle(+ph.dataset.idx); return; }
-    }
+    // 流程節點、明細標題與「還有 N 家」使用同一選取狀態。
+    if (ev.target.closest(".im-chain-reset")) { _imChainSetFocus(null); return; }
+    const more = ev.target.closest(".im-more-chip");
+    if (more) { _imChainSetFocus(+more.dataset.idx); return; }
+    const flowStep = ev.target.closest(".im-flow-step");
+    if (flowStep) { _imChainToggle(+flowStep.dataset.idx); return; }
+    const stageHead = ev.target.closest(".im-stage-head");
+    if (stageHead) { _imChainToggle(+stageHead.dataset.idx); return; }
     // 公司卡：已收錄 → 開詳情；未收錄 → 加入
     const card = ev.target.closest(".im-card");
     if (!card) return;
@@ -1018,7 +1025,206 @@ function _renderIndustryMap(data) {
   };
 }
 
-/* ── 葉模式：產業鏈上下游（左時間軸 + 面板牆 + 聚焦 + 漸進揭露）── */
+/* ── 中央產業場景：資料環繞圖 + 聚焦 + 漸進揭露 ── */
+
+function _imVisualTheme(data) {
+  // Theme follows the map's own subject. A broad parent such as「前瞻科技」may
+  // contain one energy child, but that must not turn the whole ecosystem into
+  // an energy-storage scene.
+  const evidence = data.industry || _imState.industry || "";
+  if (/(^|[^a-z])AI([^a-z]|$)|人工智慧|artificial intelligence/i.test(evidence)) return "ai";
+  if (data.layout_type !== "layered") return "innovation";
+  return /能源|電池|儲能|電力|綠電|光電|風電|充電|氫能|energy|battery|storage/i.test(evidence)
+    ? "energy"
+    : "value-chain";
+}
+
+function _imPresentationMode(data) {
+  // Industry semantics override the AI-proposed layout. AI subfields are an
+  // ecosystem with deployment/learning feedback, not a material supply chain.
+  return _imVisualTheme(data) === "ai" || data.layout_type !== "layered" ? "ecosystem" : "loop";
+}
+
+function _imFlowDetailHtml(entry) {
+  const { section: s, index: i } = entry;
+  const z = _IM_PAL[i % _IM_PAL.length];
+  const all = (s.subgroups || []).flatMap(group => group.companies || []);
+  const shown = all.slice(0, _IM_MAX);
+  const rest = all.length - shown.length;
+  const compact = shown.map(_imCardHtml).join("")
+    + (rest > 0 ? `<span class="im-more-chip" data-idx="${i}" title="點看完整名單">⋯ 還有 ${rest} 家</span>` : "");
+  const full = (s.subgroups || []).map(_imSubgroupHtml).join("");
+  const drill = s.drill_to
+    ? `<button class="im-stage-drill" data-drill-to="${escAttr(s.drill_to)}">展開子產業 →</button>`
+    : "";
+  return `<section class="im-stage im-flow-detail" data-idx="${i}" style="--z:${z}">
+    <button class="im-stage-head" data-idx="${i}" type="button" aria-label="展開 ${escAttr(s.title || "")}">
+      <span class="im-flow-detail-no">${i + 1}</span>
+      <span class="im-stage-heading">
+        <span class="im-stage-title">${_imSectionIcon(s.title)} ${escHtml(s.title || "")}</span>
+        <span class="im-stage-count">${s.total_count ?? all.length} 家 · ${(s.subgroups || []).length} 子分類</span>
+      </span>
+    </button>
+    <div class="im-stage-body">
+      <div class="im-stage-compact"><div class="im-cards">${compact || `<span class="im-empty-sub">尚無公司</span>`}</div></div>
+      <div class="im-stage-full">${full || `<span class="im-empty-sub">尚無公司</span>`}</div>
+      ${drill}
+    </div>
+  </section>`;
+}
+
+function _imSimpleFlowHtml(sections, data) {
+  const entries = sections.map((section, index) => ({ section, index }));
+  const core = entries.filter(({ section }) => !section.unclassified && !section.classification_pending);
+  const review = entries.filter(({ section }) => section.unclassified || section.classification_pending);
+  const isAi = _imVisualTheme(data) === "ai";
+  const isLayered = data.layout_type === "layered";
+  const rawIndustry = data.industry || _imState.industry || "這個產業";
+  const industry = escHtml(rawIndustry);
+  const title = isAi
+    ? "從資料與算力到應用，再回到模型"
+    : isLayered
+      ? "從上游到應用，再回到產業起點"
+      : `看懂「${industry}」的核心分類與協作關係`;
+  const subtitle = isAi
+    ? "資料與運算基礎 → 模型與平台 → 解決方案與應用 → 成效、治理與資料回饋"
+    : isLayered
+      ? "依產業鏈順序由基礎供給走向終端應用，並透過需求與知識形成回饋"
+      : "依核心能力與應用關係排列；選取分類可查看完整公司名單";
+  const loopLabel = isAi ? "成效、治理與資料回饋" : isLayered ? "需求、知識與資源回饋" : "跨領域協作回饋";
+  const steps = core.map((entry, order) => {
+    const { section: s, index: i } = entry;
+    const z = _IM_PAL[i % _IM_PAL.length];
+    const count = (s.subgroups || []).reduce((sum, group) => sum + (group.companies || []).length, 0);
+    return `${order ? `<span class="im-flow-arrow" aria-hidden="true">→</span>` : ""}
+      <button class="im-flow-step" data-idx="${i}" type="button" style="--z:${z}" aria-pressed="false">
+        <span class="im-flow-step-no">${i + 1}</span>
+        <span class="im-flow-step-icon" aria-hidden="true">${_imSectionIcon(s.title)}</span>
+        <span class="im-flow-step-title">${escHtml(s.title || "")}</span>
+        <span class="im-flow-step-count">${s.total_count ?? count} 家 · ${(s.subgroups || []).length} 子分類</span>
+      </button>`;
+  }).join("");
+  const detailCols = Math.max(1, Math.min(5, core.length));
+  const reviewHtml = review.length
+    ? `<div class="im-flow-review">${review.map(({ section }) => _imSectionHtml(section, data.layout_type)).join("")}</div>`
+    : "";
+
+  return `<div class="im-flow-map" style="--flow-count:${Math.max(1, core.length)};--detail-cols:${detailCols}">
+    <div class="im-flow-heading">
+      <div><h2>${title}</h2><p>${subtitle}</p></div>
+      <button class="im-chain-reset" type="button">顯示完整產業</button>
+    </div>
+    <div class="im-flow-overview" aria-label="${escAttr(rawIndustry)}產業分類流程">
+      <div class="im-flow-scroll-inner">
+        <div class="im-flow-track">${steps}</div>
+        <div class="im-flow-return" aria-hidden="true"><span>${loopLabel}</span><b>↻</b></div>
+      </div>
+    </div>
+    <div class="im-flow-details">${core.map(_imFlowDetailHtml).join("")}</div>
+    ${reviewHtml}
+  </div>`;
+}
+
+function _imMarkerPoint(i, n) {
+  // 五段式地圖使用經過美術校準的落點；其他數量沿場景橢圓平均配置。
+  const five = [[19, 31], [27, 62], [50, 75], [78, 31], [84, 61]];
+  if (n === 5) return five[i];
+  const angle = Math.PI * (0.82 + (1.36 * i / Math.max(1, n - 1)));
+  return [50 + Math.cos(angle) * 36, 48 + Math.sin(angle) * 31];
+}
+
+function _imStagePanelHtml(entry, position = "side") {
+  const { section: s, index: i } = entry;
+  const z = _IM_PAL[i % _IM_PAL.length];
+  const all = (s.subgroups || []).flatMap(g => g.companies || []);
+  const previewLimit = position === "center" ? 5 : 3;
+  const shown = all.slice(0, previewLimit);
+  const rest = all.length - shown.length;
+  const compact = shown.map(_imCardHtml).join("")
+    + (rest > 0 ? `<span class="im-more-chip" data-idx="${i}" title="點看完整名單">⋯ 還有 ${rest} 家</span>` : "");
+  const full = (s.subgroups || []).map(_imSubgroupHtml).join("");
+  const drill = s.drill_to
+    ? `<button class="im-stage-drill" data-drill-to="${escAttr(s.drill_to)}">展開子產業 →</button>`
+    : "";
+  return `<section class="im-stage im-stage-${position}" data-idx="${i}" style="--z:${z}">
+    <button class="im-stage-head" data-idx="${i}" type="button" aria-label="選取 ${escAttr(s.title || "")}">
+      <span class="im-stage-no">${i + 1}</span>
+      <span class="im-stage-heading">
+        <span class="im-stage-title">${_imSectionIcon(s.title)} ${escHtml(s.title || "")}</span>
+        <span class="im-stage-count">${s.total_count ?? all.length} 家 · ${(s.subgroups || []).length} 子分類</span>
+      </span>
+    </button>
+    <div class="im-stage-body">
+      <div class="im-stage-compact"><div class="im-cards">${compact || `<span class="im-empty-sub">尚無公司</span>`}</div></div>
+      <div class="im-stage-full">${full || `<span class="im-empty-sub">尚無公司</span>`}</div>
+      ${drill}
+    </div>
+  </section>`;
+}
+
+function _imLandscapeHtml(sections, data) {
+  const entries = sections.map((section, index) => ({ section, index }));
+  const core = entries.filter(({ section }) => !section.unclassified && !section.classification_pending);
+  const review = entries.filter(({ section }) => section.unclassified || section.classification_pending);
+  const hasCenter = core.length % 2 === 1;
+  const centerAt = hasCenter ? Math.floor(core.length / 2) : -1;
+  const left = core.slice(0, hasCenter ? centerAt : Math.ceil(core.length / 2));
+  const center = hasCenter ? core[centerAt] : null;
+  const right = core.slice(hasCenter ? centerAt + 1 : Math.ceil(core.length / 2));
+  const theme = _imVisualTheme(data);
+  const presentation = _imPresentationMode(data);
+  const layered = presentation === "loop";
+  const isAi = theme === "ai";
+  const title = isAi
+    ? `一張圖看懂「${escHtml(data.industry || _imState.industry || "AI")}」生態系`
+    : layered
+    ? `一張圖看懂「${escHtml(data.industry || _imState.industry || "這個產業")}」如何運轉`
+    : `一張圖看懂「${escHtml(data.industry || _imState.industry || "這個產業")}」生態系`;
+  const subtitle = isAi
+    ? "從資料與算力、模型與平台到多元部署場域，透過成效監測、治理與人類回饋持續學習"
+    : layered
+    ? "沿價值鏈向應用前進，再透過回收、再利用或知識回饋形成完整循環"
+    : "以核心能力為中心，連結周邊技術、服務與應用場域";
+  const asset = theme === "ai"
+    ? "/static/assets/industry-map/ai-ecosystem-v2.png"
+    : theme === "energy"
+    ? "/static/assets/industry-map/energy-ecosystem-v1.png"
+    : theme === "value-chain"
+      ? "/static/assets/industry-map/value-chain-ecosystem-v1.png"
+      : "/static/assets/industry-map/innovation-ecosystem-v1.png";
+  const markers = core.map((entry, order) => {
+    const [x, y] = _imMarkerPoint(order, core.length);
+    return `<button class="im-scene-marker" data-idx="${entry.index}" type="button"
+      style="--x:${x}%;--y:${y}%;--z:${_IM_PAL[entry.index % _IM_PAL.length]}"
+      aria-label="選取 ${escAttr(entry.section.title || "")}" title="${escAttr(entry.section.title || "")}">${entry.index + 1}</button>`;
+  }).join("");
+  const reviewHtml = review.length
+    ? `<div class="im-landscape-review">${review.map(({ section }) => _imSectionHtml(section, data.layout_type)).join("")}</div>`
+    : "";
+
+  return `<div class="im-landscape ${layered ? "is-loop" : "is-ecosystem"}" data-theme="${theme}">
+    <div class="im-insight-head">
+      <div><h2>${title}</h2><p>${subtitle}</p></div>
+      <button class="im-chain-reset" type="button">顯示完整產業</button>
+    </div>
+    <div class="im-ecosystem-grid">
+      <div class="im-stage-column im-stage-left">${left.map(e => _imStagePanelHtml(e)).join("")}</div>
+      <div class="im-scene-column">
+        <div class="im-scene" role="img" aria-label="${layered ? "產業價值鏈與循環回流示意圖" : "產業生態系關係示意圖"}">
+          <img src="${asset}" alt="" aria-hidden="true" decoding="async" />
+          <div class="im-scene-vignette" aria-hidden="true"></div>
+          ${markers}
+          <div class="im-scene-mode"><span>${isAi ? "資料・模型・部署" : layered ? "價值鏈流向" : "生態系連結"}</span>${isAi ? "<b>持續學習回饋 ↻</b>" : layered ? "<b>循環回流 ↻</b>" : "<b>雙向協作</b>"}</div>
+        </div>
+        ${center ? `<div class="im-center-stage">${_imStagePanelHtml(center, "center")}</div>` : ""}
+      </div>
+      <div class="im-stage-column im-stage-right">${right.map(e => _imStagePanelHtml(e)).join("")}</div>
+    </div>
+    ${reviewHtml}
+  </div>`;
+}
+
+/* Legacy renderer retained below for old snapshots/tests; current maps use _imLandscapeHtml. */
 
 function _imLeafChainHtml(sections) {
   const rail = `<div class="im-rail">
@@ -1062,10 +1268,27 @@ function _imLeafChainHtml(sections) {
 function _imChainToggle(i) { _imChainSetFocus(_imFocus === i ? null : i); }
 function _imChainSetFocus(i) { _imFocus = i; _imChainApplyFocus(); }
 function _imChainApplyFocus() {
-  const chain = document.querySelector(".im-chain");
+  const chain = document.querySelector(".im-flow-map") || document.querySelector(".im-landscape") || document.querySelector(".im-chain");
   if (!chain) return;
   const on = _imFocus !== null;
   chain.classList.toggle("focusing", on);
+  chain.querySelectorAll(".im-flow-step").forEach(el => {
+    const active = on && +el.dataset.idx === _imFocus;
+    el.classList.toggle("active", active);
+    el.classList.toggle("dim", on && !active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  chain.querySelectorAll(".im-scene-marker").forEach(el => {
+    const active = on && +el.dataset.idx === _imFocus;
+    el.classList.toggle("active", active);
+    el.classList.toggle("dim", on && !active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  chain.querySelectorAll(".im-stage").forEach(el => {
+    const active = on && +el.dataset.idx === _imFocus;
+    el.classList.toggle("hi", active);
+    el.classList.toggle("dim", on && !active);
+  });
   chain.querySelectorAll(".im-stop").forEach(el => {
     const i = +el.dataset.idx;
     el.classList.toggle("active", on && i === _imFocus);
@@ -1141,6 +1364,8 @@ function _imSectionHtml(section, layout) {
 function _imGroupsFromSections(sections) {
   const groups = [];
   for (const s of sections || []) {
+    // 「跨領域／待確認」是分類品質保護區，不得收成正式子產業。
+    if (s.promotable === false || s.classification_pending) continue;
     const ids = [], names = [];
     for (const sub of (s.subgroups || [])) {
       for (const co of (sub.companies || [])) {
@@ -1361,7 +1586,9 @@ async function _imApplySubdivide(industry, groups) {
     await loadCompanies();
     renderSidebar();
     _imCloseSubdivide();
-    toast(`已新增 ${res.added_children?.length ?? 0} 個子產業、重新歸類 ${res.retagged ?? 0} 家公司`, false);
+    const blocked = res.validation_warnings?.length || 0;
+    toast(`已新增 ${res.added_children?.length ?? 0} 個子產業、重新歸類 ${res.retagged ?? 0} 家公司`
+      + (blocked ? `；另攔截 ${blocked} 筆缺乏分類證據的歸類` : ""), false);
     // 舊快取已被後端刪除 → 重新打開會以父模式重生成總覽
     openIndustryMap(industry);
   } catch (err) {
@@ -1435,6 +1662,16 @@ document.getElementById("industry-map-overlay").addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && document.getElementById("industry-map-overlay").classList.contains("open")) {
+    // Close the topmost drill-down first. The industry map remains mounted so
+    // a second Escape returns from map to the company grid.
+    if (document.getElementById("rel-graph-overlay")?.classList.contains("open")) {
+      closeRelationshipGraph();
+      return;
+    }
+    if (document.getElementById("modal-overlay")?.classList.contains("open")) {
+      _closeDetailModal();
+      return;
+    }
     closeIndustryMap();
   }
 });

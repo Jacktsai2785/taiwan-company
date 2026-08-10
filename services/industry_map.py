@@ -115,6 +115,99 @@ def _extract_one_liner(company: dict) -> str:
     return text[:80]
 
 
+def _extract_classification_context(company: dict, max_chars: int = 1000) -> str:
+    """Return evidence-rich business context for industry classification.
+
+    The old classifier only saw ``blurb`` (often 6–12 vague characters) whenever
+    it existed, even if the modal had a detailed summary.  Keep the public
+    business overview but cut competitor/risk sections so another company's
+    vertical keywords cannot contaminate this company's classification.
+    """
+    blurb = re.sub(r"\s+", " ", (company.get("blurb") or "").strip())
+    summary = (company.get("summary") or "").strip()
+    for marker in ("## 競業分析", "## 主要風險"):
+        summary = summary.split(marker, 1)[0]
+    summary = re.sub(r"[#*_`|]+", " ", summary)
+    summary = re.sub(r"\s+", " ", summary).strip()
+    parts = [p for p in (blurb, summary) if p]
+    return "；".join(dict.fromkeys(parts))[:max_chars]
+
+
+# A vertical segment needs explicit evidence from the company's own business
+# profile.  These are intentionally broad evidence vocabularies but narrow title
+# triggers: the guard only fires when the map itself claims a vertical market.
+_VERTICAL_EVIDENCE_RULES: tuple[tuple[str, re.Pattern, re.Pattern], ...] = (
+    # Title triggers are deliberately narrower than evidence terms.  Composite
+    # groups such as「塑膠、紡織與高分子」are alternatives, so every member must
+    # not be forced to prove every word in the title.
+    ("紡織", re.compile(r"^紡織|紡織垂直|布料|纖維|成衣|染整|織物|textile|fabric", re.I), re.compile(r"紡織|布料|纖維|成衣|染整|織物|textile|fabric", re.I)),
+    ("醫療健康", re.compile(r"醫療健康|醫療 ?AI|醫材|製藥|藥物|診斷|medical|healthcare|pharma", re.I), re.compile(r"醫療|健康|生技|製藥|藥物|診斷|醫材|照護|病患|醫院|牙科|假牙|medical|health|biotech|pharma", re.I)),
+    ("半導體", re.compile(r"半導體|晶圓|晶片|IC ?設計|semiconductor|wafer", re.I), re.compile(r"半導體|晶圓|封裝|晶片|IC ?設計|semiconductor|wafer", re.I)),
+    ("金融", re.compile(r"金融|銀行|保險|支付|證券|授信|fintech|banking|insurance", re.I), re.compile(r"金融|銀行|保險|支付|證券|授信|風控|群眾募資|募資平台|加密資產|虛擬貨幣|投資|交易|財經|fintech|banking|insurance|crypto", re.I)),
+    ("農業", re.compile(r"智慧農業|永續農業|農業生技|農業 ?AI|農業科技|agritech", re.I), re.compile(r"農業|農產|養殖|畜牧|作物|農場|禽|動物|獸醫|寵物|犬|水產|微藻|agri|aquaculture", re.I)),
+    ("零售餐飲", re.compile(r"零售|電商|餐飲|門市|retail|e-?commerce|restaurant", re.I), re.compile(r"零售|電商|餐飲|門市|消費品牌|retail|e-?commerce|restaurant", re.I)),
+    ("教育", re.compile(r"教育垂直|教育科技|智慧教育|edtech|education technology", re.I), re.compile(r"教育|教學|學習|學生|教師|校園|edtech|education", re.I)),
+    ("能源環境", re.compile(r"再生能源發電|智慧能源管理|儲能、電池|碳管理|環境監測|renewable energy|energy management", re.I), re.compile(r"能源|電力|綠電|儲能|電池|太陽能|風電|水力|節能|碳排|碳盤|碳管理|ESG|永續|環境監測|energy|battery|solar|wind power", re.I)),
+)
+
+
+def _missing_vertical_evidence(placement: str, evidence: str) -> list[str]:
+    return [
+        label
+        for label, title_re, evidence_re in _VERTICAL_EVIDENCE_RULES
+        if title_re.search(placement) and not evidence_re.search(evidence)
+    ]
+
+
+def _guard_vertical_placements(map_data: dict, companies_by_id: dict[str, dict]) -> dict:
+    """Move unsupported vertical placements into an explicit review section."""
+    pending: list[dict] = []
+    kept_sections: list[dict] = []
+
+    # Be idempotent when a caller reconciles the same object more than once.
+    for section in map_data.get("sections", []) or []:
+        if section.get("classification_pending"):
+            for subgroup in section.get("subgroups", []) or []:
+                pending.extend(subgroup.get("companies", []) or [])
+            continue
+
+        for subgroup in section.get("subgroups", []) or []:
+            kept: list[dict] = []
+            placement = f"{section.get('title', '')} {subgroup.get('title', '')}"
+            for co in subgroup.get("companies", []) or []:
+                db_company = companies_by_id.get(co.get("company_id") or "")
+                evidence = (
+                    _extract_classification_context(db_company)
+                    if db_company
+                    else f"{co.get('name', '')} {co.get('core_biz', '')}"
+                )
+                missing = _missing_vertical_evidence(placement, evidence)
+                if missing:
+                    original = co.get("note") or co.get("core_biz") or ""
+                    warning = f"待確認：公司資料未找到「{'、'.join(missing)}」業務證據"
+                    co["placement_warning"] = warning
+                    co["original_note"] = original
+                    co["note"] = warning + (f"；原描述：{original}" if original else "")
+                    pending.append(co)
+                else:
+                    kept.append(co)
+            subgroup["companies"] = kept
+        kept_sections.append(section)
+
+    if pending:
+        max_order = max((s.get("order", 0) or 0 for s in kept_sections), default=-1)
+        kept_sections.append({
+            "id": "__classification_pending__",
+            "title": "跨領域技術／待確認",
+            "order": max_order + 1,
+            "classification_pending": True,
+            "promotable": False,
+            "subgroups": [{"title": "缺乏垂直產業證據", "companies": pending}],
+        })
+    map_data["sections"] = kept_sections
+    return map_data
+
+
 def collect_seed_data(industry: str) -> dict:
     """收集該產業的已收錄公司清單 + 競業擴充池（已去重、去自身）。
     池子依「被幾家已收錄公司列為競業」排序（多家公司獨立提到的候選，比只有一家
@@ -152,7 +245,7 @@ def collect_seed_data(industry: str) -> dict:
             "company_id": c["id"],
             "name": c["name"],
             "tax_id": c.get("tax_id"),
-            "core_biz": _extract_one_liner(c),
+            "core_biz": _extract_classification_context(c),
             "in_db": True,
         }
         for c in in_industry
@@ -171,7 +264,7 @@ def _build_leaf_prompt(industry: str, seed: dict, preset: dict) -> str:
 
     def fmt(c: dict) -> str:
         biz = (c.get("core_biz") or "").strip()
-        return f"- {c['name']}" + (f"（{biz}）" if biz else "")
+        return f"- {c['name']}" + (f"\n  業務依據：{biz}" if biz else "")
 
     max_pool = preset.get("max_pool", 300)
     in_db_list = "\n".join(fmt(c) for c in in_db) or "（無）"
@@ -199,6 +292,12 @@ def _build_leaf_prompt(industry: str, seed: dict, preset: dict) -> str:
    - 「已收錄公司」**全部**放到合適子分類
    - 從「競業擴充池」挑代表性的**台灣**公司補入
    - 每個子分類最多 {max_per} 家
+
+   **分類判斷原則（非常重要）**：
+   - 依「產品／服務、核心技術、目標客戶與實際應用市場」判斷，不可只看一個共同技術詞。
+   - 「數位孿生、AI、SaaS、合成資料」是通用技術，不代表公司屬於紡織、醫療、金融等垂直市場。
+   - 只有業務依據明確提及該垂直市場，才能放進該垂直分類；例如沒有布料、纖維、成衣或染整證據，就不得放入紡織分類。
+   - 若公司是跨產業平台，或現有垂直分類都不適合，應建立「跨產業平台／通用技術」子分類，不要硬塞。
 
 4. **補充重要玩家**（可選）：若某子分類缺代表性玩家，可額外提名 0–3 家**未收錄但在台灣此領域知名**的公司
 
@@ -259,26 +358,48 @@ def _parse_json_response(raw: str) -> dict:
         raise ValueError(f"AI 回傳 JSON 解析失敗：{e}；前 200 字：{payload[:200]}")
 
 
-def _backfill_company_ids(map_data: dict, seed: dict) -> dict:
+def reconcile_company_ids(map_data: dict, seed: dict | None = None) -> dict:
+    """Reconcile map cards against the whole company database.
+
+    A company can appear as a competitor on this map while being assigned to a
+    different industry.  Collection status must therefore be global rather than
+    limited to the current industry's seed companies.
+
+    Tax ID is authoritative when present and normalized name is the fallback.
+    Later duplicate records win, which prefers the newest appended copy in
+    legacy companies.json data.
+    """
+    seed = seed or {}
+    all_companies = data_store.get_all_companies()
+    in_db_by_tax = {
+        str(c.get("tax_id") or "").strip(): c
+        for c in all_companies
+        if str(c.get("tax_id") or "").strip()
+    }
     in_db_by_norm = {
-        data_store.normalize_company_name(c["name"]): c
-        for c in seed["in_db_companies"]
+        data_store.normalize_company_name(c.get("name") or ""): c
+        for c in all_companies
+        if data_store.normalize_company_name(c.get("name") or "")
     }
     pool_by_norm = {
         data_store.normalize_company_name(c["name"]): c
-        for c in seed["expansion_pool"]
+        for c in seed.get("expansion_pool", [])
     }
 
+    collected_ids: set[str] = set()
     for section in map_data.get("sections", []) or []:
         for sub in section.get("subgroups", []) or []:
             for co in sub.get("companies", []) or []:
                 norm = data_store.normalize_company_name(co.get("name", ""))
-                hit_db = in_db_by_norm.get(norm)
+                tax_id = str(co.get("tax_id") or "").strip()
+                hit_db = in_db_by_tax.get(tax_id) if tax_id else None
+                hit_db = hit_db or in_db_by_norm.get(norm)
                 if hit_db:
                     co["in_db"] = True
-                    co["company_id"] = hit_db["company_id"]
+                    co["company_id"] = hit_db["id"]
                     co["tax_id"] = hit_db.get("tax_id")
-                    co["core_biz"] = hit_db.get("core_biz") or co.get("core_biz") or ""
+                    co["core_biz"] = _extract_one_liner(hit_db) or co.get("core_biz") or ""
+                    collected_ids.add(hit_db["id"])
                 else:
                     co["in_db"] = False
                     co["company_id"] = None
@@ -288,7 +409,16 @@ def _backfill_company_ids(map_data: dict, seed: dict) -> dict:
                             co["tax_id"] = hit_pool.get("tax_id")
                         if not co.get("core_biz"):
                             co["core_biz"] = hit_pool.get("core_biz", "")
-    return map_data
+
+    # The UI labels this value「已收錄 N 家」, so count rendered, globally
+    # collected cards rather than only companies assigned to this industry.
+    map_data.setdefault("stats", {})["in_db_count"] = len(collected_ids)
+    companies_by_id = {c["id"]: c for c in all_companies if c.get("id")}
+    return _guard_vertical_placements(map_data, companies_by_id)
+
+
+# Compatibility for older internal callers.
+_backfill_company_ids = reconcile_company_ids
 
 
 # ── Parent-mode helpers ──────────────────────────────────────────────────────
@@ -445,6 +575,9 @@ def _build_subdivide_prompt(industry: str, companies: list[dict]) -> str:
 - **每一家公司都要被分到、且只分到一個子產業**。
 - `members` 內的公司名**必須逐字**取自上面清單，不要改字、不要新增清單外的公司。
 - 子產業名稱要能作為獨立的產業分類（例：「半導體設計」「電動車」「智慧製造」）。
+- 依產品、技術、目標客戶與應用市場分類，不可只因共用「AI、SaaS、數位孿生、合成資料」等通用技術詞就視為同一垂直產業。
+- 公司只有在業務說明明確提及該垂直市場時，才能放入紡織、醫療、金融、農業等垂直子產業。
+- 跨市場的通用平台應分到「跨產業平台／通用技術」，不要硬塞進某個垂直產業。
 - 用繁體中文。
 
 ## 輸出（嚴格 JSON，包在 ```json … ``` 內，不要任何其他文字）
@@ -484,7 +617,7 @@ async def propose_subdivision(
         _emit(f"公司多達 {skipped + SUBDIVIDE_MAX_COMPANIES} 家，僅取資本額前 {SUBDIVIDE_MAX_COMPANIES} 家送 AI 分組；其餘 {skipped} 家將留在「{industry}」（可再次細分處理）")
 
     _emit(f"要細分 {len(targets)} 家公司，呼叫 AI 分組…（{len(targets)} 家約需 {max(1, round(len(targets)/25))}–{max(2, round(len(targets)/18))} 分鐘，請勿關閉）")
-    companies = [{"name": c["name"], "core_biz": _extract_one_liner(c)} for c in targets]
+    companies = [{"name": c["name"], "core_biz": _extract_classification_context(c)} for c in targets]
     by_norm = {data_store.normalize_company_name(c["name"]): c for c in targets}
 
     prompt = _build_subdivide_prompt(industry, companies)
@@ -497,6 +630,7 @@ async def propose_subdivision(
     # 把 AI 回的「子產業名 → 成員公司名」對回 company_id（逐字/正規化比對，比對不到就略過）
     groups: list[dict] = []
     used: set[str] = set()
+    rejected_vertical: list[tuple[str, str, list[str]]] = []
     for g in parsed.get("groups") or []:
         name = (g.get("name") or "").strip()
         if not name:
@@ -507,6 +641,10 @@ async def propose_subdivision(
             norm = data_store.normalize_company_name((member or "").strip())
             hit = by_norm.get(norm)
             if hit and hit["id"] not in used:
+                missing = _missing_vertical_evidence(name, _extract_classification_context(hit))
+                if missing:
+                    rejected_vertical.append((hit["name"], name, missing))
+                    continue
                 used.add(hit["id"])
                 ids.append(hit["id"])
                 names.append(hit["name"])
@@ -514,10 +652,21 @@ async def propose_subdivision(
             groups.append({"name": name, "company_ids": ids, "sample_names": names[:6], "count": len(ids)})
 
     if not groups:
+        log.warning("[subdivide %s] AI 回應未能對應任何已知公司，原始回應前 800 字：%s", industry, raw[:800])
         raise ValueError("AI 未能產生有效分組，請重試")
     unassigned = len(targets) - len(used)
+    if rejected_vertical:
+        sample = "、".join(f"{company}→{group}" for company, group, _missing in rejected_vertical[:5])
+        _emit(f"已攔截 {len(rejected_vertical)} 筆缺乏垂直產業證據的歸類（{sample}），公司保留在「{industry}」")
     _emit(f"✓ 提議 {len(groups)} 個子產業" + (f"（{unassigned} 家未歸入，將保留在「{industry}」）" if unassigned else ""))
-    return {"industry": industry, "groups": groups}
+    return {
+        "industry": industry,
+        "groups": groups,
+        "validation_warnings": [
+            {"company": company, "proposed_group": group, "missing_evidence": missing}
+            for company, group, missing in rejected_vertical
+        ],
+    }
 
 
 def groups_from_sections(sections: list[dict]) -> list[dict]:
@@ -525,6 +674,8 @@ def groups_from_sections(sections: list[dict]) -> list[dict]:
     （in_db + company_id）當成員。前端的葉圖「收成子產業」也用同一規則（在前端算）。"""
     groups: list[dict] = []
     for s in sections or []:
+        if s.get("promotable") is False or s.get("classification_pending"):
+            continue
         ids: list[str] = []
         names: list[str] = []
         for sub in s.get("subgroups", []) or []:
@@ -536,6 +687,46 @@ def groups_from_sections(sections: list[dict]) -> list[dict]:
         if ids and title:
             groups.append({"name": title, "company_ids": ids, "sample_names": names[:6], "count": len(ids)})
     return groups
+
+
+def validate_subdivision_groups(groups: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Server-side guard before map groups become persistent subindustries.
+
+    The preview UI already excludes the review bucket, but validation belongs at
+    the write boundary too: stale clients or hand-written requests must not be
+    able to persist a vertical classification unsupported by company evidence.
+    """
+    all_companies = data_store.get_all_companies()
+    by_id = {c["id"]: c for c in all_companies if c.get("id")}
+    validated: list[dict] = []
+    warnings: list[dict] = []
+    used: set[str] = set()
+
+    for group in groups or []:
+        name = (group.get("name") or "").strip()
+        if not name:
+            continue
+        if name in {"跨領域技術／待確認", "缺乏垂直產業證據"}:
+            warnings.append({"group": name, "reason": "待確認分類不得建立為正式子產業"})
+            continue
+        ids: list[str] = []
+        for company_id in group.get("company_ids") or []:
+            company = by_id.get(company_id)
+            if not company or company_id in used:
+                continue
+            missing = _missing_vertical_evidence(name, _extract_classification_context(company))
+            if missing:
+                warnings.append({
+                    "company": company.get("name", company_id),
+                    "proposed_group": name,
+                    "missing_evidence": missing,
+                })
+                continue
+            used.add(company_id)
+            ids.append(company_id)
+        if ids:
+            validated.append({"name": name, "company_ids": ids})
+    return validated, warnings
 
 
 # ── Main entry ───────────────────────────────────────────────────────────────
@@ -610,7 +801,7 @@ async def generate(
     parsed = _parse_json_response(raw)
 
     emit("回填公司 ID…")
-    parsed = _backfill_company_ids(parsed, seed)
+    parsed = reconcile_company_ids(parsed, seed)
 
     sections = parsed.get("sections") or []
     n_nodes = sum(
