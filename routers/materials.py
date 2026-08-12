@@ -151,7 +151,11 @@ def delete_material(company_id: str, stored_name: str):
 def _collect_materials_inputs(company_id: str, company: dict) -> tuple[list[str], str, str]:
     """讀出補充資料：native 檔路徑、抽取文字、訪談文字。"""
     materials = company.get("materials") or []
-    interview_text = report_generator.serialize_memo(company.get("call_memo"))
+    memos = company.get("call_memos")
+    if memos is None:
+        legacy = company.get("call_memo") or {}
+        memos = [legacy] if legacy else []
+    interview_text = report_generator.serialize_memo(memos)
     base_dir = _company_dir(company_id)
     native_paths: list[str] = []
     text_parts: list[str] = []

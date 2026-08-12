@@ -515,6 +515,29 @@
 .mtab.on { color: #0b6e5f; border-bottom-color: #0d8f7a; }
 .mtab-count { font-size: 10px; color: #fff; background: #0d8f7a; border-radius: 99px; padding: 0 6px; margin-left: 5px; }
 
+/* 訪談備忘錄可有多份，用頁籤切換 + ＋新增 */
+#memo-tabs { margin-bottom: 8px; }
+.memo-tabs-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.memo-tab {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 6px 4px 10px; font-size: 11.5px; font-weight: 600; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 99px; background: #fafbfc; cursor: pointer;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.memo-tab:hover { border-color: var(--accent); }
+.memo-tab.on { color: #0b6e5f; border-color: #0d8f7a; background: var(--accent-light); }
+.memo-tab-del {
+  border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 10px;
+  line-height: 1; padding: 2px; border-radius: 50%; display: flex; align-items: center;
+}
+.memo-tab-del:hover { color: #e05a5a; background: #fde8e8; }
+.memo-tab-add {
+  font-size: 11.5px; font-weight: 600; color: var(--accent);
+  border: 1px dashed var(--border); border-radius: 99px; background: #fff;
+  padding: 4px 11px; cursor: pointer; transition: border-color .12s, background .12s;
+}
+.memo-tab-add:hover { border-color: var(--accent); background: var(--accent-light); }
+
 /* 訪談備忘錄分頁的動作列（儲存 / DOCX，僅與備忘錄相關） */
 .memo-actions-row { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 10px; }
 .memo-tab-btn {
@@ -921,6 +944,16 @@
 .memo-field input:focus,
 .memo-field textarea:focus { border-color: var(--accent); outline: none; background: #fff; }
 .memo-field textarea { min-height: 60px; line-height: 1.55; }
+
+/* Memo：自由備註，預設收合節省空間 */
+.memo-notes-field { gap: 0; }
+.memo-notes-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 2px; cursor: pointer; user-select: none;
+}
+.memo-notes-header label { margin: 0; }
+.memo-notes-header:hover { background: var(--accent-light); border-radius: 6px; }
+.memo-notes-field textarea { margin-top: 3px; }
 
 /* ── Industry Panel ── */
 #industry-panel {

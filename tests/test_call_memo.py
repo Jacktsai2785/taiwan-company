@@ -1,3 +1,4 @@
+import copy
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,100 +6,210 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
 
-from routers.call_memo import _save_memo_source, download_memo, extract_memo
+from routers.call_memo import (
+    _write_memo_source_file,
+    download_memo,
+    extract_memo,
+    create_memo,
+    list_memos,
+    delete_memo,
+)
 from services.memo_extractor import infer_date_from_filename, prepare_transcript
+
+
+class _FakeStore:
+    """Minimal stand-in for services.data_store: one company, deepcopy semantics
+    matching the real get_company/update_company so tests don't over-specify
+    how many times internal helpers happen to call them."""
+
+    def __init__(self, company: dict):
+        self.company = company
+
+    def get_company(self, company_id: str):
+        if company_id != self.company.get("id"):
+            return None
+        return copy.deepcopy(self.company)
+
+    def update_company(self, company_id: str, updates: dict):
+        if company_id != self.company.get("id"):
+            return None
+        self.company.update(updates)
+        return copy.deepcopy(self.company)
+
+
+def _company_with_memo(**memo_overrides):
+    memo = {"id": "memo-1", "interview_date": "", "label": ""}
+    memo.update(memo_overrides)
+    return {"id": "company-id", "name": "測試公司", "call_memos": [memo]}
 
 
 class CallMemoDownloadTests(unittest.TestCase):
     @patch("routers.call_memo.memo_extractor.fill_template", return_value=b"docx")
-    @patch("routers.call_memo.data_store.get_company")
-    def test_chinese_filename_is_header_safe(self, get_company, _fill_template):
-        get_company.return_value = {
+    @patch("routers.call_memo.data_store")
+    def test_chinese_filename_is_header_safe(self, data_store, _fill_template):
+        store = _FakeStore({
+            "id": "company-id",
             "name": "誠佳科紡",
-            "call_memo": {"interview_date": "2026/07/29"},
-        }
+            "call_memos": [{"id": "memo-1", "interview_date": "2026/07/29"}],
+        })
+        data_store.get_company.side_effect = store.get_company
+        data_store.update_company.side_effect = store.update_company
 
-        response = download_memo("company-id")
+        response = download_memo("company-id", "memo-1")
         disposition = response.headers["content-disposition"]
 
         disposition.encode("latin-1")
         self.assertIn("filename*=UTF-8''", disposition)
         self.assertIn("%E8%AA%A0%E4%BD%B3%E7%A7%91%E7%B4%A1", disposition)
+        self.assertIn("callmemo_20260729.docx", disposition)
+
+    @patch("routers.call_memo.data_store")
+    def test_unknown_memo_id_is_404(self, data_store):
+        store = _FakeStore(_company_with_memo())
+        data_store.get_company.side_effect = store.get_company
+
+        with self.assertRaises(HTTPException) as ctx:
+            download_memo("company-id", "no-such-memo")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class CallMemoCrudTests(unittest.TestCase):
+    @patch("routers.call_memo.data_store")
+    def test_create_and_list_memos(self, data_store):
+        store = _FakeStore({"id": "company-id", "name": "測試公司", "call_memos": []})
+        data_store.get_company.side_effect = store.get_company
+        data_store.update_company.side_effect = store.update_company
+
+        created = create_memo("company-id")
+        self.assertTrue(created["id"])
+        self.assertEqual(created["interview_date"], "")
+
+        memos = list_memos("company-id")
+        self.assertEqual(len(memos), 1)
+        self.assertEqual(memos[0]["id"], created["id"])
+
+    @patch("routers.call_memo.data_store")
+    def test_list_memos_migrates_legacy_single_call_memo(self, data_store):
+        legacy_company = {
+            "id": "company-id",
+            "name": "測試公司",
+            "call_memo": {"interview_date": "2026/07/29", "deal_source": "自行開發"},
+            "call_memo_source": {"filename": "x.txt", "stored_name": "memo_source_x.txt"},
+        }
+        store = _FakeStore(legacy_company)
+        data_store.get_company.side_effect = store.get_company
+        data_store.update_company.side_effect = store.update_company
+
+        memos = list_memos("company-id")
+
+        self.assertEqual(len(memos), 1)
+        self.assertEqual(memos[0]["interview_date"], "2026/07/29")
+        self.assertEqual(memos[0]["deal_source"], "自行開發")
+        self.assertEqual(memos[0]["source"]["filename"], "x.txt")
+        # migration is persisted so the next read doesn't redo the wrap
+        self.assertEqual(len(store.company["call_memos"]), 1)
+
+    @patch("routers.call_memo.data_store")
+    def test_delete_memo_removes_it_and_returns_remaining(self, data_store):
+        company = {
+            "id": "company-id",
+            "name": "測試公司",
+            "call_memos": [
+                {"id": "memo-1", "interview_date": "2026/07/01"},
+                {"id": "memo-2", "interview_date": "2026/07/02"},
+            ],
+        }
+        store = _FakeStore(company)
+        data_store.get_company.side_effect = store.get_company
+        data_store.update_company.side_effect = store.update_company
+
+        result = delete_memo("company-id", "memo-1")
+
+        self.assertEqual([m["id"] for m in result["call_memos"]], ["memo-2"])
 
 
 class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
-    @patch("routers.call_memo.data_store.update_company")
-    @patch("routers.call_memo._record_memo_run")
-    @patch("routers.call_memo._write_memo_source_file")
+    @patch("routers.call_memo.data_store")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")
     @patch("routers.call_memo.extract_text")
-    @patch("routers.call_memo.data_store.get_company")
     async def test_markdown_is_decoded_as_plain_text(
-        self, get_company, extract_text, extract_with_audit, write_source, record_run, update_company
+        self, extract_text, extract_with_audit, data_store
     ):
-        get_company.return_value = {"name": "測試公司"}
-        extract_with_audit.return_value = (
-            {"interview_date": "2026/08/04"}, {"evidence": {}, "coverage": {}}
-        )
-        source = {"filename": "podcast.md", "stored_name": "memo_source_x.md"}
-        write_source.return_value = source
-        transcript = "# Podcast 逐字稿\n\n營收為新台幣一億元。"
-        upload = Mock(filename="podcast.md")
-        upload.read = AsyncMock(return_value=transcript.encode("utf-8"))
+        with TemporaryDirectory() as tmp:
+            with patch("routers.call_memo._MEMO_SOURCES_DIR", Path(tmp) / "uploads"), \
+                 patch("routers.call_memo._MEMO_RUNS_DIR", Path(tmp) / "memo_runs"), \
+                 patch("routers.call_memo.data_store.DATA_DIR", Path(tmp)):
+                store = _FakeStore(_company_with_memo())
+                data_store.get_company.side_effect = store.get_company
+                data_store.update_company.side_effect = store.update_company
 
-        result = await extract_memo("company-id", upload, {"engine": "claude"})
+                extract_with_audit.return_value = (
+                    {"interview_date": "2026/08/04", "deal_source": "自行開發"},
+                    {"evidence": {}, "coverage": {}},
+                )
+                transcript = "# Podcast 逐字稿\n\n營收為新台幣一億元。"
+                upload = Mock(filename="podcast.md")
+                upload.read = AsyncMock(return_value=transcript.encode("utf-8"))
 
-        extract_text.assert_not_called()
-        write_source.assert_called_once_with(
-            "company-id", "podcast.md", transcript.encode("utf-8")
-        )
-        extract_with_audit.assert_awaited_once_with(
-            "測試公司", transcript, source_filename="podcast.md", engine="claude"
-        )
-        update_company.assert_called_once_with(
-            "company-id", {"call_memo_source": source}
-        )
-        self.assertEqual(result["interview_date"], "2026/08/04")
-        record_run.assert_called_once()
+                result = await extract_memo("company-id", "memo-1", upload, {"engine": "claude"})
 
-    @patch("routers.call_memo.data_store.update_company")
-    @patch("routers.call_memo._record_memo_run")
-    @patch("routers.call_memo._write_memo_source_file")
+                extract_text.assert_not_called()
+                extract_with_audit.assert_awaited_once_with(
+                    "測試公司", transcript, source_filename="podcast.md", engine="claude"
+                )
+                self.assertEqual(result["interview_date"], "2026/08/04")
+                saved_memo = store.company["call_memos"][0]
+                self.assertEqual(saved_memo["deal_source"], "自行開發")
+                self.assertEqual(saved_memo["source"]["filename"], "podcast.md")
+                self.assertEqual(len(saved_memo["runs"]), 1)
+
+    @patch("routers.call_memo.data_store")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")
-    @patch("routers.call_memo.data_store.get_company")
     async def test_missing_interview_date_is_not_replaced_with_today(
-        self, get_company, extract_with_audit, _write_source, _record_run, _update_company
+        self, extract_with_audit, data_store
     ):
-        get_company.return_value = {"name": "測試公司"}
-        extract_with_audit.return_value = (
-            {"interview_date": ""}, {"evidence": {}, "coverage": {}}
-        )
-        upload = Mock(filename="podcast.txt")
-        upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
+        with TemporaryDirectory() as tmp:
+            with patch("routers.call_memo._MEMO_SOURCES_DIR", Path(tmp) / "uploads"), \
+                 patch("routers.call_memo._MEMO_RUNS_DIR", Path(tmp) / "memo_runs"), \
+                 patch("routers.call_memo.data_store.DATA_DIR", Path(tmp)):
+                store = _FakeStore(_company_with_memo())
+                data_store.get_company.side_effect = store.get_company
+                data_store.update_company.side_effect = store.update_company
 
-        result = await extract_memo("company-id", upload, {"engine": "claude"})
+                extract_with_audit.return_value = (
+                    {"interview_date": ""}, {"evidence": {}, "coverage": {}}
+                )
+                upload = Mock(filename="podcast.txt")
+                upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
 
-        self.assertEqual(result["interview_date"], "")
+                result = await extract_memo("company-id", "memo-1", upload, {"engine": "claude"})
 
-    @patch("routers.call_memo.data_store.update_company")
-    @patch("routers.call_memo._write_memo_source_file")
+                self.assertEqual(result["interview_date"], "")
+
+    @patch("routers.call_memo.data_store")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")
-    @patch("routers.call_memo.data_store.get_company")
     async def test_failed_extraction_does_not_overwrite_previous_source(
-        self, get_company, extract_with_audit, write_source, update_company
+        self, extract_with_audit, data_store
     ):
-        get_company.return_value = {"name": "測試公司"}
-        extract_with_audit.side_effect = ValueError("AI 無法完成逐字稿分段抽取")
-        write_source.return_value = {"filename": "bad.txt", "stored_name": "memo_source_bad.txt"}
-        upload = Mock(filename="bad.txt")
-        upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
+        with TemporaryDirectory() as tmp:
+            with patch("routers.call_memo._MEMO_SOURCES_DIR", Path(tmp) / "uploads"), \
+                 patch("routers.call_memo._MEMO_RUNS_DIR", Path(tmp) / "memo_runs"), \
+                 patch("routers.call_memo.data_store.DATA_DIR", Path(tmp)):
+                store = _FakeStore(_company_with_memo(source={"filename": "good.txt", "stored_name": "memo_source_good.txt"}))
+                data_store.get_company.side_effect = store.get_company
+                data_store.update_company.side_effect = store.update_company
 
-        with self.assertRaises(HTTPException) as ctx:
-            await extract_memo("company-id", upload, {"engine": "claude"})
+                extract_with_audit.side_effect = ValueError("AI 無法完成逐字稿分段抽取")
+                upload = Mock(filename="bad.txt")
+                upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
 
-        self.assertEqual(ctx.exception.status_code, 422)
-        write_source.assert_called_once()
-        update_company.assert_not_called()
+                with self.assertRaises(HTTPException) as ctx:
+                    await extract_memo("company-id", "memo-1", upload, {"engine": "claude"})
+
+                self.assertEqual(ctx.exception.status_code, 422)
+                self.assertEqual(
+                    store.company["call_memos"][0]["source"]["filename"], "good.txt"
+                )
 
 
 class CallMemoTranscriptPreparationTests(unittest.TestCase):
@@ -125,11 +236,10 @@ AI 先前產生的摘要
     def test_invalid_filename_date_is_ignored(self):
         self.assertEqual(infer_date_from_filename("podcast 20261340.md"), "")
 
-    @patch("routers.call_memo.data_store.update_company")
-    def test_source_file_and_metadata_are_persisted(self, update_company):
+    def test_source_file_is_persisted(self):
         with TemporaryDirectory() as tmp:
             with patch("routers.call_memo._MEMO_SOURCES_DIR", Path(tmp)):
-                source = _save_memo_source(
+                source = _write_memo_source_file(
                     "company-id", "joinx podcast 20260708.md", b"transcript"
                 )
 
@@ -137,9 +247,6 @@ AI 先前產生的摘要
             self.assertEqual(stored.read_bytes(), b"transcript")
             self.assertEqual(source["filename"], "joinx podcast 20260708.md")
             self.assertEqual(source["size"], 10)
-            update_company.assert_called_once_with(
-                "company-id", {"call_memo_source": source}
-            )
 
 
 if __name__ == "__main__":

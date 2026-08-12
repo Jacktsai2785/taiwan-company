@@ -368,10 +368,7 @@ async def deep_enrich_summary(company: dict, engine: str = "",
 _MEMO_LABELS = [(key, label) for key, label, _ in memo_extractor.FIELDS]
 
 
-def serialize_memo(memo: dict | None) -> str:
-    """Turn a call_memo dict into a readable interview text block (non-empty fields)."""
-    if not memo:
-        return ""
+def _serialize_single_memo(memo: dict) -> str:
     lines: list[str] = []
     date = (memo.get("interview_date") or "").strip()
     if date:
@@ -381,6 +378,27 @@ def serialize_memo(memo: dict | None) -> str:
         if val:
             lines.append(f"{label}：{val}")
     return "\n".join(lines)
+
+
+def serialize_memo(memo: dict | list[dict] | None) -> str:
+    """Turn one or more call_memo dicts into a readable interview text block.
+
+    Accepts either the legacy single dict or the current call_memos list, so
+    callers reading `company.get("call_memos") or company.get("call_memo")`
+    don't need to branch.
+    """
+    if not memo:
+        return ""
+    if isinstance(memo, dict):
+        return _serialize_single_memo(memo)
+    parts: list[str] = []
+    for i, entry in enumerate(memo, start=1):
+        text = _serialize_single_memo(entry)
+        if not text:
+            continue
+        title = entry.get("label") or entry.get("interview_date") or f"第 {i} 份"
+        parts.append(f"【訪談備忘錄 {i}：{title}】\n{text}")
+    return "\n\n".join(parts)
 
 
 def _extract_section(summary: str, heading: str) -> str:

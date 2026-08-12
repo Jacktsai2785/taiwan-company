@@ -167,7 +167,7 @@ _MERGE_UNION_FIELDS = {
     "labels", "industries", "materials_applied_headings", "call_memo_runs",
 }
 _MERGE_CURATED_FIELDS = (
-    "materials", "call_memo", "patents", "relationship_graph",
+    "materials", "call_memo", "call_memos", "patents", "relationship_graph",
     "materials_summary", "materials_blurb", "deep_enriched_at",
 )
 
@@ -199,6 +199,8 @@ def _merge_list_values(field: str, records: list[dict]) -> list:
             return str(value.get("patent_no") or value.get("app_no") or value.get("title") or json.dumps(value, ensure_ascii=False, sort_keys=True))
         if field == "materials":
             return str(value.get("stored_name") or value.get("filename") or value.get("url") or json.dumps(value, ensure_ascii=False, sort_keys=True))
+        if field == "call_memos":
+            return str(value.get("id") or json.dumps(value, ensure_ascii=False, sort_keys=True))
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
     for record in records:
@@ -639,6 +641,7 @@ def create_company(name: str, label: str, industry: str = "", tax_id: str = "") 
         "summary": "",
         "watched": False,
         "call_memo": {},
+        "call_memos": [],
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }
     return upsert_company(company)

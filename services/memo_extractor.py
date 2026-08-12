@@ -25,6 +25,7 @@ FIELDS: list[tuple[str, str, str]] = [
     ("ipo_timeline",       "公開發行及上市櫃時程/募資規劃", "IPO 目標年份、目前募資輪次等時間性資訊"),
     ("investment_terms",   "增資計畫或投資條件",          "本次募資總額、釋出股比、預計 close 時程"),
     ("business_revenue",   "主要業務、產品營收比重",       "核心業務說明及各產品/服務的營收佔比"),
+    ("tech_description",   "公司技術說明",                "核心技術、技術門檻、專利或研發能力等說明"),
     ("financials",         "財務狀況",                   "近期營收、淨利、年增率等財務數據"),
     ("management_team",    "經營團隊背景",                "創辦人/CEO、CTO、CFO 的背景與經歷"),
     ("board_shareholding", "董監或主要股東持股情形",       "主要股東名稱與持股比例"),
@@ -34,15 +35,22 @@ FIELDS: list[tuple[str, str, str]] = [
     ("factory_capacity",   "廠房及產能使用情形",          "廠房地點、產能規模、目前使用率"),
     ("competitors",        "國內外主要競爭對手",          "直接競爭者名稱及差異化分析"),
     ("industry_trends",    "產業發展趨勢",                "產業現況、市場規模、未來展望"),
+    ("memo_notes",         "Memo",                       "使用者自由備註，不由 AI 自動抽取"),
     ("risk_tracking",      "風險評估及追蹤事項",          "主要風險點與需持續追蹤的議題"),
     ("conclusion",         "評估結論與建議",              "訪談整體評估與後續建議行動"),
 ]
 
 FIELD_KEYS = [f[0] for f in FIELDS]
 
-# 抽取時額外請 AI 從逐字稿判斷訪談日期（不併進 FIELDS——FIELDS 是 memo 正文 24 欄的
+# 自由備註欄位：不參與 AI 逐字稿抽取／統整，只走 MemoSave / DOCX / serialize_memo。
+_MANUAL_ONLY_KEYS = {"memo_notes"}
+
+# 抽取時額外請 AI 從逐字稿判斷訪談日期（不併進 FIELDS——FIELDS 是 memo 正文欄位的
 # 唯一真理來源，供 MemoSave / DOCX 範本 / serialize_memo 共用；interview_date 另走流程）。
-_EXTRACT_FIELDS = [("interview_date", "訪談日期", "逐字稿中提到的訪談/會議日期，格式 YYYY/MM/DD；未提及請留空")] + FIELDS
+# _MANUAL_ONLY_KEYS（如 memo_notes）不參與抽取，避免浪費 AI 額度也避免覆蓋使用者手寫備註。
+_EXTRACT_FIELDS = [("interview_date", "訪談日期", "逐字稿中提到的訪談/會議日期，格式 YYYY/MM/DD；未提及請留空")] + [
+    f for f in FIELDS if f[0] not in _MANUAL_ONLY_KEYS
+]
 _EXTRACT_KEYS = [f[0] for f in _EXTRACT_FIELDS]
 
 _CHUNK_CHARS = 12000
@@ -64,8 +72,8 @@ _SYNTHESIS_GROUPS: tuple[tuple[str, ...], ...] = (
         "board_shareholding",
     ),
     (
-        "business_revenue", "recent_development", "major_customers",
-        "major_suppliers", "factory_capacity",
+        "business_revenue", "tech_description", "recent_development",
+        "major_customers", "major_suppliers", "factory_capacity",
     ),
     (
         "management_team", "competitors", "industry_trends",

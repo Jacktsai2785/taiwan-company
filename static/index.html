@@ -324,11 +324,12 @@
       <div id="materials-file-list"></div>
     </div>
 
-    <!-- 分頁②：訪談備忘錄（手動填寫，或上傳逐字稿／錄音自動填） -->
+    <!-- 分頁②：訪談備忘錄（手動填寫，或上傳逐字稿／錄音自動填；可建立多份） -->
     <div id="mtab-memo" style="display:none">
+      <div id="memo-tabs"></div>
       <div class="memo-actions-row">
         <button class="memo-tab-btn" onclick="saveMemo()">💾 儲存</button>
-        <button class="memo-tab-btn" onclick="downloadMemo()">⬇ 備忘錄 .docx</button>
+        <button class="memo-tab-btn" onclick="downloadMemo()">⬇ callmemo.docx</button>
       </div>
       <div class="memo-upload-row">
         <label class="memo-up-btn" for="memo-file-input" title="選取逐字稿後，AI 會立即分析並填寫 Call Memo（TXT / Markdown / PDF / Word）">＋ 逐字稿 → AI 填 Memo</label>

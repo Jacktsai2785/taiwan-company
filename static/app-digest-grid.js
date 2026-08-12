@@ -726,7 +726,7 @@ async function toggleModalWatch() {
   }
 }
 
-/* ── Call Memo ── */
+/* ── Call Memo（每間公司可有多份，用上方頁籤切換）── */
 const MEMO_FIELDS = [
   ["deal_source",        "案件來源",                    false],
   ["interviewees",       "受訪人",                      false],
@@ -741,6 +741,7 @@ const MEMO_FIELDS = [
   ["ipo_timeline",       "公開發行及上市櫃時程/募資規劃", true],
   ["investment_terms",   "增資計畫或投資條件",           true],
   ["business_revenue",   "主要業務、產品營收比重",        true],
+  ["tech_description",   "公司技術說明",                 true],
   ["financials",         "財務狀況",                    true],
   ["management_team",    "經營團隊背景",                 true],
   ["board_shareholding", "董監或主要股東持股情形",        true],
@@ -750,9 +751,49 @@ const MEMO_FIELDS = [
   ["factory_capacity",   "廠房及產能使用情形",           true],
   ["competitors",        "國內外主要競爭對手",           true],
   ["industry_trends",    "產業發展趨勢",                 true],
+  ["memo_notes",         "Memo",                        true],  // 收合欄位，見 _renderMemoNotesBlock
   ["risk_tracking",      "風險評估及追蹤事項",           true],
   ["conclusion",         "評估結論與建議",               true],
 ];
+
+let _memoList = [];       // 目前這間公司的全部 call memo（摘要 + 全欄位）
+let _activeMemoId = null; // 目前分頁面正在編輯的那一份
+
+function _memoTabLabel(memo, index) {
+  return memo.label || memo.interview_date || `Call Memo ${index + 1}`;
+}
+
+function _renderMemoTabs() {
+  const wrap = document.getElementById("memo-tabs");
+  if (!wrap) return;
+  const tabs = _memoList.map((m, i) => `
+    <div class="memo-tab${m.id === _activeMemoId ? " on" : ""}" onclick="_selectMemo('${m.id}')">
+      <span>${escHtml(_memoTabLabel(m, i))}</span>
+      <button class="memo-tab-del" onclick="event.stopPropagation(); _deleteMemo('${m.id}')" title="刪除此份 call memo">✕</button>
+    </div>`).join("");
+  wrap.innerHTML = `<div class="memo-tabs-row">${tabs}<button class="memo-tab-add" onclick="_addMemo()" title="新增 call memo">＋ 新增</button></div>`;
+}
+
+// Memo 欄位是自由備註、不參與 AI 抽取，預設收合以節省空間。
+function _renderMemoNotesBlock(memo) {
+  const val = (memo && memo.memo_notes) ? memo.memo_notes : "";
+  return `
+    <div class="memo-field full memo-notes-field">
+      <div class="memo-notes-header" onclick="toggleMemoNotes()">
+        <label>Memo</label><span id="memo-notes-toggle">▼</span>
+      </div>
+      <textarea id="memo-memo_notes" rows="4" style="display:none">${escHtml(val)}</textarea>
+    </div>`;
+}
+
+function toggleMemoNotes() {
+  const ta = document.getElementById("memo-memo_notes");
+  const toggle = document.getElementById("memo-notes-toggle");
+  if (!ta || !toggle) return;
+  const collapsed = ta.style.display === "none";
+  ta.style.display = collapsed ? "" : "none";
+  toggle.textContent = collapsed ? "▲" : "▼";
+}
 
 function _renderMemoFields(memo) {
   const container = document.getElementById("memo-fields");
@@ -768,41 +809,118 @@ function _renderMemoFields(memo) {
       </div>
     </div>`;
 
-  const fields = MEMO_FIELDS.map(([key, label, isLong]) => {
+  let fields = "";
+  for (const [key, label, isLong] of MEMO_FIELDS) {
+    if (key === "memo_notes") { fields += _renderMemoNotesBlock(memo); continue; }
     const val = (memo && memo[key]) ? memo[key] : "";
     const cls = `memo-field${isLong ? " full" : ""}`;
     const input = isLong
       ? `<textarea id="memo-${key}" rows="3">${escHtml(val)}</textarea>`
       : `<input id="memo-${key}" type="text" value="${escAttr(val)}" />`;
-    return `<div class="${cls}"><label>${escHtml(label)}</label>${input}</div>`;
-  }).join("");
+    fields += `<div class="${cls}"><label>${escHtml(label)}</label>${input}</div>`;
+  }
 
   container.innerHTML = dateField + `<div class="memo-fields-grid">${fields}</div>`;
 }
 
-async function loadMemo(id) {
-  try {
-    const memo = await api("GET", `/api/companies/${id}/memo`);
-    _renderMemoFields(memo);
-  } catch {
-    _renderMemoFields({});
+// AI 抽取的結果拿來重畫表單時，Memo 欄位是手動備註、不受抽取影響，畫面上原本打的字要保留。
+function _renderMemoFieldsPreservingNotes(fields) {
+  const prevNotes = document.getElementById("memo-memo_notes")?.value;
+  _renderMemoFields(fields);
+  if (prevNotes) {
+    const ta = document.getElementById("memo-memo_notes");
+    if (ta) ta.value = prevNotes;
   }
 }
 
-// Memo lives inside the unified 補充資料 panel now. Kept as an alias in case
-// anything still calls it.
+// Memo 面板已整併進統一的補充資料 panel。保留別名以防還有地方呼叫舊名。
 function openMemoPanel() { openMaterialsPanel(); }
 
-// Render the 訪談備忘錄 fields into the unified panel (from cache or backend).
-function _loadMemoSection(id) {
+// 載入這間公司全部 call memo，畫出頁籤並顯示第一份。
+async function _loadMemoSection(id) {
   document.getElementById("memo-extract-status").textContent = "";
-  loadMemoSource(id);
-  const c = state.companies.find(x => x.id === id);
-  if (c && c.call_memo && Object.keys(c.call_memo).length > 0) {
-    _renderMemoFields(c.call_memo);
+  try {
+    _memoList = await api("GET", `/api/companies/${id}/memos`);
+  } catch {
+    _memoList = [];
+  }
+  _activeMemoId = _memoList.length ? _memoList[0].id : null;
+  _renderMemoTabs();
+  if (_activeMemoId) {
+    _renderMemoFields(_memoList[0]);
+    loadMemoSource(id, _activeMemoId);
   } else {
     _renderMemoFields({});
-    loadMemo(id);
+    _renderMemoSource({});
+  }
+}
+
+// 懶建立：只有真的存檔/上傳逐字稿或錄音時才會建立第一份 call memo，
+// 單純打開補充資料面板不會寫入任何資料。
+async function _ensureActiveMemo() {
+  if (_activeMemoId) return _activeMemoId;
+  if (_memoList.length) {
+    _activeMemoId = _memoList[0].id;
+    _renderMemoTabs();
+    return _activeMemoId;
+  }
+  const id = _modalCompanyId;
+  if (!id) return null;
+  const created = await api("POST", `/api/companies/${id}/memos`);
+  _memoList.push(created);
+  _activeMemoId = created.id;
+  _renderMemoTabs();
+  return _activeMemoId;
+}
+
+async function _addMemo() {
+  const id = _modalCompanyId;
+  if (!id) return;
+  if (_activeMemoId) await saveMemo(true);  // 先存目前分頁，再切到新的一份
+  try {
+    const created = await api("POST", `/api/companies/${id}/memos`);
+    _memoList.push(created);
+    _activeMemoId = created.id;
+    _renderMemoTabs();
+    _renderMemoFields(created);
+    document.getElementById("memo-extract-status").textContent = "";
+    _renderMemoSource({});
+  } catch (err) {
+    toast(`新增失敗：${err.message}`, true);
+  }
+}
+
+async function _selectMemo(memoId) {
+  if (memoId === _activeMemoId) return;
+  await saveMemo(true);
+  _activeMemoId = memoId;
+  _renderMemoTabs();
+  const memo = _memoList.find(m => m.id === memoId);
+  _renderMemoFields(memo || {});
+  document.getElementById("memo-extract-status").textContent = "";
+  loadMemoSource(_modalCompanyId, memoId);
+}
+
+async function _deleteMemo(memoId) {
+  const id = _modalCompanyId;
+  if (!id) return;
+  if (!confirm("確定刪除這份 call memo？此動作無法復原。")) return;
+  try {
+    const data = await api("DELETE", `/api/companies/${id}/memos/${memoId}`);
+    _memoList = data.call_memos || [];
+    if (_activeMemoId === memoId) {
+      _activeMemoId = _memoList.length ? _memoList[0].id : null;
+    }
+    _renderMemoTabs();
+    if (_activeMemoId) {
+      _renderMemoFields(_memoList.find(m => m.id === _activeMemoId) || {});
+      loadMemoSource(id, _activeMemoId);
+    } else {
+      _renderMemoFields({});
+      _renderMemoSource({});
+    }
+  } catch (err) {
+    toast(`刪除失敗：${err.message}`, true);
   }
 }
 
@@ -818,11 +936,14 @@ function _collectMemoData() {
 async function saveMemo(silent = false) {
   const id = _modalCompanyId;
   if (!id) return;
+  const memoId = await _ensureActiveMemo();
+  if (!memoId) return;
   const data = _collectMemoData();
   try {
-    await api("PUT", `/api/companies/${id}/memo`, data);
-    const idx = state.companies.findIndex(c => c.id === id);
-    if (idx !== -1) state.companies[idx].call_memo = data;
+    const updated = await api("PUT", `/api/companies/${id}/memos/${memoId}`, data);
+    const idx = _memoList.findIndex(m => m.id === memoId);
+    if (idx !== -1) _memoList[idx] = updated;
+    _renderMemoTabs();
     if (!silent) toast("Call Memo 已儲存");
   } catch (err) {
     if (!silent) toast(`儲存失敗：${err.message}`, true);
@@ -831,8 +952,8 @@ async function saveMemo(silent = false) {
 
 function downloadMemo() {
   const id = _modalCompanyId;
-  if (!id) return;
-  window.location.href = `/api/companies/${id}/memo/download`;
+  if (!id || !_activeMemoId) { toast("請先建立並填寫 call memo", true); return; }
+  window.location.href = `/api/companies/${id}/memos/${_activeMemoId}/download`;
 }
 
 function _renderMemoSource(source) {
@@ -856,23 +977,24 @@ function _renderMemoSource(source) {
   card.style.display = "flex";
 }
 
-async function loadMemoSource(id) {
+async function loadMemoSource(id, memoId) {
   try {
-    const source = await api("GET", `/api/companies/${id}/memo/source`);
-    if (_modalCompanyId === id) _renderMemoSource(source);
+    const source = await api("GET", `/api/companies/${id}/memos/${memoId}/source`);
+    if (_modalCompanyId === id && _activeMemoId === memoId) _renderMemoSource(source);
   } catch {
-    if (_modalCompanyId === id) _renderMemoSource({});
+    if (_modalCompanyId === id && _activeMemoId === memoId) _renderMemoSource({});
   }
 }
 
 async function reextractMemo() {
   const id = _modalCompanyId;
-  if (!id) return;
+  const memoId = _activeMemoId;
+  if (!id || !memoId) return;
   const status = document.getElementById("memo-extract-status");
   status.textContent = "⏳ AI 正在重新分析已保存的逐字稿，較長內容可能需要數分鐘…";
   try {
-    const fields = await api("POST", `/api/companies/${id}/memo/reextract`);
-    _renderMemoFields(fields);
+    const fields = await api("POST", `/api/companies/${id}/memos/${memoId}/reextract`);
+    _renderMemoFieldsPreservingNotes(fields);
     status.textContent = "✅ 重新分析完成，請確認後儲存";
     alertDone("(!) 逐字稿重新分析完成", "✅ Call Memo 欄位已更新，請確認後儲存");
   } catch (err) {
@@ -886,6 +1008,8 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   this.value = "";
   const id = _modalCompanyId;
   if (!id) return;
+  const memoId = await _ensureActiveMemo();
+  if (!memoId) return;
 
   const status = document.getElementById("memo-extract-status");
   status.textContent = "⏳ AI 正在從逐字稿產生 Call Memo，較長內容可能需要數分鐘…";
@@ -893,14 +1017,14 @@ document.getElementById("memo-file-input").addEventListener("change", async func
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const fields = await api("POST", `/api/companies/${id}/memo/extract`, fd);
-    _renderMemoFields(fields);
+    const fields = await api("POST", `/api/companies/${id}/memos/${memoId}/extract`, fd);
+    _renderMemoFieldsPreservingNotes(fields);
     status.textContent = "✅ 自動填寫完成，請確認後儲存";
     alertDone("(!) 逐字稿分析完成", "✅ 訪談備忘錄欄位已自動填寫，請確認後儲存");
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
   } finally {
-    await loadMemoSource(id);
+    await loadMemoSource(id, memoId);
   }
 });
 
@@ -933,6 +1057,8 @@ document.getElementById("memo-audio-input").addEventListener("change", async fun
   this.value = "";
   const id = _modalCompanyId;
   if (!id) return;
+  const memoId = await _ensureActiveMemo();
+  if (!memoId) return;
 
   const status = document.getElementById("memo-audio-status");
   const transcriptBox = document.getElementById("memo-transcript-box");
@@ -947,18 +1073,20 @@ document.getElementById("memo-audio-input").addEventListener("change", async fun
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const result = await api("POST", `/api/companies/${id}/memo/transcribe-audio`, fd);
+    const result = await api("POST", `/api/companies/${id}/memos/${memoId}/transcribe-audio`, fd);
     document.getElementById("memo-transcript-text").value = result.transcript;
     transcriptBox.style.display = "";
     document.getElementById("memo-transcript-toggle").textContent = "▲";
     document.getElementById("memo-transcript-text").style.display = "";
-    _renderMemoFields(result.fields);
+    _renderMemoFieldsPreservingNotes(result.fields);
     status.textContent = "✅ 語音辨識完成，欄位已自動填寫，請確認後儲存";
     status.className = "memo-status-ok";
     alertDone("(!) 語音辨識完成", "✅ 語音辨識完成，訪談備忘錄已自動填寫，請確認後儲存");
   } catch (err) {
     status.textContent = `❌ ${err.message}`;
     status.className = "memo-status-error";
+  } finally {
+    await loadMemoSource(id, memoId);
   }
 });
 
