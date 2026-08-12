@@ -452,7 +452,7 @@ function companyCardHtml(c) {
 
   const groupBadge = c.group ? `<span class="group-badge">${escHtml(c.group)}</span>` : "";
   const labelChips = (c.labels || []).map(l =>
-    `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}<button class="label-remove-btn" onclick="event.stopPropagation();removeLabel('${c.id}','${escAttr(l)}')" title="移除標籤">×</button></span>`
+    `<span class="label-chip" title="${escHtml(l)}">${escHtml(truncLabel(l))}<button class="label-remove-btn" onclick="${escHtml(`event.stopPropagation();removeLabel(${JSON.stringify(c.id)},${JSON.stringify(l)})`)}" title="移除標籤">×</button></span>`
   ).join("");
   const addLabelBtn = `<button class="label-add-btn" onclick="event.stopPropagation();startAddLabel('${c.id}')" title="新增標籤">+</button>`;
   const badge = listingBadge(c.listing_status);

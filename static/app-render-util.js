@@ -496,7 +496,14 @@ function escHtml(str) {
 }
 
 function escAttr(str) {
-  return String(str || "").replace(/'/g, "\\'").replace(/"/g, "&quot;");
+  // HTML attribute escaping only.  It must not be reused as JavaScript-string
+  // escaping: inline handlers use JSON.stringify plus escHtml at their callsite.
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // Middle-truncate labels longer than 4 chars: keep first 2 + "…" + last 2.

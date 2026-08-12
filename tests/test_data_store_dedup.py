@@ -41,6 +41,27 @@ def test_merge_company_records_preserves_user_work_and_unions_taxonomy():
     assert merged["merged_from_ids"] == ["drop"]
 
 
+def test_merge_company_records_keeps_explicit_false_over_donor_true():
+    # no_par_value=False is a confirmed "has par value" state, not a blank —
+    # bool is a subclass of int so False == 0, which used to fall into the
+    # empty-field backfill branch and get silently replaced by a donor's True.
+    primary = {"id": "keep", "name": "公司", "tax_id": "12345678", "no_par_value": False}
+    donor = {"id": "drop", "name": "公司", "tax_id": "12345678", "no_par_value": True}
+
+    merged = data_store._merge_company_records(primary, [primary, donor])
+
+    assert merged["no_par_value"] is False
+
+
+def test_merge_company_records_backfills_false_into_missing_field():
+    primary = {"id": "keep", "name": "公司", "tax_id": "12345678"}
+    donor = {"id": "drop", "name": "公司", "tax_id": "12345678", "no_par_value": False}
+
+    merged = data_store._merge_company_records(primary, [primary, donor])
+
+    assert merged["no_par_value"] is False
+
+
 def test_rewrite_company_id_refs_handles_ids_and_upload_urls():
     value = {
         "company_id": "drop",
@@ -174,6 +195,57 @@ class CompanyMergeTransactionTests(unittest.TestCase):
             self.assertTrue((root / "uploads" / "keep" / "drop.txt").exists())
             self.assertFalse((root / "uploads" / "drop").exists())
             self.assertEqual(result["external_refs_rewritten"], 2)
+
+    def test_transaction_rewrites_metadata_for_colliding_filenames(self):
+        # Both companies uploaded a file named the same thing; the physical
+        # merge must rename one on collision, and the JSON URL that pointed
+        # at it must be rewritten to match — not left pointing at a name
+        # that no longer exists on disk.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companies_file = root / "companies.json"
+            store = {
+                "companies": [
+                    {
+                        "id": "keep",
+                        "name": "保留公司",
+                        "materials": [{"url": "/uploads/keep/deck.pdf"}],
+                    },
+                    {
+                        "id": "drop",
+                        "name": "重複公司",
+                        "materials": [{"url": "/uploads/drop/deck.pdf"}],
+                    },
+                ]
+            }
+            companies_file.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+            for company_id, content in (("keep", "keep-deck"), ("drop", "drop-deck")):
+                directory = root / "uploads" / company_id
+                directory.mkdir(parents=True)
+                (directory / "deck.pdf").write_text(content, encoding="utf-8")
+
+            new_store = deepcopy(store)
+            new_store["companies"] = [{
+                "id": "keep",
+                "name": "保留公司",
+                "materials": [
+                    {"url": "/uploads/keep/deck.pdf"},
+                    {"url": "/uploads/drop/deck.pdf"},
+                ],
+            }]
+
+            data_store._FILE_CACHE.clear()
+            with patch.object(data_store, "DATA_DIR", root), \
+                 patch.object(data_store, "COMPANIES_FILE", companies_file):
+                data_store._commit_company_merge_transaction(new_store, {"drop": "keep"})
+
+            saved = json.loads(companies_file.read_text(encoding="utf-8"))
+            urls = {m["url"] for m in saved["companies"][0]["materials"]}
+            for url in urls:
+                relative = url.removeprefix("/uploads/")
+                self.assertTrue((root / "uploads" / relative).is_file(), url)
+            self.assertIn("/uploads/keep/deck.pdf", urls)
+            self.assertEqual((root / "uploads" / "keep" / "deck.pdf").read_text(), "keep-deck")
 
     def test_transaction_rejects_upload_path_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:

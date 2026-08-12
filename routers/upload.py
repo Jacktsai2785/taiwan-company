@@ -12,7 +12,7 @@ log = logging.getLogger("upload")
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 # 文字/文件類由 file_parser 處理；與 materials.py 同步保持白名單一致。
-_DOC_EXTS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".txt", ".csv"}
+_DOC_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".csv"}
 _ACCEPTED_EXTS = _IMAGE_EXTS | _DOC_EXTS
 _MAX_BYTES = 30 * 1024 * 1024  # 30MB，避免單一大檔把單機 process 的記憶體吃爆
 _AI_ERROR_HINT = (

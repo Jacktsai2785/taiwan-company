@@ -118,16 +118,64 @@ async function loadVersion() {
 }
 
 let _changelogLoaded = false;
+let _changelogData = null;
+let _changelogFilter = "all";
+
+function changelogEsc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[ch]);
+}
+
+function renderChangelog(filter = "all") {
+  if (!_changelogData) return;
+  _changelogFilter = filter;
+  const releases = _changelogData.releases || [];
+  const counts = {};
+  releases.forEach(release => release.sections.forEach(section => {
+    counts[section.type] = (counts[section.type] || 0) + section.items.length;
+  }));
+  const labels = { added: "新增", changed: "調整", fixed: "修正", removed: "移除", security: "安全性" };
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  document.getElementById("changelog-filters").innerHTML = [
+    `<button class="changelog-filter ${filter === "all" ? "active" : ""}" onclick="renderChangelog('all')">全部 <span>${total}</span></button>`,
+    ...Object.entries(labels).filter(([type]) => counts[type]).map(([type, label]) =>
+      `<button class="changelog-filter ${filter === type ? "active" : ""}" onclick="renderChangelog('${type}')">${label} <span>${counts[type]}</span></button>`
+    )
+  ].join("");
+
+  const visible = releases.map(release => ({
+    ...release,
+    sections: release.sections.filter(section => filter === "all" || section.type === filter)
+  })).filter(release => release.sections.length);
+  document.getElementById("changelog-content").innerHTML = visible.length ? visible.map((release, index) => `
+    <article class="changelog-release">
+      <div class="changelog-node"></div>
+      <div class="changelog-card">
+        <div class="changelog-meta">
+          <strong>v${changelogEsc(release.version)}</strong>
+          ${index === 0 && filter === "all" ? '<span class="changelog-latest">目前版本</span>' : ""}
+          <time>${changelogEsc(release.date)}</time>
+        </div>
+        ${release.sections.map(section => `
+          <section class="changelog-section changelog-${changelogEsc(section.type)}">
+            <span class="changelog-kind">${changelogEsc(section.label)}</span>
+            <ul>${section.items.map(item => `<li>${changelogEsc(item)}</li>`).join("")}</ul>
+          </section>`).join("")}
+      </div>
+    </article>`).join("") : '<div class="changelog-empty">此分類目前沒有版本紀錄。</div>';
+}
+
 async function openChangelog() {
   openOverlay("changelog-overlay");
   if (_changelogLoaded) return;
-  const contentEl = document.getElementById("changelog-content");
   try {
-    const res = await fetch("/changelog");
-    contentEl.textContent = res.ok ? await res.text() : "無法載入更新紀錄。";
-    _changelogLoaded = res.ok;
+    _changelogData = await api("GET", "/api/changelog");
+    document.getElementById("changelog-current").innerHTML = `目前版本 <strong>v${changelogEsc(_changelogData.current_version)}</strong> · 更新內容依產品版本集中管理`;
+    renderChangelog();
+    _changelogLoaded = true;
   } catch {
-    contentEl.textContent = "無法載入更新紀錄。";
+    document.getElementById("changelog-content").innerHTML = '<div class="changelog-empty">無法載入版本紀錄。</div>';
   }
 }
 
@@ -311,13 +359,19 @@ async function dismissArticle(url, title, source, sourceUrl, btn) {
 
 /* ── Boot ── */
 async function boot() {
-  await loadAiEngine();
-  await Promise.all([loadIndustries(), loadIndustryTree(), loadCompanies(), loadLabels(), loadLabelGroups()]);
-  computeGroups();
-  renderSidebar();
-  renderGrid();
-  _updateAiModeLabel();
-  loadVersion();
+  try {
+    await loadAiEngine();
+    await Promise.all([loadIndustries(), loadIndustryTree(), loadCompanies(), loadLabels(), loadLabelGroups()]);
+    computeGroups();
+    renderSidebar();
+    renderGrid();
+    _updateAiModeLabel();
+    loadVersion();
+  } catch (err) {
+    console.error("Initial data load failed", err);
+    document.getElementById("company-grid").innerHTML = `<div class="empty-state">無法載入資料：${escHtml(err.message || "未知錯誤")}<br><button onclick="boot()">重新嘗試</button></div>`;
+    return;
+  }
   // Request notification permission early (must be from a page-load context, not a background task)
   if ("Notification" in window && Notification.permission === "default") {
     Notification.requestPermission();

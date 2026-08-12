@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -21,6 +22,7 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 INDUSTRY_MAPS_FILE = DATA_DIR / "industry_maps.json"
+_MAPS_LOCK = threading.RLock()
 
 # 地圖生成有兩種模式（由 industryTree 是否有子節點決定，見 generate()）：
 #   parent 模式：產業「有子產業」→ 每個子產業當一個 section（可 drill-in），AI 只負責
@@ -83,27 +85,28 @@ def load_all_maps() -> dict[str, Any]:
 
 
 def load_map(industry: str) -> dict | None:
-    return load_all_maps().get(industry)
+    with _MAPS_LOCK:
+        return load_all_maps().get(industry)
 
 
 def save_map(industry: str, data: dict) -> None:
-    all_maps = load_all_maps()
-    all_maps[industry] = data
-    INDUSTRY_MAPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    INDUSTRY_MAPS_FILE.write_text(
-        json.dumps(all_maps, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # Keep the read-modify-write operation serialised and use the shared atomic
+    # writer so parallel map generations cannot overwrite each other or expose
+    # a partially-written JSON file.
+    with _MAPS_LOCK:
+        all_maps = load_all_maps()
+        all_maps[industry] = data
+        data_store.write_json(INDUSTRY_MAPS_FILE, all_maps)
 
 
 def delete_map(industry: str) -> bool:
-    all_maps = load_all_maps()
-    if industry not in all_maps:
-        return False
-    del all_maps[industry]
-    INDUSTRY_MAPS_FILE.write_text(
-        json.dumps(all_maps, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return True
+    with _MAPS_LOCK:
+        all_maps = load_all_maps()
+        if industry not in all_maps:
+            return False
+        del all_maps[industry]
+        data_store.write_json(INDUSTRY_MAPS_FILE, all_maps)
+        return True
 
 
 # ── Seed data collection ─────────────────────────────────────────────────────

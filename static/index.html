@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="/static/style-side-panel.css?v=94" />
   <link rel="stylesheet" href="/static/style-toolbar-grid.css?v=94" />
   <link rel="stylesheet" href="/static/style-modal.css?v=102" />
-  <link rel="stylesheet" href="/static/style-dialogs.css?v=94" />
+  <link rel="stylesheet" href="/static/style-dialogs.css?v=95" />
   <link rel="stylesheet" href="/static/style-industry-suggest.css?v=94" />
   <link rel="stylesheet" href="/static/style-industry-map-settings.css?v=99" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js" defer></script>
@@ -43,7 +43,7 @@
 
     <div class="sb-bottom">
       <input type="file" id="file-input"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp"
+        accept=".pdf,.docx,.pptx,.xlsx,.txt,.csv,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp"
         style="display:none" />
       <div id="upload-progress"></div>
       <div style="position:relative">
@@ -318,7 +318,7 @@
           <span>＋ 上傳簡報 / 公司介紹 / 照片</span>
         </label>
         <input type="file" id="materials-file-input" multiple
-               accept=".pdf,.pptx,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
+               accept=".pdf,.pptx,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.gif,.webp,.tiff,.tif,.bmp" style="display:none" />
         <div id="materials-upload-status"></div>
       </div>
       <div id="materials-file-list"></div>
@@ -689,13 +689,16 @@
 <div id="changelog-overlay">
   <div id="changelog-dialog">
     <div id="changelog-header">
-      <h3>版本更新紀錄</h3>
+      <div>
+        <h3><span aria-hidden="true">◇</span> 版本紀錄</h3>
+        <p id="changelog-current">正在讀取目前版本…</p>
+      </div>
+      <button class="changelog-close" onclick="closeOverlay('changelog-overlay')" aria-label="關閉">×</button>
     </div>
     <div id="changelog-body">
-      <pre id="changelog-content">載入中…</pre>
-    </div>
-    <div id="changelog-footer">
-      <button class="btn btn-ghost" onclick="closeOverlay('changelog-overlay')">關閉</button>
+      <div class="changelog-rule"><strong>版本規則</strong><code>MAJOR.MINOR.PATCH</code><span>修正 +PATCH；新功能 +MINOR；重大不相容變更 +MAJOR</span></div>
+      <div id="changelog-filters" class="changelog-filters"></div>
+      <div id="changelog-content" class="changelog-timeline"><div class="changelog-loading">載入中…</div></div>
     </div>
   </div>
 </div>
@@ -771,7 +774,7 @@
 <!-- app.js 已依區塊拆成以下 8 個檔案（純檔案拆分，無內容變更）；classic script（非 module），
      共用全域（state/api()/openOverlay 等）在 app-core.js，boot() 呼叫在 app-render-util.js 結尾，
      順序不可調換 -->
-<script src="/static/app-core.js?v=97"></script>
+<script src="/static/app-core.js?v=98"></script>
 <script src="/static/app-sidebar.js?v=96"></script>
 <script src="/static/app-digest-grid.js?v=96"></script>
 <script src="/static/app-modal.js?v=100"></script>

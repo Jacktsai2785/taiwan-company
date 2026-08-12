@@ -311,7 +311,10 @@ async def confirm_companies(req: ConfirmRequest, ai: dict = Depends(ai_from_head
 
 @router.put("/{company_id}")
 def update_company(company_id: str, req: UpdateRequest):
-    updates = {k: v for k, v in req.model_dump().items() if v is not None or k == "watched"}
+    # Do not turn an omitted optional field into an update.  In particular,
+    # ``watched`` must remain untouched when the edit form only changes e.g.
+    # the company name.
+    updates = req.model_dump(exclude_unset=True)
     company = data_store.update_company(company_id, updates)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")

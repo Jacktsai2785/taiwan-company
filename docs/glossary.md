@@ -23,15 +23,11 @@ source_repo: ~/taiwan-company
 - **法人董事 / 法人代表** — 董事欄 `representative_of` 不為空時，表示這位自然人是某法人股東派駐的董事。是反查母子公司的關鍵線索。
 - **公發公司** — 有對 MOPS（公開資訊觀測站）揭露財報的公司（含上市櫃、興櫃、創新板、公開發行）。`listing_status` 欄位的反義是「非公發」。
 - **每日 digest** — 每天 08:00 自動產生的「該產業別當日重要新聞摘要」，由 Claude 從 Google News RSS 整理。
-- **本季趨勢** — 每天 08:05 跑、約週級更新的「該產業本季重要走向」分析。
+- **本季趨勢** — 每天 08:00 在 digest 完成後接續跑、約週級更新的「該產業本季重要走向」分析。
 
 ## 技術
 
-- **AI 引擎模式（local CLI vs API）** — 本平台支援兩種 AI 呼叫方式：
-  - **本機 Claude CLI**：`subprocess` 叫 `claude -p <prompt>`，不消耗 API 費用，自動探尋 PATH / Bun cache / gstack node_modules
-  - **雲端 API**：使用者在 UI 輸入 Anthropic / OpenAI / Gemini Key，存 `localStorage`，每次請求帶 `X-API-Key` / `X-AI-Provider` header
-  - 預設模型：`claude-sonnet-4-6` / `gpt-4o` / `gemini-2.5-flash`，可用環境變數覆寫。
-- **BYOK（Bring Your Own Key）** — 雲端部署模式下，使用者自帶 API Key，伺服器不留 Key（commit f217149 加入）。
+- **AI 引擎模式** — 平台只使用本機引擎：Claude、Codex、Gemini CLI 或 Ollama；不收集 API Key，也沒有 BYOK 模式。
 - **systemd user service** — Linux 的 user-level systemd unit（`~/.config/systemd/user/`），登入後自動啟動，crash 自動重啟。本平台 unit 名 `taiwan-company.service`。
 - **SSE（Server-Sent Events）** — 補資料、深度補資料、關係圖、專利爬取四個長任務都用 SSE 串流回報進度（避免 WebSocket 複雜度，用一條單向 HTTP 就夠）。
 - **g0v ronnywang API** — 民間整理的台灣公司登記資料免費 API（`company.g0v.ronny.tw`），補基本登記資料的主來源。

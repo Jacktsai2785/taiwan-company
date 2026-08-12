@@ -140,7 +140,8 @@ if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
   systemctl --user enable taiwan-company.service >/dev/null 2>&1 || true
   systemctl --user enable --now taiwan-company-backup.timer >/dev/null 2>&1 || true
-  systemctl --user enable taiwan-regen.service >/dev/null 2>&1 || true
+  # Regen can consume AI quota.  Install the unit only; the user explicitly
+  # starts it when a batch regeneration is wanted.
   systemctl --user restart taiwan-company.service
   ok "service 已安裝並啟動（開機自啟 + 每日資料備份已開啟；taiwan-regen 已裝好，手動 systemctl --user start taiwan-regen 啟動）"
 else
@@ -151,7 +152,7 @@ fi
 log "9/9 healthcheck"
 HEALTHY=""
 for i in 1 2 3 4 5; do
-  if curl -fsS http://localhost:8003/ >/dev/null 2>&1; then HEALTHY=1; break; fi
+  if curl -fsS http://localhost:8003/health >/dev/null 2>&1; then HEALTHY=1; break; fi
   sleep 2
 done
 if [ -n "$HEALTHY" ]; then
@@ -159,6 +160,7 @@ if [ -n "$HEALTHY" ]; then
 else
   warn "healthcheck 未通過。若用 systemd：journalctl --user -u taiwan-company -n 50"
   warn "或看 logs/app-error.log；也可改用前景啟動 make start 觀察錯誤"
+  exit 1
 fi
 
 echo ""

@@ -61,22 +61,21 @@ source_repo: ~/taiwan-company
 - 過濾中國媒體（`_BLOCKED_SOURCES` 寫死人民日報、新華社、CCTV、觀察者網等）
 - 用產業同義詞展開查詢（hardcoded `_INDUSTRY_SYNONYMS` + AI 推薦的 `industry_keywords.json`）
 
-## AI Provider（Anthropic / OpenAI / Gemini）
+## AI 引擎
 
-詳見 [[ai-features]]。預設走本機 `claude` CLI，使用者可在 UI 切到任一 provider。
+詳見 [[ai-features]]。平台使用本機 Claude、Codex、Gemini CLI 或 Ollama，不傳送或保存雲端 API Key。
 
 ## 不依賴的東西
 
 - **無資料庫**：不接 PostgreSQL / MySQL / SQLite。所有資料 JSON 落地。
 - **無 ORM / 無 migration**：因為沒 DB。
 - **無 task queue**：背景任務用 `asyncio.create_task`，狀態存 in-memory dict（`_progress` / `_running`）。重啟會掉所有進行中任務。
-- **無認證 / 無多人**：CORS `allow_origins=["*"]`，沒 user model。預設僅供單機 / 單人使用。
+- **無認證 / 無多人**：服務與 CORS 都限於 localhost；預設僅供單機 / 單人使用，不提供 LAN 分享。
 
 ## 環境變數總覽（從 `.env.example`）
 
 | 變數 | 用途 | 必填 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API Key（雲端部署必填） | 雲端必填 |
 | `CLAUDE_CLI_PATH` | 強制指定本機 CLI 路徑 | 否 |
 | `CLAUDE_MODEL` | 預設 `claude-sonnet-4-6` | 否 |
 | `OPENAI_MODEL` | 預設 `gpt-4o` | 否 |

@@ -79,6 +79,41 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(parts, [successful])
 
+    async def test_candidate_audit_failure_does_not_discard_dual_extraction_results(self):
+        # The candidate-chunk omission audit is supplementary; one failing
+        # chunk must not wipe out results the main dual-path extraction
+        # already succeeded at getting.
+        transcript = "營收成長至十億元。"
+        successful = {key: [] for key in memo_extractor._EXTRACT_KEYS}
+        successful["financials"] = [
+            {"fact": "營收成長", "quote": "營收成長", "timestamp": ""}
+        ]
+        with patch(
+            "services.memo_extractor._extract_evidence_once",
+            new=AsyncMock(return_value=successful),
+        ), patch(
+            "services.memo_extractor._extract_material_facts_once",
+            new=AsyncMock(side_effect=RuntimeError("candidate audit timeout")),
+        ), patch(
+            "services.memo_extractor._material_candidate_text",
+            return_value=transcript,
+        ), patch(
+            "services.memo_extractor._synthesize_fields_from_evidence",
+            new=AsyncMock(return_value=(
+                {key: "" for key in memo_extractor._EXTRACT_KEYS},
+                {key: {"evidence_count": 0, "used_count": 0, "synthesized": False}
+                 for key in memo_extractor._EXTRACT_KEYS},
+            )),
+        ):
+            result, audit = await memo_extractor.extract_with_audit(
+                "測試公司", transcript, engine="codex"
+            )
+
+        self.assertIn(
+            "營收成長",
+            [item["fact"] for item in audit["evidence"]["financials"]],
+        )
+
     def test_rejects_fact_when_quote_is_not_in_transcript(self):
         claimed = {
             "financials": [{
@@ -190,6 +225,9 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "services.memo_extractor.claude_client.ask",
             return_value=__import__("json").dumps(response, ensure_ascii=False),
+        ), patch(
+            "services.memo_extractor.asyncio.to_thread",
+            new=AsyncMock(return_value=__import__("json").dumps(response, ensure_ascii=False)),
         ):
             result = await memo_extractor._synthesize_field_group(
                 "測試公司", ("business_revenue",), evidence, "codex"

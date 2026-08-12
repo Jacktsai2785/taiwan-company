@@ -4,6 +4,7 @@ Images: Windows built-in OCR (PowerShell) → best Chinese support, no extra ins
 Fallback: pytesseract.
 """
 import io
+import csv
 import logging
 import subprocess
 import tempfile
@@ -46,8 +47,12 @@ def extract_text(filename: str, content: bytes) -> str:
         return _from_pptx(content)
     if ext == ".ppt":
         raise FileParseError("不支援舊版 .ppt 格式，請另存為 .pptx 或匯出 PDF 後重新上傳")
-    if ext in (".xlsx", ".xls"):
+    if ext == ".xlsx":
         return _from_excel(content)
+    if ext == ".txt":
+        return content.decode("utf-8-sig", errors="replace")
+    if ext == ".csv":
+        return _from_csv(content)
     if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"):
         return _from_image(content)
     raise FileParseError(f"不支援的檔案格式：{ext}")
@@ -126,6 +131,15 @@ def _from_excel(content: bytes) -> str:
         return "\n".join(parts)
     except Exception as e:
         raise FileParseError(f"Excel 解析失敗：{e}")
+
+
+def _from_csv(content: bytes) -> str:
+    try:
+        text = content.decode("utf-8-sig", errors="replace")
+        rows = csv.reader(io.StringIO(text))
+        return "\n".join(" | ".join(cell.strip() for cell in row) for row in rows if any(cell.strip() for cell in row))
+    except Exception as e:
+        raise FileParseError(f"CSV 解析失敗：{e}")
 
 
 # ── Image: Windows OCR → tesseract fallback ──────────────────────────────────

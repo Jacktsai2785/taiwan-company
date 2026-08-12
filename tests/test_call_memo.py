@@ -3,6 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import HTTPException
+
 from routers.call_memo import _save_memo_source, download_memo, extract_memo
 from services.memo_extractor import infer_date_from_filename, prepare_transcript
 
@@ -25,18 +27,21 @@ class CallMemoDownloadTests(unittest.TestCase):
 
 
 class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
+    @patch("routers.call_memo.data_store.update_company")
     @patch("routers.call_memo._record_memo_run")
-    @patch("routers.call_memo._save_memo_source")
+    @patch("routers.call_memo._write_memo_source_file")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")
     @patch("routers.call_memo.extract_text")
     @patch("routers.call_memo.data_store.get_company")
     async def test_markdown_is_decoded_as_plain_text(
-        self, get_company, extract_text, extract_with_audit, save_source, record_run
+        self, get_company, extract_text, extract_with_audit, write_source, record_run, update_company
     ):
         get_company.return_value = {"name": "測試公司"}
         extract_with_audit.return_value = (
             {"interview_date": "2026/08/04"}, {"evidence": {}, "coverage": {}}
         )
+        source = {"filename": "podcast.md", "stored_name": "memo_source_x.md"}
+        write_source.return_value = source
         transcript = "# Podcast 逐字稿\n\n營收為新台幣一億元。"
         upload = Mock(filename="podcast.md")
         upload.read = AsyncMock(return_value=transcript.encode("utf-8"))
@@ -44,21 +49,25 @@ class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
         result = await extract_memo("company-id", upload, {"engine": "claude"})
 
         extract_text.assert_not_called()
-        save_source.assert_called_once_with(
+        write_source.assert_called_once_with(
             "company-id", "podcast.md", transcript.encode("utf-8")
         )
         extract_with_audit.assert_awaited_once_with(
             "測試公司", transcript, source_filename="podcast.md", engine="claude"
         )
+        update_company.assert_called_once_with(
+            "company-id", {"call_memo_source": source}
+        )
         self.assertEqual(result["interview_date"], "2026/08/04")
         record_run.assert_called_once()
 
+    @patch("routers.call_memo.data_store.update_company")
     @patch("routers.call_memo._record_memo_run")
-    @patch("routers.call_memo._save_memo_source")
+    @patch("routers.call_memo._write_memo_source_file")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")
     @patch("routers.call_memo.data_store.get_company")
     async def test_missing_interview_date_is_not_replaced_with_today(
-        self, get_company, extract_with_audit, _save_source, _record_run
+        self, get_company, extract_with_audit, _write_source, _record_run, _update_company
     ):
         get_company.return_value = {"name": "測試公司"}
         extract_with_audit.return_value = (
@@ -70,6 +79,26 @@ class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
         result = await extract_memo("company-id", upload, {"engine": "claude"})
 
         self.assertEqual(result["interview_date"], "")
+
+    @patch("routers.call_memo.data_store.update_company")
+    @patch("routers.call_memo._write_memo_source_file")
+    @patch("routers.call_memo.memo_extractor.extract_with_audit")
+    @patch("routers.call_memo.data_store.get_company")
+    async def test_failed_extraction_does_not_overwrite_previous_source(
+        self, get_company, extract_with_audit, write_source, update_company
+    ):
+        get_company.return_value = {"name": "測試公司"}
+        extract_with_audit.side_effect = ValueError("AI 無法完成逐字稿分段抽取")
+        write_source.return_value = {"filename": "bad.txt", "stored_name": "memo_source_bad.txt"}
+        upload = Mock(filename="bad.txt")
+        upload.read = AsyncMock(return_value="逐字稿".encode("utf-8"))
+
+        with self.assertRaises(HTTPException) as ctx:
+            await extract_memo("company-id", upload, {"engine": "claude"})
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        write_source.assert_called_once()
+        update_company.assert_not_called()
 
 
 class CallMemoTranscriptPreparationTests(unittest.TestCase):

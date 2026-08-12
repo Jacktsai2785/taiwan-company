@@ -61,7 +61,7 @@ function _buildModalInfoHTML(c) {
     <span class="info-label">公司所在地</span><span class="info-value">${escHtml(c.address || "—")}</span>
     <span class="info-label">產業別</span>
     <span class="info-value modal-industry-wrap" id="modal-industry-wrap">
-      ${(c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="removeModalIndustry('${escAttr(ind)}')" title="移除">×</button></span>`).join("")}
+      ${(c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="${escHtml(`removeModalIndustry(${JSON.stringify(ind)})`)}" title="移除">×</button></span>`).join("")}
       <select id="modal-industry-select" onchange="addModalIndustry()">
         <option value="">＋ 新增產業別</option>
         ${state.industries.filter(ind => !(c.industries || []).includes(ind)).map(ind => `<option value="${escHtml(ind)}">${escHtml(ind)}</option>`).join("")}
@@ -717,7 +717,7 @@ async function _saveModalIndustries(newInds) {
     if (wrap) {
       const c = state.companies[state.companies.findIndex(x => x.id === id)];
       wrap.innerHTML =
-        (c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="removeModalIndustry('${escAttr(ind)}')" title="移除">×</button></span>`).join("") +
+        (c.industries || []).map(ind => `<span class="modal-ind-chip">${escHtml(ind)}<button class="modal-ind-remove" onclick="${escHtml(`removeModalIndustry(${JSON.stringify(ind)})`)}" title="移除">×</button></span>`).join("") +
         `<select id="modal-industry-select" onchange="addModalIndustry()"><option value="">＋ 新增產業別</option>${state.industries.filter(i => !(c.industries || []).includes(i)).map(i => `<option value="${escHtml(i)}">${escHtml(i)}</option>`).join("")}</select>`;
     }
   } catch (err) {

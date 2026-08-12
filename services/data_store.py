@@ -239,8 +239,15 @@ def _merge_company_records(primary: dict, records: list[dict]) -> dict:
                 if isinstance(value, dict):
                     combined.update(deepcopy(value))
             merged[field] = combined
+        elif isinstance(merged.get(field), bool):
+            # bool 是 int 的子類，False == 0；但像 no_par_value=False 這種欄位，
+            # False 是已確認的有效狀態，primary 已明確設定就不該被 donor 覆蓋。
+            pass
         elif merged.get(field) in (None, "", 0):
-            replacement = next((v for v in values[1:] if v not in (None, "", 0)), None)
+            replacement = next(
+                (v for v in values[1:] if isinstance(v, bool) or v not in (None, "", 0)),
+                None,
+            )
             if replacement is not None:
                 merged[field] = deepcopy(replacement)
 
@@ -322,6 +329,44 @@ def _repair_competitor_company_refs(companies: list[dict]) -> int:
     return changed
 
 
+def _plan_upload_renames(id_map: dict[str, str]) -> dict[str, str]:
+    """Predict which /uploads/ URLs _merge_upload_dirs will rename because the
+    target already has a same-name file, so metadata can be rewritten to match
+    before anything moves. Safe as a dry read: callers hold ``_LOCK`` for the
+    whole plan-then-move sequence, so the filesystem can't change in between.
+    """
+    uploads = DATA_DIR / "uploads"
+    renamed_urls: dict[str, str] = {}
+    for old, new in id_map.items():
+        source = uploads / old
+        target = uploads / new
+        if not source.exists() or not target.exists():
+            continue
+        target_names = {item.name for item in target.iterdir()}
+        for item in source.iterdir():
+            if item.name in target_names:
+                renamed_urls[f"/uploads/{old}/{item.name}"] = (
+                    f"/uploads/{new}/merged_{old[:8]}_{item.name}"
+                )
+    return renamed_urls
+
+
+def _apply_url_renames(value: Any, renames: dict[str, str]) -> Any:
+    """Recursively rewrite /uploads/ URL fragments per ``_plan_upload_renames``."""
+    if not renames:
+        return value
+    if isinstance(value, dict):
+        return {k: _apply_url_renames(v, renames) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_apply_url_renames(v, renames) for v in value]
+    if isinstance(value, str):
+        for old_url, new_url in renames.items():
+            if old_url in value:
+                value = value.replace(old_url, new_url)
+        return value
+    return value
+
+
 def _merge_upload_dirs(id_map: dict[str, str]) -> int:
     uploads = DATA_DIR / "uploads"
     moved = 0
@@ -397,7 +442,14 @@ def _commit_company_merge_transaction(store: dict, id_map: dict[str, str]) -> di
     directories together, so every touched target is snapshotted first and fully
     restored if any write/move fails.
     """
+    upload_renames = _plan_upload_renames(id_map)
     external_plan, external_refs = _plan_external_company_refs(id_map)
+    if upload_renames:
+        store = _apply_url_renames(store, upload_renames)
+        external_plan = {
+            path: _apply_url_renames(data, upload_renames)
+            for path, data in external_plan.items()
+        }
     json_plan = {COMPANIES_FILE: store, **external_plan}
     upload_paths = {
         _safe_upload_dir(company_id)
@@ -676,11 +728,39 @@ def delete_company(company_id: str) -> bool:
     with _LOCK:
         store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
         before = len(store["companies"])
-        store["companies"] = [c for c in store["companies"] if c.get("id") != company_id]
-        if len(store["companies"]) < before:
+        if not any(c.get("id") == company_id for c in store["companies"]):
+            return False
+        if not company_id or Path(company_id).name != company_id:
+            raise ValueError("Invalid company_id")
+
+        # Hide sensitive originals immediately, but keep a rollback path until
+        # the company record has been atomically committed.
+        trash = DATA_DIR / ".delete-staging" / uuid.uuid4().hex
+        moved: list[tuple[Path, Path]] = []
+        try:
+            for root_name in ("uploads", "memo_runs"):
+                source = DATA_DIR / root_name / company_id
+                if source.exists():
+                    target = trash / root_name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source, target)
+                    moved.append((source, target))
+            store["companies"] = [c for c in store["companies"] if c.get("id") != company_id]
             _write(COMPANIES_FILE, store)
-            return True
-        return False
+        except Exception:
+            for source, target in reversed(moved):
+                if target.exists():
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(target, source)
+            raise
+        finally:
+            if trash.exists() and not moved:
+                shutil.rmtree(trash, ignore_errors=True)
+
+        # The record is gone and upload URLs no longer resolve.  Remove the
+        # staged originals (including memo evidence) as part of deletion.
+        shutil.rmtree(trash, ignore_errors=True)
+        return before != len(store["companies"])
 
 
 # --- Config ---

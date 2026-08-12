@@ -165,10 +165,11 @@ async def extract_with_audit(
         _extract_chunk_dual(company_name, chunk, engine) for chunk in chunks
     ))
     candidate_chunks = _split_transcript(_material_candidate_text(transcript))
-    candidate_results = await asyncio.gather(*(
+    candidate_raw = await asyncio.gather(*(
         _extract_material_facts_once(company_name, chunk, engine)
         for chunk in candidate_chunks if chunk.strip()
-    ))
+    ), return_exceptions=True)
+    candidate_results = [result for result in candidate_raw if isinstance(result, dict)]
     chunk_results.extend([[result] for result in candidate_results])
     deterministic = _deterministic_material_evidence(transcript)
     for items in deterministic.values():

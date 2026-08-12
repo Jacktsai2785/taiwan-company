@@ -42,7 +42,7 @@ start:
 		systemctl --user stop $(SERVICE); \
 	fi
 	@echo "── 啟動台灣產業商情平台（http://localhost:8003，hot reload）──"
-	.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8003
+	.venv/bin/uvicorn main:app --reload --host 127.0.0.1 --port 8003
 
 # ── systemd 背景模式（生產建議用法）────────────────────────────────────────────
 start-bg:

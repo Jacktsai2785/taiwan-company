@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from services.versioning import parse_changelog
 
 # Optional: load .env for CLAUDE_CLI_PATH override
 try:
@@ -98,7 +99,9 @@ app = FastAPI(title="台灣產業商情平台", version=VERSION, lifespan=lifesp
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # This is a single-user local app.  Keep browser requests on the same
+    # machine even if a future launch command is accidentally exposed on LAN.
+    allow_origins=["http://localhost:8003", "http://127.0.0.1:8003"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -138,7 +141,14 @@ def health():
 
 @app.get("/api/version")
 def get_version():
-    return {"version": VERSION}
+    return {"version": (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()}
+
+
+@app.get("/api/changelog")
+def get_changelog():
+    markdown = (BASE_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+    current_version = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    return {"current_version": current_version, "releases": parse_changelog(markdown)}
 
 
 @app.get("/changelog")

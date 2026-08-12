@@ -67,7 +67,7 @@ source_repo: ~/taiwan-company
 - 配合 `whisper_transcriber.py` 走「音檔 → 逐字稿 → 結構化欄位」的全自動流程
 
 ### 4. 每日新聞 digest（`daily_digest.py`）
-- 排程：每天 08:00 跑全部產業的 digest，08:05 跑趨勢
+- 排程：每天 08:00 依序跑全部產業的 digest 與趨勢
 - 流程：先用 `news_fetcher` 抓 Google News RSS（用產業同義詞擴展查詢、濾掉中國媒體），再請 AI 整理成「重點新聞 / 摘要 / 標題與連結」
 - 也有 `WATCHLIST_TOPIC = "感興趣名單"` — 對打標 `watched` 的公司另開一個 digest 主題
 - 90 天自動 prune

@@ -39,7 +39,10 @@ async def _extract_text_content(filename: str, content: bytes) -> str:
         raise HTTPException(status_code=422, detail=str(e))
 
 
-def _save_memo_source(company_id: str, filename: str, content: bytes) -> dict:
+def _write_memo_source_file(company_id: str, filename: str, content: bytes) -> dict:
+    """Persist the raw transcript file without touching company metadata, so a
+    failed extraction can't clobber the previous (successfully analyzed) source.
+    """
     if not company_id or Path(company_id).name != company_id:
         raise HTTPException(status_code=400, detail="Invalid company_id")
     suffix = Path(filename).suffix.lower()
@@ -47,13 +50,17 @@ def _save_memo_source(company_id: str, filename: str, content: bytes) -> dict:
     company_dir = _MEMO_SOURCES_DIR / company_id
     company_dir.mkdir(parents=True, exist_ok=True)
     (company_dir / stored_name).write_bytes(content)
-    source = {
+    return {
         "filename": Path(filename).name,
         "stored_name": stored_name,
         "url": f"/uploads/{company_id}/{stored_name}",
         "size": len(content),
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _save_memo_source(company_id: str, filename: str, content: bytes) -> dict:
+    source = _write_memo_source_file(company_id, filename, content)
     data_store.update_company(company_id, {"call_memo_source": source})
     return source
 
@@ -147,7 +154,7 @@ async def extract_memo(company_id: str, file: UploadFile = File(...), ai: dict =
     if not transcript.strip():
         raise HTTPException(status_code=422, detail="無法從檔案中取得文字內容")
 
-    _save_memo_source(company_id, filename, content)
+    source = _write_memo_source_file(company_id, filename, content)
 
     try:
         fields, audit = await memo_extractor.extract_with_audit(
@@ -155,6 +162,7 @@ async def extract_memo(company_id: str, file: UploadFile = File(...), ai: dict =
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    data_store.update_company(company_id, {"call_memo_source": source})
     _record_memo_run(company_id, fields, ai["engine"], filename, content, transcript, audit)
     return fields
 

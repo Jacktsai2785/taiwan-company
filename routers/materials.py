@@ -33,7 +33,7 @@ UPLOADS_DIR = data_store.DATA_DIR / "uploads"
 # Files Claude reads natively (passed as paths / vision blocks)
 _NATIVE_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp"}
 # Files we pre-extract to text (office docs + OCR-only images)
-_TEXT_EXTS = {".pptx", ".docx", ".xlsx", ".xls", ".txt", ".tiff", ".tif", ".bmp"}
+_TEXT_EXTS = {".pptx", ".docx", ".xlsx", ".txt", ".tiff", ".tif", ".bmp"}
 _ACCEPTED_EXTS = _NATIVE_EXTS | _TEXT_EXTS
 _MAX_MB = 30
 _MAX_BYTES = _MAX_MB * 1024 * 1024
@@ -77,11 +77,13 @@ def list_materials(company_id: str):
 @router.post("/{company_id}/materials")
 async def upload_materials(company_id: str, files: list[UploadFile] = File(...)):
     company = _require_company(company_id)
-    base_dir = _company_dir(company_id)
     materials: list[dict] = list(company.get("materials") or [])
     existing_names = {m["stored_name"] for m in materials}
     saved: list[dict] = []
+    pending: list[tuple[str, bytes, UploadFile]] = []
 
+    # Validate and read every part before writing anything.  A rejected later
+    # part must not leave an invisible earlier file on disk.
     for f in files:
         ext = Path(f.filename or "").suffix.lower()
         if ext not in _ACCEPTED_EXTS:
@@ -90,28 +92,40 @@ async def upload_materials(company_id: str, files: list[UploadFile] = File(...))
         if len(content) > _MAX_BYTES:
             raise HTTPException(status_code=422, detail=f"檔案過大（>{_MAX_MB}MB）：{f.filename}")
 
-        stored = _safe_name(f.filename or f"file{ext}")
-        # de-dup stored filename
-        stem, suffix = Path(stored).stem, Path(stored).suffix
-        i = 1
-        while stored in existing_names or (base_dir / stored).exists():
-            stored = f"{stem}_{i}{suffix}"
-            i += 1
-        (base_dir / stored).write_bytes(content)
-        existing_names.add(stored)
+        pending.append((ext, content, f))
 
-        entry = {
-            "filename": Path(f.filename or stored).name,
-            "stored_name": stored,
-            "url": f"/uploads/{company_id}/{stored}",
-            "mime_type": f.content_type or mimetypes.guess_type(stored)[0] or "application/octet-stream",
-            "size": len(content),
-            "uploaded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        materials.append(entry)
-        saved.append(entry)
+    base_dir = _company_dir(company_id)
+    written: list[Path] = []
+    try:
+        for ext, content, f in pending:
+            stored = _safe_name(f.filename or f"file{ext}")
+            # de-dup stored filename
+            stem, suffix = Path(stored).stem, Path(stored).suffix
+            i = 1
+            while stored in existing_names or (base_dir / stored).exists():
+                stored = f"{stem}_{i}{suffix}"
+                i += 1
+            (base_dir / stored).write_bytes(content)
+            written.append(base_dir / stored)
+            existing_names.add(stored)
 
-    data_store.update_company(company_id, {"materials": materials})
+            entry = {
+                "filename": Path(f.filename or stored).name,
+                "stored_name": stored,
+                "url": f"/uploads/{company_id}/{stored}",
+                "mime_type": f.content_type or mimetypes.guess_type(stored)[0] or "application/octet-stream",
+                "size": len(content),
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            materials.append(entry)
+            saved.append(entry)
+        updated = data_store.update_company(company_id, {"materials": materials})
+        if not updated:
+            raise HTTPException(status_code=404, detail="Company not found")
+    except Exception:
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise
     return {"materials": materials, "saved": saved}
 
 
@@ -151,13 +165,10 @@ def _collect_materials_inputs(company_id: str, company: dict) -> tuple[list[str]
             native_paths.append(str(path))
         else:
             try:
-                if ext == ".txt":
-                    txt = path.read_bytes().decode("utf-8", errors="replace")
-                else:
-                    txt = extract_text(m.get("filename", stored), path.read_bytes())
-            except Exception:
-                txt = ""
-            if txt:   # 解析失敗已收成 ""；不再用 startswith('[') 誤剔合法檔
+                txt = extract_text(m.get("filename", stored), path.read_bytes())
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail=f"無法解析補充資料「{m.get('filename', stored)}」：{exc}") from exc
+            if txt:
                 text_parts.append(f"── 檔案：{m.get('filename', stored)} ──\n{txt}")
     return native_paths, "\n\n".join(text_parts), interview_text
 

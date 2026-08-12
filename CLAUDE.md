@@ -2,6 +2,33 @@
 
 FastAPI 後端 + 靜態前端的公司資料分析平台，使用本機 Claude CLI 作為 AI 引擎。
 
+## Release 與 commit + push 流程
+
+版本的唯一來源是根目錄的 `VERSION`，版本紀錄的唯一來源是 `CHANGELOG.md`。不得只修改其中一個。
+
+當使用者明確要求「commit + push」、要求發布版本，或目前工作已形成一批可交付的產品變更時，依序執行：
+
+1. 檢查 Git working tree，區分本次變更與使用者原有、無關的未提交變更；不得擅自納入無關檔案。
+2. 檢查自 `VERSION` 所代表版本以來尚未發布的變更，依 Semantic Versioning 判斷升版幅度：
+   - `PATCH`：修正錯誤、相容性或內部可靠性改善，沒有新增使用者功能。
+   - `MINOR`：新增向下相容、使用者可感知的功能或工作流程。
+   - `MAJOR`：造成不相容的資料格式、API、操作流程或部署方式變更；不確定時先詢問使用者。
+3. 使用 `scripts/release.py` 同步更新 `VERSION` 與 `CHANGELOG.md`，例如：
+
+   ```bash
+   .venv/bin/python scripts/release.py patch --fixed "修正內容"
+   .venv/bin/python scripts/release.py minor --added "新增功能" --changed "調整內容"
+   ```
+
+4. 檢查產生的版本號與 Changelog。Changelog 應描述使用者能理解的結果，不要堆砌 commit 訊息或實作細節。
+5. 執行與本次變更相稱的測試、語法檢查及 `git diff --check`；Python 服務有變更時重啟 `taiwan-company` 並執行 healthcheck。
+6. 僅 stage 本次範圍內的檔案，建立 commit，然後 push；不得用 `git add .` 混入無關變更。
+7. 回報新版本、commit hash、push 結果、測試結果，以及任何未納入的既有 working-tree 變更。
+
+不要因每一筆 commit、push 或微小文字修改機械式地增加 `PATCH`。只有形成可交付版本時才升版。以下情況預設不升版：純開發文件修字、測試本身調整、尚未完成的 WIP commit，以及只修正版本紀錄本身；若使用者明確要求發布則仍依其要求處理。
+
+執行 release 前若目前 `CHANGELOG.md` 已有相同版本的未提交 release 項目，不得再次升版；應沿用並補齊該版本，避免同一批變更重複計算。
+
 ## 🤖 給 AI Agent：首次部署協議（最優先，先讀這段）
 
 **情境**：使用者在一台新裝置上裝好 `claude` 後，把這個 repo 的 URL 貼給你、要你 clone。
@@ -84,7 +111,7 @@ data/                執行時資料（不在 git 追蹤範圍）
 寫過幾次差點走偏的方向，明文禁止以下（除非使用者主動要求）：
 
 - **不要加資料庫**。所有資料 JSON 落地。如果效能不夠，先想 indexing / cache，最後才考慮 DB。
-- **不要加認證**。本平台預設單人單機，CORS `*`。要加 auth 是大改動，請先討論。
+- **預設單人單機**。服務只監聽 `127.0.0.1`，CORS 僅允許 localhost；若要 LAN 分享，必須先設計登入、權限與附件授權下載。
 - **不要加前端框架**（React / Vue 之類）。前端是純 JS/CSS（依區塊拆成 `static/app-*.js` 8 檔、`static/style-*.css` 8 檔，classic script 直接用多個 `<script>`/`<link>` 載入，無建置工具），刻意保持「打開就能改」。
 - **不要在 service 層直接依賴外部 DB**。需要 MOPS 資料時，走 `mops_investee_client` 之類的 HTTP client，符合使用者「禁止直連 PostgreSQL」全域指令。
 - **不要加回雲端 API Key 機制**。平台定案純地端，全部走本機引擎（claude / codex / gemini CLI、ollama 端點），不收 API Key、不呼叫雲端 API。
@@ -156,14 +183,13 @@ systemctl --user restart taiwan-company
 - **撞用量上限自動等待**：本機 Claude CLI 是 5 小時滾動窗口、每窗口約 20 間；偵測到上限訊息就每 15 分鐘重試，額度回血自動接續。
 - **排除規則**：跳過貼了「潛在案源」標籤、有套用補充資料（`materials_*`）、在 skip-list（連續失敗 3 次）的公司。`PRIORITY_LABELS` / `PRIORITY_ONLY` 可調優先或只跑優先。
 - **flock**：同時只允許一個實例（systemd 重啟 / 手動執行不疊跑）。
-- **service**：`Restart=on-failure`（crash 5 分鐘後重起）、`WantedBy=default.target`（開機自啟，靠 `Linger=yes`）。跑完 exit 0 不重啟。由 `bootstrap.sh` 從 `deploy/taiwan-regen.service.template` 安裝（`enable` 但不 `--now`，避免新裝置一裝完就自動燒 AI 額度；要跑就手動 `systemctl --user start taiwan-regen`）。
+- **service**：`Restart=on-failure`（crash 5 分鐘後重起）。bootstrap 只安裝 unit、不 enable，避免登入後自動消耗 AI 額度；要跑就手動 `systemctl --user start taiwan-regen`。
 
 ```bash
 # 控制
 systemctl --user status taiwan-regen
 systemctl --user stop taiwan-regen      # 暫停（把額度讓給其他事；勿用 pkill，會被 service 自動重起）
 systemctl --user start taiwan-regen     # 續跑
-systemctl --user disable taiwan-regen   # 全部跑完後關掉開機自啟
 tail -f logs/regen_progress.log         # 即時進度
 ```
 
@@ -173,8 +199,8 @@ tail -f logs/regen_progress.log         # 即時進度
 
 `data/companies.json` 等使用者資料不在 git 追蹤範圍、也沒有雲端同步，所以掛了一個每日備份 timer 當安全網。
 
-- **腳本**：`scripts/backup_data.sh` — 打包 `companies.json` / `config.json` / `industry_keywords.json` / `blacklist.json`（快取類不備），gzip 壓縮存到 `~/taiwan-company-backups/`。
-- **不堆重複檔**：用 `companies.json` 的 sha256 比對上次，內容沒變就跳過。
+- **腳本**：`scripts/backup_data.sh` — 打包 JSON 設定、`uploads/` 原始附件與 `memo_runs/` 稽核證據（快取類不備），gzip 壓縮存到 `~/taiwan-company-backups/`。
+- **不堆重複檔**：用完整備份集合的 manifest 比對上次，內容沒變才跳過。
 - **壞檔保護**：`data_store` 已是原子寫（tmp + os.replace），備份仍額外驗證 JSON 可解析作雙保險。
 - **輪替**：只留最近 30 份（`BACKUP_KEEP` 可覆寫）；存放目錄可用 `BACKUP_DIR` 覆寫。
 - **排程**：每天 03:30 跑，`Persistent=true` 會補跑錯過的時段。範本 `deploy/taiwan-company-backup.{service,timer}.template`，由 bootstrap 安裝。

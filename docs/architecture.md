@@ -26,8 +26,8 @@ source_repo: ~/taiwan-company
   - `file_parser.py` — PDF / DOCX / XLSX / 圖片 文字抽取（搭配 tesseract）
   - `whisper_transcriber.py` — 本機 Whisper 音檔轉逐字稿
   - `patent_scraper.py` — TIPO 專利爬蟲
-- Lifespan hook 啟動兩個背景排程：每天 08:00 跑 digest，08:05 跑 trends。
-- CORS：`allow_origins=["*"]`（個人工具，未對外鎖定）。
+- Lifespan hook 啟動一個背景排程：每天 08:00 依序跑 digest 與 trends；失敗產業一小時後重試一次。
+- 本機安全邊界：service 只監聽 `127.0.0.1`，CORS 僅允許 `localhost:8003` 與 `127.0.0.1:8003`；不提供 LAN 分享模式。
 
 ## 前端（純靜態，無框架）
 
@@ -59,7 +59,7 @@ source_repo: ~/taiwan-company
 
 ## 部署
 
-- **本機開發**：`make start`（前景 + hot reload）/ `make start-bg`（背景 nohup）
+- **本機開發**：`make start`（前景 + hot reload）/ `make start-bg`（背景 systemd service）
 - **本機常駐**：`systemd --user` service（`~/.config/systemd/user/taiwan-company.service`），`Restart=always`、`WantedBy=default.target`，登入後自動跑、crash 自動重啟。
 - **Healthcheck**：`GET /health` 回 `{"status": "ok"}`，bootstrap / `make` 用它確認服務起來。
 

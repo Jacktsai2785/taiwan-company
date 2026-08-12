@@ -143,5 +143,14 @@ async def sse_progress_stream(
         # 保留 progress_map[key]，讓重連的新串流能從頭接回同一份事件列表（背景任務仍在 append
         # 同一個 list 物件），而不是讀到空 progress → 轉圈後假 done、看不到任何進度。
         evs = progress_map.get(key)
-        if not evs or evs[-1].get("type") in terminal:
+        terminal_reached = bool(evs) and evs[-1].get("type") in terminal
+        if not evs or terminal_reached:
             progress_map.pop(key, None)
+        if terminal_reached:
+            # 背景任務理論上會在自己的 finally 裡 discard(key)，但曾觀察到卡死案例
+            # （industry-map「AI」：任務已送出 error 終止事件，_running 卻沒被清掉，
+            # 導致之後每次重試都撞 409 → 前端 EventSource 誤判成連線中斷）。這裡確定
+            # 已經看到終止事件，就在這個一定會執行到的路徑上補一次 discard 當保險，
+            # 不依賴背景任務那邊的 finally 是否確實跑到。discard 本身是 idempotent，
+            # 背景任務之後再呼叫一次不會有副作用。
+            running_set.discard(key)
