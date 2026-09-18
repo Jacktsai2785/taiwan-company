@@ -67,6 +67,9 @@ _sessions: dict[str, dict] = {}
 class _CloudflareChallenge(RuntimeError):
     """findbiz returned a Cloudflare challenge instead of the requested page."""
 
+    def __init__(self, message: str = "findbiz 回傳 Cloudflare 驗證頁而非預期內容"):
+        super().__init__(message)
+
 
 class ScrapeRequest(BaseModel):
     company_id: str
@@ -94,12 +97,20 @@ def _is_cloudflare_challenge(html: str) -> bool:
     ))
 
 
-async def _wait_for_cloudflare(page, queue: asyncio.Queue, event: asyncio.Event) -> bool:
-    """Wait until the visible Playwright page has actually left the challenge.
+async def _wait_for_cloudflare(page, queue: asyncio.Queue, event: asyncio.Event, target_url: str) -> bool:
+    """Wait until `target_url` 本身（不是首頁）真的脫離 Cloudflare 攔截。
 
     A cf_clearance cookie can exist while already expired or otherwise rejected,
-    so the page content—not cookie presence—is the source of truth.
+    so the page content—not cookie presence—is the source of truth。之前的版本
+    只檢查首頁 `/` 的內容：Cloudflare 對不同路徑的攔截狀態是分開的，首頁「看起來
+    過了」不代表 `/fts/company/<tax_id>` 也真的過了，導致清完 cookie 重試時，
+    這裡誤判成功、立刻又打到真正會被擋的頁面，使用者連按「確認」的機會都沒有
+    就整個 session 失敗掉。改成直接對 target_url 檢查，狀態才準確。
     """
+    await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+    if not _is_cloudflare_challenge(await page.content()):
+        return True
+
     await queue.put({
         "type": "browser_ready",
         "message": (
@@ -319,28 +330,26 @@ async def _run_session(session_id: str) -> None:
             )
             page = await ctx.new_page()
 
-            await page.goto(FINDBIZ_INIT, wait_until="domcontentloaded", timeout=30000)
-            if _is_cloudflare_challenge(await page.content()):
-                if not await _wait_for_cloudflare(page, queue, event):
-                    await queue.put({
-                        "type": "error",
-                        "message": "Cloudflare 驗證尚未通過，請重新執行並在 Chromium 完成驗證",
-                    })
-                    await ctx.close()
-                    return
-            else:
-                await queue.put({"type": "progress", "message": "使用已儲存的 session，跳過 Cloudflare…"})
+            direct_url = f"{FINDBIZ_BASE}/fts/company/{tax_id}"
+            if not await _wait_for_cloudflare(page, queue, event, FINDBIZ_INIT):
+                await queue.put({
+                    "type": "error",
+                    "message": "Cloudflare 驗證尚未通過，請重新執行並在 Chromium 完成驗證",
+                })
+                await ctx.close()
+                return
 
             await queue.put({"type": "progress", "message": f"驗證通過，正在搜尋統編 {tax_id}…"})
 
             try:
                 detail_html = await _search_and_load_detail(page, tax_id)
             except _CloudflareChallenge:
-                # A stale cookie can pass the landing page but fail on the search
-                # POST. Re-authenticate and retry within this same user action.
+                # A stale cookie can pass the landing page but fail on the search/detail
+                # page. Re-authenticate and retry within this same user action — check
+                # the actual target page, not the landing page, or a soft pass on `/`
+                # falsely reports success while `/fts/...` is still blocked.
                 await ctx.clear_cookies()
-                await page.goto(FINDBIZ_INIT, wait_until="domcontentloaded", timeout=30000)
-                if not await _wait_for_cloudflare(page, queue, event):
+                if not await _wait_for_cloudflare(page, queue, event, direct_url):
                     await queue.put({
                         "type": "error",
                         "message": "Cloudflare 驗證尚未通過；findbiz 公司資料並非不存在",

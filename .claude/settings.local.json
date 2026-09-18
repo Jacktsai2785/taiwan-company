@@ -14,7 +14,9 @@
     "Bash(uvicorn *)",
     "Bash(playwright *)",
     "Bash(python -m playwright *)",
-    "Bash(make *)"
+    "Bash(make *)",
+    "Bash(pytest *)",
+    "Bash(python -m pytest *)"
     ],
     "deny": []
   }

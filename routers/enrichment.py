@@ -10,9 +10,10 @@ companies.py)."""
 import asyncio
 import ipaddress
 import logging
+import re
 import socket
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -30,6 +31,111 @@ router = APIRouter(prefix="/api/companies", tags=["enrichment"])
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _WEBSITE_SEARCH_MAX_TURNS = 6
 _WEBSITE_SEARCH_ATTEMPTS = 2
+
+# 人力銀行、政府 registry、社群平台等聚合器網域：幾乎任何公司名稱都會搜到，但
+# 從來不是官網本身。比對邏輯移植自 starworks-aivc/apps/api/services/company_profile.py。
+_AGGREGATOR_DOMAINS = {
+    "104.com.tw", "1111.com.tw", "518.com.tw", "104518.com.tw", "cakeresume.com",
+    "indeed.com", "wantedly.com", "goodjob.life",
+    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "youtube.com", "wikipedia.org", "zh.wikipedia.org",
+    "findbiz.nat.gov.tw", "gcis.nat.gov.tw", "data.gov.tw", "pcc.gov.tw",
+    "einvoice.nat.gov.tw", "creditcheck.nccc.com.tw",
+    "twincn.com", "inc.com.tw", "mygov.tw", "twypage.com", "companys.com.tw",
+    "findcompany.com.tw", "iyp.com.tw", "ttshow.tw", "info.technews.tw",
+}
+
+_LONG_DIGIT_RUN = re.compile(r"\d{4,}")
+
+
+def _company_name_variants(name: str) -> tuple[str, str]:
+    suffixes = ("股份有限公司", "有限公司")
+    short = name
+    for suffix in suffixes:
+        if short.endswith(suffix):
+            short = short[: -len(suffix)]
+            break
+    full = name if name.endswith(suffixes) else f"{name}股份有限公司"
+    return short, full
+
+
+def _domain_of(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_aggregator_domain(url: str) -> bool:
+    domain = _domain_of(url)
+    return any(domain == blocked or domain.endswith(f".{blocked}") for blocked in _AGGREGATOR_DOMAINS)
+
+
+def _is_homepage_url(url: str) -> bool:
+    """Registry mirror／公司名錄的詳情頁路徑通常帶一長串稅號/內部 ID
+    （/data-64154），真正首頁的路徑不會有這種特徵；用這個代替不斷增長的
+    網域黑名單，也能放行合法的深連結首頁（tsmc.com/chinese）。"""
+    path = urlsplit(url).path
+    return path in ("", "/") or not _LONG_DIGIT_RUN.search(path)
+
+
+def _mentions_company(text: str, short_name: str, full_name: str) -> bool:
+    if short_name in text or full_name in text:
+        return True
+    # 公司官網常用比登記簡稱更短的品牌名（「杰倫智能」vs 登記簡稱「杰倫智能科技」），
+    # 逐次剪掉 2 字元的常見字尾（科技/工業/股份/企業/資訊…）比對，抓住多數品牌化簡寫。
+    trimmed = short_name
+    while len(trimmed) > 4:
+        trimmed = trimmed[:-2]
+        if trimmed in text:
+            return True
+    return False
+
+
+def _decode_duckduckgo_redirect(href: str) -> str | None:
+    absolute = href if href.startswith("http") else f"https:{href}"
+    target = parse_qs(urlsplit(absolute).query).get("uddg", [None])[0]
+    return target or None
+
+
+async def _search_duckduckgo(query: str, *, limit: int = 10) -> list[dict[str, str]]:
+    async with httpx.AsyncClient(
+        timeout=10, headers={"User-Agent": "Mozilla/5.0 (compatible; TaiwanCompany/0.1)"},
+    ) as client:
+        resp = await client.get("https://lite.duckduckgo.com/lite/", params={"q": query})
+        resp.raise_for_status()
+    html = resp.text
+    link_pattern = r"<a rel=\"nofollow\" href=\"([^\"]+)\" class='result-link'>(.*?)</a>"
+    links = re.findall(link_pattern, html, re.S)
+    snippets = re.findall(r"class='result-snippet'>(.*?)</td>", html, re.S)
+    results = []
+    for index, (href, title) in enumerate(links[:limit]):
+        target = _decode_duckduckgo_redirect(href)
+        if not target:
+            continue
+        snippet = re.sub("<[^>]+>", "", snippets[index]).strip() if index < len(snippets) else ""
+        results.append({"url": target, "title": re.sub("<[^>]+>", "", title).strip(), "snippet": snippet})
+    return results
+
+
+async def _find_website_via_search(name: str, short_name: str, full_name: str) -> dict | None:
+    """模仿人類直接把公司名丟進搜尋引擎：一次 HTTP 查詢，套聚合器/首頁過濾，
+    取代動輒 60 秒的多輪 AI 搜尋。找不到夠有把握的結果時回 None，交給 AI 補搜，
+    所以只會影響速度、不會降低涵蓋率。"""
+    try:
+        results = await _search_duckduckgo(full_name)
+    except httpx.HTTPError:
+        return None
+    for result in results:
+        url = result["url"]
+        if _is_aggregator_domain(url):
+            continue
+        if not _is_homepage_url(url):
+            continue
+        if not _mentions_company(f"{result['title']} {result['snippet']}", short_name, full_name):
+            continue
+        if not await _ssrf_safe_reachable(url):
+            continue
+        return {"website": url, "status": "found"}
+    return None
 
 
 def _host_is_public(host: str) -> bool:
@@ -273,10 +379,18 @@ async def find_website(company_id: str, ai: dict = Depends(ai_from_query)):
 
     name = company.get("name", "")
     tax_id = company.get("tax_id", "")
-    full = name if any(name.endswith(s) for s in ("股份有限公司", "有限公司")) else name + "股份有限公司"
+    short_name, full = _company_name_variants(name)
+
+    # 快速路徑：先用一次 DuckDuckGo 查詢＋聚合器/首頁過濾，模仿人類直接搜尋，
+    # 秒級回應且不吃 AI 額度；找不到夠有把握的結果才退回 AI WebSearch。
+    fast = await _find_website_via_search(name, short_name, full)
+    if fast is not None:
+        return fast
 
     prompt = (
-        f"請用 WebSearch 搜尋「{full}」（統編：{tax_id}）的官方網站。\n"
+        f"請用 WebSearch 搜尋「{full}」（統編：{tax_id}）的官方網站；"
+        f"若結果不足，再搜尋「{short_name} 公司 官網」與「{short_name} Taiwan」。\n"
+        f"公司名稱與統編必須吻合；不要把人力銀行、公司資料庫、Facebook、新聞或同名公司的網站當官網。\n"
         f"只輸出最可能的官方網站 URL（含 https://），禁止任何其他說明文字。\n"
         f"若找不到官方網站，輸出空字串。\n"
         f"範例輸出：https://example.com"
