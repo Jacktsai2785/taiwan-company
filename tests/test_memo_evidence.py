@@ -200,6 +200,20 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memo_extractor._deduplicated_facts(items), [])
         self.assertEqual(memo_extractor._fallback_field_text(items), "")
 
+    def test_fallback_field_text_single_fact_stays_one_paragraph(self):
+        items = [{"id": "chairman:1", "fact": "王小明現任董事長"}]
+        self.assertEqual(memo_extractor._fallback_field_text(items), "王小明現任董事長。")
+
+    def test_fallback_field_text_multiple_facts_become_bullet_list(self):
+        """多個並列個體（例如經營團隊多人）要一行一個、前面加項目符號，
+        不要合併成一大段連續文字——跟 _synthesize_field_group 的條列規則一致。"""
+        items = [
+            {"id": "management_team:1", "fact": "林妙娟畢業於實踐大學"},
+            {"id": "management_team:2", "fact": "蔡清發畢業於淡江大學"},
+        ]
+        result = memo_extractor._fallback_field_text(items)
+        self.assertEqual(result, "• 林妙娟畢業於實踐大學。\n• 蔡清發畢業於淡江大學。")
+
     def test_prose_normalization_removes_broken_punctuation(self):
         self.assertEqual(
             memo_extractor._normalize_memo_prose("第一句。；第二句；。第三句。。"),

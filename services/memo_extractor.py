@@ -644,7 +644,9 @@ def _deduplicated_facts(items: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 def _fallback_field_text(items: list[dict[str, str]], limit: int = 8) -> str:
-    """Readable non-AI fallback: no duplicated sentence terminators or raw flood."""
+    """Readable non-AI fallback: no duplicated sentence terminators or raw flood.
+    多筆事實時比照 _synthesize_field_group 的條列規則，一筆一行、行首加「• 」，
+    跟正常統整路徑的呈現方式一致；只有一筆事實就維持單一段落。"""
     facts = []
     for item in _deduplicated_facts(items):
         fact = str(item.get("fact") or "").strip().rstrip("。；; ")
@@ -652,7 +654,11 @@ def _fallback_field_text(items: list[dict[str, str]], limit: int = 8) -> str:
             facts.append(fact)
         if len(facts) >= limit:
             break
-    return ("；".join(facts) + "。") if facts else ""
+    if not facts:
+        return ""
+    if len(facts) == 1:
+        return facts[0] + "。"
+    return "\n".join(f"• {fact}。" for fact in facts)
 
 
 def _interview_date_from_evidence(items: list[dict[str, str]]) -> str:
@@ -838,7 +844,15 @@ async def _synthesize_field_group(
 5. 使用完整句子與正常標點。禁止「。；」「；。」，禁止同一句換句話說重複出現。
 6. 未有 evidence 的欄位輸出空字串。
 7. 每個非空欄位列出實際採用的 evidence_ids；ID 必須來自該欄位。
-8. 只輸出 JSON，格式如下：
+8. 條列優先：只要欄位內容可以拆成 2 個以上各自成立、獨立一句就能講完的重點
+   ——不限於「並列個體」，也包括同一段裡的多個產品/技術/服務項目、多項財務
+   數字（營收、毛利、毛利率、營業利益、稅後淨利...各自一行）、增資或投資條件
+   的各項條款、多個里程碑或客戶——每一項獨立成一行、行首加「• 」，不要合併寫
+   成一整段連續文字。像簡報條列一樣，讀者要能一眼看出這裡有幾個重點，不用逐句
+   細讀才找得到。
+   只有內容本質上就是單一件事、拆開反而破壞語意的敘述（例如一個地址、一句話
+   講完的單一結論）才維持一般段落，不要為了條列硬拆。拿不定主意時優先條列。
+9. 只輸出 JSON，格式如下（text 裡的換行請直接用 \\n）：
 {{"field_key":{{"text":"整理後文字","evidence_ids":["field_key:1"]}}}}
 
 欄位邊界：
