@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from services import data_store, report_generator
 from services.ai_deps import ai_from_headers
-from services.file_parser import extract_text
+from services.file_parser import extract_text, NATIVE_EXTS as _NATIVE_EXTS
 from services.materials_merge import PUBLIC_SECTIONS, UMBRELLA, normalize_to_umbrella, parse_sections, serialize_sections
 from services.task_progress import spawn_background as _spawn
 
@@ -30,8 +30,8 @@ _mat_generating: set[str] = set()
 
 UPLOADS_DIR = data_store.DATA_DIR / "uploads"
 
-# Files Claude reads natively (passed as paths / vision blocks)
-_NATIVE_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+# Files Claude reads natively (passed as paths / vision blocks) — shared with
+# call_memo.py via file_parser.NATIVE_EXTS so both stay in sync.
 # Files we pre-extract to text (office docs + OCR-only images)
 _TEXT_EXTS = {".pptx", ".docx", ".xlsx", ".txt", ".tiff", ".tif", ".bmp"}
 _ACCEPTED_EXTS = _NATIVE_EXTS | _TEXT_EXTS

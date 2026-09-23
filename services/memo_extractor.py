@@ -4,11 +4,14 @@ Returns a dict matching the 24-field template schema (+ interview_date on extrac
 """
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
 from services import claude_client
+
+log = logging.getLogger("memo_extractor")
 
 # Ordered field definitions: key -> (label, short_description)
 FIELDS: list[tuple[str, str, str]] = [
@@ -160,11 +163,16 @@ async def extract_with_audit(
     transcript: str,
     engine: str = "",
     source_filename: str = "",
+    native_file_path: str = "",
 ) -> tuple[dict, dict]:
     """
     從逐字稿抽取所有 Call Memo 欄位（+ interview_date）。
     逐字稿超長時分段抽取「事實 + 原文證據」，累積去重後再統整成 24 欄。
     AI 回不出可解析 JSON 時 raise ValueError（不偽裝成 24 欄全空的『成功』）。
+
+    native_file_path：原始檔案（PDF/圖片）路徑。get_text() 抽出的 transcript 只有文字層，
+    設計排版頁（封面、經營團隊、組織圖等常見版面）會整頁抓成空字串；有給路徑時另外讓模型
+    原生讀圖補一份 evidence，跟文字抽取結果併入同一個 evidence pool（見 _extract_evidence_from_file）。
     """
     transcript = prepare_transcript(transcript, source_filename)
     chunks = _split_transcript(transcript)
@@ -184,6 +192,13 @@ async def extract_with_audit(
         for item in items:
             item["source"] = "deterministic_safety_net"
     chunk_results.append([deterministic])
+    if native_file_path:
+        try:
+            vision_result = await _extract_evidence_from_file(company_name, native_file_path, engine)
+        except Exception as e:
+            log.warning("原始檔案 vision 抽取失敗（%s）：%s", native_file_path, e)
+            vision_result = {k: [] for k in _EXTRACT_KEYS}
+        chunk_results.append([vision_result])
     for parts in chunk_results:
         for part in parts:
             for key, items in part.items():
@@ -335,6 +350,58 @@ async def _extract_evidence_once(company_name: str, transcript: str, engine: str
     raw = await asyncio.to_thread(claude_client.ask, prompt, 180, None, engine)
     data = _json_object(raw)
     return _validated_evidence(data, transcript)
+
+
+async def _extract_evidence_from_file(company_name: str, file_path: str, engine: str) -> dict:
+    """讓模型原生讀取原始檔案（PDF/圖片），補足 get_text() 抓不到的設計排版頁內容
+    （封面、經營團隊、組織圖等常見版面）。無逐字稿原文可比對，故無法套用
+    _validated_evidence 的引用比對防幻覺機制，改以 vision_extraction 標記讓稽核
+    可區分來源可信度，並在 prompt 內強調只能回報實際看到的內容。"""
+    fields_desc = "\n".join(
+        f'  "{key}": "{label}（{desc}）"'
+        for key, label, desc in _EXTRACT_FIELDS
+    )
+    prompt = f"""你是投資文件事實抽取器。附件是與「{company_name}」相關的補充資料原始檔案，
+可能包含設計排版頁面（封面、經營團隊介紹、組織圖等），也可能有純文字或表格頁面。
+請完整讀取每一頁／每張圖片後再回答，不要只看檔名。
+
+請為每個欄位找出所有明確事實，以 JSON 回傳：
+- 每項格式為 {{"fact":"繁體中文事實", "quote":"檔案中可見的原文文字或數字（找不到就留空字串）", "timestamp":""}}。
+- fact 只能表達你在檔案中實際看到的內容，不得加入常識、推測、評價或外部資訊。
+- 同一事實可放入多個真正相關的欄位，以免後續漏掉重要內容。
+- 這是高召回率抽取，不是摘要；寧可多列也不可只挑幾個重點。
+- 檔案中未出現的欄位回傳空陣列 []。
+- 回傳純 JSON，不要加 markdown code block 或說明。
+
+需提取的欄位：
+{{
+{fields_desc}
+}}
+
+請直接回傳 JSON 物件，每個 key 的 value 都是陣列。"""
+
+    raw = await asyncio.to_thread(
+        claude_client.ask_with_files, prompt, [file_path], 240, engine
+    )
+    data = _json_object(raw)
+    result: dict[str, list[dict[str, str]]] = {k: [] for k in _EXTRACT_KEYS}
+    for key in _EXTRACT_KEYS:
+        items = data.get(key, [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fact = str(item.get("fact") or "").strip()
+            if not fact:
+                continue
+            result[key].append({
+                "fact": fact,
+                "quote": str(item.get("quote") or "").strip(),
+                "timestamp": str(item.get("timestamp") or "").strip(),
+                "source": "vision_extraction",
+            })
+    return result
 
 
 async def _extract_material_facts_once(

@@ -155,13 +155,47 @@ class CallMemoExtractTests(unittest.IsolatedAsyncioTestCase):
 
                 extract_text.assert_not_called()
                 extract_with_audit.assert_awaited_once_with(
-                    "測試公司", transcript, source_filename="podcast.md", engine="claude"
+                    "測試公司", transcript, source_filename="podcast.md",
+                    native_file_path="", engine="claude"
                 )
                 self.assertEqual(result["interview_date"], "2026/08/04")
                 saved_memo = store.company["call_memos"][0]
                 self.assertEqual(saved_memo["deal_source"], "自行開發")
                 self.assertEqual(saved_memo["source"]["filename"], "podcast.md")
                 self.assertEqual(len(saved_memo["runs"]), 1)
+
+    @patch("routers.call_memo.data_store")
+    @patch("routers.call_memo.memo_extractor.extract_with_audit")
+    @patch("routers.call_memo.extract_text")
+    async def test_pdf_with_empty_text_layer_still_extracts_via_native_path(
+        self, extract_text, extract_with_audit, data_store
+    ):
+        """PDF 頁面若整頁是設計排版圖片，get_text() 抓出的文字層可能是空字串（見
+        services/file_parser.py 的 NATIVE_EXTS）。這種情況不該直接 422，應該把原始
+        PDF 路徑也交給模型讀圖（native_file_path），而不是只靠已抽出的空文字。"""
+        extract_text.return_value = ""  # 模擬整份 PDF 都是圖片頁，文字層全空
+        with TemporaryDirectory() as tmp:
+            with patch("routers.call_memo._MEMO_SOURCES_DIR", Path(tmp) / "uploads"), \
+                 patch("routers.call_memo._MEMO_RUNS_DIR", Path(tmp) / "memo_runs"), \
+                 patch("routers.call_memo.data_store.DATA_DIR", Path(tmp)):
+                store = _FakeStore(_company_with_memo())
+                data_store.get_company.side_effect = store.get_company
+                data_store.update_company.side_effect = store.update_company
+
+                extract_with_audit.return_value = (
+                    {"interview_date": "", "headcount": "13人"},
+                    {"evidence": {}, "coverage": {}},
+                )
+                upload = Mock(filename="bp.pdf")
+                upload.read = AsyncMock(return_value=b"%PDF-fake-bytes")
+
+                result = await extract_memo("company-id", "memo-1", upload, {"engine": "claude"})
+
+                self.assertEqual(result["headcount"], "13人")
+                _, kwargs = extract_with_audit.await_args
+                self.assertTrue(kwargs["native_file_path"])
+                self.assertTrue(kwargs["native_file_path"].endswith(".pdf"))
+                self.assertTrue(Path(kwargs["native_file_path"]).is_file())
 
     @patch("routers.call_memo.data_store")
     @patch("routers.call_memo.memo_extractor.extract_with_audit")

@@ -12,7 +12,7 @@ from pydantic import create_model
 
 from services import claude_client, data_store, memo_extractor
 from services.ai_deps import ai_from_headers
-from services.file_parser import extract_text, FileParseError
+from services.file_parser import extract_text, FileParseError, NATIVE_EXTS
 from services import whisper_transcriber
 
 router = APIRouter(prefix="/api/companies", tags=["call_memo"])
@@ -247,16 +247,21 @@ async def extract_memo(company_id: str, memo_id: str, file: UploadFile = File(..
     if len(content) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="逐字稿檔過大，上限 30MB")
     filename = file.filename or "transcript.txt"
+    is_native = Path(filename).suffix.lower() in NATIVE_EXTS
 
     transcript = await _extract_text_content(filename, content)
-    if not transcript.strip():
+    if not transcript.strip() and not is_native:
         raise HTTPException(status_code=422, detail="無法從檔案中取得文字內容")
 
     source = _write_memo_source_file(company_id, filename, content)
+    # PDF/圖片文字層抓不到的設計排版頁（封面、經營團隊、組織圖等）另外讓模型原生讀圖補足，
+    # 見 memo_extractor._extract_evidence_from_file。
+    native_path = str(_MEMO_SOURCES_DIR / company_id / source["stored_name"]) if is_native else ""
 
     try:
         fields, audit = await memo_extractor.extract_with_audit(
-            company["name"], transcript, source_filename=filename, **ai
+            company["name"], transcript, source_filename=filename,
+            native_file_path=native_path, **ai
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -277,12 +282,15 @@ async def reextract_memo(company_id: str, memo_id: str, ai: dict = Depends(ai_fr
     path = _memo_source_path(company_id, source)
     content = await asyncio.to_thread(path.read_bytes)
     filename = source.get("filename") or path.name
+    is_native = Path(filename).suffix.lower() in NATIVE_EXTS
     transcript = await _extract_text_content(filename, content)
-    if not transcript.strip():
+    if not transcript.strip() and not is_native:
         raise HTTPException(status_code=422, detail="無法從保存的逐字稿中取得文字內容")
+    native_path = str(path) if is_native else ""
     try:
         fields, audit = await memo_extractor.extract_with_audit(
-            company["name"], transcript, source_filename=filename, **ai
+            company["name"], transcript, source_filename=filename,
+            native_file_path=native_path, **ai
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
