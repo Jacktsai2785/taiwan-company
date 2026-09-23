@@ -43,6 +43,7 @@ _AGGREGATOR_DOMAINS = {
     "einvoice.nat.gov.tw", "creditcheck.nccc.com.tw",
     "twincn.com", "inc.com.tw", "mygov.tw", "twypage.com", "companys.com.tw",
     "findcompany.com.tw", "iyp.com.tw", "ttshow.tw", "info.technews.tw",
+    "findit.sme.gov.tw", "alltwcompany.com",
 }
 
 _LONG_DIGIT_RUN = re.compile(r"\d{4,}")
