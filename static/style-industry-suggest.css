@@ -946,6 +946,73 @@
 .memo-field textarea:focus { border-color: var(--accent); outline: none; background: #fff; }
 .memo-field textarea { min-height: 60px; line-height: 1.55; }
 
+/* 財務預測表格：年度 x Now/Now+1/Now+2/Now+3，見 fill_template 的巢狀表格 */
+.memo-financials-table { gap: 0; }
+.memo-financials-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 2px; cursor: pointer; user-select: none;
+}
+.memo-financials-header label { margin: 0; }
+.memo-financials-header:hover { background: var(--accent-light); border-radius: 6px; }
+#fin-table-body { margin-top: 3px; overflow-x: auto; }
+.fin-detail-toggle {
+  border: none; background: none; cursor: pointer;
+  font-size: 9px; color: var(--muted); padding: 0 2px 0 0;
+  vertical-align: middle;
+}
+.fin-detail-toggle:hover { color: var(--accent); }
+.fin-detail-row th { padding-left: 18px; color: var(--muted); }
+.financials-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 3px;
+}
+.financials-table th,
+.financials-table td {
+  border: 1px solid var(--border);
+  padding: 3px 4px;
+  text-align: center;
+}
+.financials-table thead th {
+  background: var(--accent-light);
+  color: var(--text);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.financials-table thead th input {
+  width: 100%;
+  min-width: 60px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  padding: 2px;
+  font-family: inherit;
+  color: var(--text);
+}
+.financials-table thead th input::placeholder { color: var(--text); opacity: .6; }
+.financials-table thead th input:focus { outline: 1px solid var(--accent); background: #fff; }
+.financials-table tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: left;
+  background: #fafbfc;
+}
+.financials-table td input {
+  width: 100%;
+  min-width: 60px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  text-align: center;
+  padding: 2px;
+  font-family: inherit;
+  color: var(--text);
+}
+.financials-table td input:focus { outline: 1px solid var(--accent); background: #fff; }
+
 /* Memo：自由備註，預設收合節省空間 */
 .memo-notes-field { gap: 0; }
 .memo-notes-header {

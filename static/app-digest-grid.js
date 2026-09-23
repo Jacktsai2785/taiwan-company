@@ -756,6 +756,93 @@ const MEMO_FIELDS = [
   ["conclusion",         "評估結論與建議",               true],
 ];
 
+// 財務狀況欄位除了敘述文字，DOCX 範本裡「財務狀況」儲存格本來就有一張巢狀表格
+// （年度 x Now/Now+1/Now+2/Now+3），對應後端 memo_extractor.FINANCIAL_TABLE_METRICS
+// / FINANCIAL_TABLE_PERIODS；key 格式跟後端一致：fin_<period>_<metric>。
+// 生產人數／Sales人數／RD人數／G&A人數是各自母列（COGS/Selling/G&A/R&D）的補充
+// 明細，各自可獨立收合（detailKey 指到下一列、isDetail 標記自己是被收合的那一列），
+// 跟整張表的收合是兩層獨立開關。
+const FINANCIALS_TABLE_METRICS = [
+  ["revenue",               "營收"],
+  ["cogs",                  "COGS",     { detailKey: "production_headcount" }],
+  ["production_headcount",  "生產人數", { isDetail: true }],
+  ["gross_profit",          "毛利"],
+  ["gross_margin_pct",      "毛利率(%)"],
+  ["expenses",              "營業費用"],
+  ["selling",               "Selling",  { detailKey: "sales_headcount" }],
+  ["sales_headcount",       "Sales人數", { isDetail: true }],
+  ["ga",                    "G&A",      { detailKey: "ga_headcount" }],
+  ["ga_headcount",          "G&A人數",  { isDetail: true }],
+  ["rd",                    "R&D",      { detailKey: "rd_headcount" }],
+  ["rd_headcount",          "RD人數",   { isDetail: true }],
+  ["operating_income",      "營業利益"],
+  ["non_operating_income",  "業外收入"],
+  ["non_operating_expense", "業外支出"],
+  ["net_income",            "稅後淨利"],
+];
+const FINANCIALS_TABLE_PERIODS = [
+  ["now",  "Now"],
+  ["now1", "Now+1"],
+  ["now2", "Now+2"],
+  ["now3", "Now+3"],
+];
+const FINANCIALS_TABLE_KEYS = FINANCIALS_TABLE_PERIODS.flatMap(
+  ([p]) => FINANCIALS_TABLE_METRICS.map(([m]) => `fin_${p}_${m}`)
+);
+// 表頭「Now/Now+1/...」是通用代稱；補充資料若有明確財報期間（例如「114/8/31」），
+// 存進這幾個 key 取代表頭顯示，跟指標數字分開存。
+const FINANCIALS_PERIOD_LABEL_KEYS = FINANCIALS_TABLE_PERIODS.map(([p]) => `fin_period_label_${p}`);
+
+function _renderFinancialsTable(memo) {
+  const headerCells = FINANCIALS_TABLE_PERIODS.map(([periodKey, label]) => {
+    const key = `fin_period_label_${periodKey}`;
+    const val = (memo && memo[key]) ? memo[key] : "";
+    return `<th><input id="memo-${key}" type="text" value="${escAttr(val)}" placeholder="${escAttr(label)}" title="填實際財報期間，例如 114/8/31" /></th>`;
+  }).join("");
+  const rows = FINANCIALS_TABLE_METRICS.map(([metricKey, metricLabel, opts]) => {
+    const cells = FINANCIALS_TABLE_PERIODS.map(([periodKey]) => {
+      const fieldKey = `fin_${periodKey}_${metricKey}`;
+      const val = (memo && memo[fieldKey]) ? memo[fieldKey] : "";
+      return `<td><input id="memo-${fieldKey}" type="text" value="${escAttr(val)}" /></td>`;
+    }).join("");
+    if (opts && opts.isDetail) {
+      return `<tr class="fin-detail-row" id="fin-detail-${metricKey}" style="display:none"><th>${escHtml(metricLabel)}</th>${cells}</tr>`;
+    }
+    const toggle = (opts && opts.detailKey)
+      ? `<button type="button" class="fin-detail-toggle" onclick="_toggleFinDetail('${opts.detailKey}', this)" title="顯示/隱藏補充明細">▸</button> `
+      : "";
+    return `<tr><th>${toggle}${escHtml(metricLabel)}</th>${cells}</tr>`;
+  }).join("");
+  return `
+    <div class="memo-field full memo-financials-table">
+      <div class="memo-financials-header" onclick="toggleFinancialsTable()">
+        <label>財務預測（年度）</label><span id="fin-table-toggle">▶</span>
+      </div>
+      <div id="fin-table-body" style="display:none">
+        <table class="financials-table"><thead><tr><th>年度</th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+// 整張財務預測表的收合開關，預設收合——這張表是敘述文字之外的補充明細，不用每次都看。
+function toggleFinancialsTable() {
+  const body = document.getElementById("fin-table-body");
+  const toggle = document.getElementById("fin-table-toggle");
+  if (!body || !toggle) return;
+  const collapsed = body.style.display === "none";
+  body.style.display = collapsed ? "" : "none";
+  toggle.textContent = collapsed ? "▼" : "▶";
+}
+
+// Sales人數／RD人數各自獨立的收合開關，跟整張表的收合互不影響。
+function _toggleFinDetail(metricKey, btn) {
+  const row = document.getElementById(`fin-detail-${metricKey}`);
+  if (!row) return;
+  const hidden = row.style.display === "none";
+  row.style.display = hidden ? "" : "none";
+  btn.textContent = hidden ? "▾" : "▸";
+}
+
 let _memoList = [];       // 目前這間公司的全部 call memo（摘要 + 全欄位）
 let _activeMemoId = null; // 目前分頁面正在編輯的那一份
 
@@ -818,6 +905,7 @@ function _renderMemoFields(memo) {
       ? `<textarea id="memo-${key}" rows="3">${escHtml(val)}</textarea>`
       : `<input id="memo-${key}" type="text" value="${escAttr(val)}" />`;
     fields += `<div class="${cls}"><label>${escHtml(label)}</label>${input}</div>`;
+    if (key === "financials") fields += _renderFinancialsTable(memo);
   }
 
   container.innerHTML = dateField + `<div class="memo-fields-grid">${fields}</div>`;
@@ -927,6 +1015,14 @@ async function _deleteMemo(memoId) {
 function _collectMemoData() {
   const data = { interview_date: (document.getElementById("memo-interview_date")?.value || "").trim() };
   for (const [key] of MEMO_FIELDS) {
+    const el = document.getElementById(`memo-${key}`);
+    data[key] = el ? el.value.trim() : "";
+  }
+  for (const key of FINANCIALS_TABLE_KEYS) {
+    const el = document.getElementById(`memo-${key}`);
+    data[key] = el ? el.value.trim() : "";
+  }
+  for (const key of FINANCIALS_PERIOD_LABEL_KEYS) {
     const el = document.getElementById(`memo-${key}`);
     data[key] = el ? el.value.trim() : "";
   }

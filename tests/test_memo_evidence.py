@@ -235,6 +235,112 @@ class MemoEvidenceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, response)
 
+    async def test_synthesize_financials_table_fills_only_supported_fields(self):
+        """財務狀況儲存格裡的巢狀表格（年度 x Now/Now+1/Now+2/Now+3）要能被 AI
+        自動填數字進去；evidence 沒明確支持的期別/指標要留空，不能亂填或推算。
+        數字欄位不該留「元」這種單位字樣（表格已經是數字欄，不需要單位），
+        毛利率(%) 是唯一例外，要保留 %。"""
+        evidence = [{
+            "id": "financials:1",
+            "fact": "依114年08月31日暫結資產負債表，民114年1月至8月營業收入淨額為14,452,108元，毛利率71.02%",
+        }]
+        response = {"now": {
+            "period_label": "114/8/31",
+            "revenue": "14,452,108元",
+            "gross_margin_pct": "71.02%",
+        }}
+        with patch(
+            "services.memo_extractor.asyncio.to_thread",
+            new=AsyncMock(return_value=__import__("json").dumps(response, ensure_ascii=False)),
+        ):
+            result = await memo_extractor._synthesize_financials_table(
+                "測試公司", evidence, "claude"
+            )
+
+        self.assertEqual(result["fin_now_revenue"], "14,452,108")  # 「元」被去掉
+        self.assertEqual(result["fin_now_gross_margin_pct"], "71.02%")  # % 保留
+        self.assertEqual(result["fin_now_cogs"], "")
+        self.assertEqual(result["fin_now1_revenue"], "")
+        self.assertEqual(result["fin_period_label_now"], "114/8/31")
+        self.assertEqual(result["fin_period_label_now1"], "")
+        self.assertEqual(
+            len(result),
+            len(memo_extractor.FINANCIAL_TABLE_KEYS) + len(memo_extractor.FINANCIAL_PERIOD_LABEL_KEYS),
+        )
+
+    async def test_synthesize_financials_table_skips_ai_call_without_evidence(self):
+        with patch(
+            "services.memo_extractor.asyncio.to_thread",
+            new=AsyncMock(side_effect=AssertionError("should not call AI without evidence")),
+        ):
+            result = await memo_extractor._synthesize_financials_table("測試公司", [], "claude")
+
+        self.assertTrue(all(v == "" for v in result.values()))
+
+    def test_strip_currency_unit_removes_yuan_but_keeps_digits(self):
+        self.assertEqual(memo_extractor._strip_currency_unit("14,452,108元"), "14,452,108")
+        self.assertEqual(memo_extractor._strip_currency_unit("5,000萬元"), "5,000萬")
+        self.assertEqual(memo_extractor._strip_currency_unit("71.02%"), "71.02%")
+
+    async def test_extract_evidence_dual_from_file_survives_one_pass_failing(self):
+        """比照文字管線的雙抽取設計：讀圖有兩條獨立 pass，任一條掛掉或漏抓
+        不該讓另一條的結果也不見。"""
+        ok_result = {key: [] for key in memo_extractor._EXTRACT_KEYS}
+        ok_result["management_team"] = [{"fact": "林妙娟為創辦人", "quote": "", "timestamp": "", "source": "vision_extraction"}]
+        with patch(
+            "services.memo_extractor._extract_evidence_from_file",
+            new=AsyncMock(return_value=ok_result),
+        ), patch(
+            "services.memo_extractor._extract_material_facts_from_file",
+            new=AsyncMock(side_effect=RuntimeError("模型逾時")),
+        ):
+            results = await memo_extractor._extract_evidence_dual_from_file(
+                "測試公司", "/tmp/fake.pdf", "claude"
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["management_team"][0]["fact"], "林妙娟為創辦人")
+
+    def test_fill_template_fills_nested_financials_table(self):
+        """財務狀況儲存格裡本來就有一張巢狀表格（年度 x Now~Now+3），fill_template
+        要能把 fin_<period>_<metric> 的值填進對應格子，不能只塞長文字進儲存格。"""
+        from docx import Document
+        import io
+
+        memo = {
+            "fin_now_revenue": "14,452,108",
+            "fin_now_gross_margin_pct": "71.02%",
+            "fin_now_operating_income": "5,000,000",
+            "fin_now_non_operating_income": "100,000",
+            "fin_now_non_operating_expense": "50,000",
+            "fin_period_label_now": "114/8/31",
+        }
+        docx_bytes = memo_extractor.fill_template({"name": "測試公司"}, memo, "2026/09/23")
+
+        doc = Document(io.BytesIO(docx_bytes))
+        fin_cell = doc.tables[0].rows[10].cells[0]
+        nested = fin_cell.tables[0]
+        rows_by_label = {row.cells[0].text.strip(): [c.text.strip() for c in row.cells] for row in nested.rows}
+
+        self.assertEqual(rows_by_label["營收"][1], "14,452,108")
+        self.assertEqual(rows_by_label["毛利率(%)"][1], "71.02%")
+        self.assertEqual(rows_by_label["COGS"][1], "")  # 沒 evidence 支持，留空
+        # 費用列已更名為「營業費用」，且範本裡插入了 G&A人數 + 營業利益/業外收入/業外支出
+        self.assertIn("營業費用", rows_by_label)
+        self.assertNotIn("費用", rows_by_label)
+        self.assertIn("G&A人數", rows_by_label)
+        self.assertEqual(rows_by_label["營業利益"][1], "5,000,000")
+        self.assertEqual(rows_by_label["業外收入"][1], "100,000")
+        self.assertEqual(rows_by_label["業外支出"][1], "50,000")
+        # 有實際財報期間時，表頭「Now」要換成真正的期間文字
+        self.assertEqual(rows_by_label["年度"][1], "114/8/31")
+        # 順序：G&A人數 在 G&A 跟 R&D 之間；RD人數 之後、稅後淨利 之前是三個新指標
+        labels = list(rows_by_label.keys())
+        self.assertLess(labels.index("G&A"), labels.index("G&A人數"))
+        self.assertLess(labels.index("G&A人數"), labels.index("R&D"))
+        self.assertLess(labels.index("RD人數"), labels.index("營業利益"))
+        self.assertLess(labels.index("業外支出"), labels.index("稅後淨利"))
+
 
 if __name__ == "__main__":
     unittest.main()

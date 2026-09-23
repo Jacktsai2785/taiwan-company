@@ -23,11 +23,15 @@ _MEMO_SOURCES_DIR = data_store.DATA_DIR / "uploads"
 _MEMO_RUNS_DIR = data_store.DATA_DIR / "memo_runs"
 
 # 單一來源：欄位定義只在 memo_extractor.FIELDS 維護，MemoSave 由它 + interview_date/label 動態生成
+# FINANCIAL_TABLE_KEYS 是財務狀況儲存格裡巢狀表格（年度 x Now/Now+1/Now+2/Now+3）
+# 展平出來的 48 個結構化數字欄位，跟 FIELDS 的自由文字欄位並存。
 MemoSave = create_model(
     "MemoSave",
     interview_date=(str, ""),
     label=(str, ""),
     **{key: (str, "") for key in memo_extractor.FIELD_KEYS},
+    **{key: (str, "") for key in memo_extractor.FINANCIAL_TABLE_KEYS},
+    **{key: (str, "") for key in memo_extractor.FINANCIAL_PERIOD_LABEL_KEYS},
 )
 
 
@@ -45,6 +49,8 @@ def _new_memo_entry() -> dict:
         "updated_at": now,
     }
     entry.update({key: "" for key in memo_extractor.FIELD_KEYS})
+    entry.update({key: "" for key in memo_extractor.FINANCIAL_TABLE_KEYS})
+    entry.update({key: "" for key in memo_extractor.FINANCIAL_PERIOD_LABEL_KEYS})
     return entry
 
 

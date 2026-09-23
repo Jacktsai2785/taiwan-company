@@ -77,6 +77,35 @@ def _from_pdf(content: bytes) -> str:
         raise FileParseError(f"PDF 解析失敗：{e}")
 
 
+def extract_pdf_image_only_pages(content: bytes) -> list[tuple[str, bytes]]:
+    """回傳 PDF 裡「整頁沒有文字層」的那些頁面所內嵀的原始圖片（ext, bytes）。
+    這種頁面通常是封面、經營團隊介紹等設計排版頁，get_text() 抓不到內容。
+
+    直接抓內嵌圖片的原始 bytes，不是把整頁重新 rasterize 成 pixmap——後者遇到
+    超長版面（例如整頁截圖式排版，實測有頁面高達 28 吋）容易被壓成較低畫質，
+    讓模型讀圖時把相似字形猜成別的字（幻覺人名/學校），而不是漏抓。原始內嵌
+    圖片畫質等於人眼直接看到的版面，讀取結果才可信。"""
+    try:
+        import fitz
+        doc = fitz.open(stream=content, filetype="pdf")
+        results: list[tuple[str, bytes]] = []
+        for page in doc:
+            if page.get_text().strip():
+                continue  # 這頁本來就有文字層，交給 _from_pdf 的文字抽取處理
+            images = page.get_images(full=True)
+            if not images:
+                continue
+            # 挑面積最大的一張當這頁的主要內容，避免把裝飾用的小圖示也塞給模型。
+            best_xref = max(images, key=lambda im: im[2] * im[3])[0]
+            info = doc.extract_image(best_xref)
+            results.append((info["ext"], info["image"]))
+        doc.close()
+        return results
+    except Exception as e:
+        log.warning("抽取 PDF 圖片頁失敗：%s", e)
+        return []
+
+
 def _from_docx(content: bytes) -> str:
     try:
         from docx import Document

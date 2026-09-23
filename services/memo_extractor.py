@@ -5,7 +5,9 @@ Returns a dict matching the 24-field template schema (+ interview_date on extrac
 import asyncio
 import json
 import logging
+import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +46,51 @@ FIELDS: list[tuple[str, str, str]] = [
 ]
 
 FIELD_KEYS = [f[0] for f in FIELDS]
+
+# 財務狀況欄位在 DOCX 範本裡有一張巢狀表格（年度 x Now/Now+1/Now+2/Now+3），跟
+# financials 的自由文字是同一儲存格裡的兩個部分：文字給敘述，這張表給結構化數字。
+# 不併進 FIELDS——FIELDS 是單一欄位單一自由文字的清單，這張表是 16 指標 x 4 期
+# 的固定格狀資料，key 用 fin_<period>_<metric> 展平儲存，方便沿用既有的
+# MemoSave / _new_memo_entry 平面 key-value 模式。
+# 順序、標籤要跟 data/call_memo_template.docx 巢狀表格的列標籤逐字對應
+# （fill_template 靠標籤文字比對填值）——改這裡要同步改範本，或反過來。
+# 第三個欄位是常見會計科目同義詞，餵給 _synthesize_financials_table 的 prompt，
+# 讓 AI 認得補充資料裡不同措辭都對應到同一個 metric（例如「銷貨成本」＝COGS）——
+# 這是讀寫這張表時辨識科目名稱的唯一基準，之後要擴充同義詞改這裡就好。
+FINANCIAL_TABLE_METRICS: list[tuple[str, str, str]] = [
+    ("revenue",               "營收",      "營業收入淨額、收入、營收淨額"),
+    ("cogs",                  "COGS",      "銷貨成本、營業成本"),
+    ("production_headcount",  "生產人數",   "產線/生產/製造部門人數"),
+    ("gross_profit",          "毛利",      "營業毛利、銷貨毛利"),
+    ("gross_margin_pct",      "毛利率(%)", "毛利率"),
+    ("expenses",              "營業費用",   "營業費用總額"),
+    ("selling",               "Selling",   "推銷費用、銷售費用"),
+    ("sales_headcount",       "Sales人數",  "銷售/業務部門人數"),
+    ("ga",                    "G&A",       "管理費用、一般管理費用"),
+    ("ga_headcount",          "G&A人數",    "管理部門人數"),
+    ("rd",                    "R&D",       "研究發展費用、研發費用"),
+    ("rd_headcount",          "RD人數",    "研發部門人數"),
+    ("operating_income",      "營業利益",   "營業淨利"),
+    ("non_operating_income",  "業外收入",   "營業外收入"),
+    ("non_operating_expense", "業外支出",   "營業外支出"),
+    ("net_income",            "稅後淨利",   "本期淨利、稅後純益"),
+]
+FINANCIAL_TABLE_PERIODS: list[tuple[str, str]] = [
+    ("now",  "Now"),
+    ("now1", "Now+1"),
+    ("now2", "Now+2"),
+    ("now3", "Now+3"),
+]
+FINANCIAL_TABLE_KEYS = [
+    f"fin_{period_key}_{metric_key}"
+    for period_key, _ in FINANCIAL_TABLE_PERIODS
+    for metric_key, _, _ in FINANCIAL_TABLE_METRICS
+]
+# 每期的實際期間/截止日期（例如「114/8/31」），跟數字分開存，讓表頭能顯示補充
+# 資料裡真正的財報期間，而不是永遠只顯示 Now/Now+1 這種通用代稱。
+FINANCIAL_PERIOD_LABEL_KEYS = [
+    f"fin_period_label_{period_key}" for period_key, _ in FINANCIAL_TABLE_PERIODS
+]
 
 # 自由備註欄位：不參與 AI 逐字稿抽取／統整，只走 MemoSave / DOCX / serialize_memo。
 _MANUAL_ONLY_KEYS = {"memo_notes"}
@@ -193,12 +240,8 @@ async def extract_with_audit(
             item["source"] = "deterministic_safety_net"
     chunk_results.append([deterministic])
     if native_file_path:
-        try:
-            vision_result = await _extract_evidence_from_file(company_name, native_file_path, engine)
-        except Exception as e:
-            log.warning("原始檔案 vision 抽取失敗（%s）：%s", native_file_path, e)
-            vision_result = {k: [] for k in _EXTRACT_KEYS}
-        chunk_results.append([vision_result])
+        vision_results = await _extract_evidence_dual_from_file(company_name, native_file_path, engine)
+        chunk_results.append(vision_results)
     for parts in chunk_results:
         for part in parts:
             for key, items in part.items():
@@ -352,38 +395,19 @@ async def _extract_evidence_once(company_name: str, transcript: str, engine: str
     return _validated_evidence(data, transcript)
 
 
-async def _extract_evidence_from_file(company_name: str, file_path: str, engine: str) -> dict:
-    """讓模型原生讀取原始檔案（PDF/圖片），補足 get_text() 抓不到的設計排版頁內容
-    （封面、經營團隊、組織圖等常見版面）。無逐字稿原文可比對，故無法套用
-    _validated_evidence 的引用比對防幻覺機制，改以 vision_extraction 標記讓稽核
-    可區分來源可信度，並在 prompt 內強調只能回報實際看到的內容。"""
-    fields_desc = "\n".join(
-        f'  "{key}": "{label}（{desc}）"'
-        for key, label, desc in _EXTRACT_FIELDS
-    )
-    prompt = f"""你是投資文件事實抽取器。附件是與「{company_name}」相關的補充資料原始檔案，
-可能包含設計排版頁面（封面、經營團隊介紹、組織圖等），也可能有純文字或表格頁面。
-請完整讀取每一頁／每張圖片後再回答，不要只看檔名。
+_LIST_RECALL_RULE = (
+    "- 若某頁是名冊、清單或並列項目（例如經營團隊每個人的介紹、董監事名單、客戶清單），"
+    "必須把清單上的每一筆都各自輸出成一條 fact，不可只挑幾筆當代表或摘要整體、"
+    "也不可把多筆合併成一條。清單有幾筆就要輸出幾筆。"
+)
+_ACCURACY_RULE = (
+    "- 人名、學校、公司等專有名詞如果圖片模糊、筆畫看不清楚，"
+    "寧可整條不要輸出，也不可以猜測、改寫或用常見的相似名字替代。"
+    "找不到、看不清楚就是留白，不是用合理猜測填上去。"
+)
 
-請為每個欄位找出所有明確事實，以 JSON 回傳：
-- 每項格式為 {{"fact":"繁體中文事實", "quote":"檔案中可見的原文文字或數字（找不到就留空字串）", "timestamp":""}}。
-- fact 只能表達你在檔案中實際看到的內容，不得加入常識、推測、評價或外部資訊。
-- 同一事實可放入多個真正相關的欄位，以免後續漏掉重要內容。
-- 這是高召回率抽取，不是摘要；寧可多列也不可只挑幾個重點。
-- 檔案中未出現的欄位回傳空陣列 []。
-- 回傳純 JSON，不要加 markdown code block 或說明。
 
-需提取的欄位：
-{{
-{fields_desc}
-}}
-
-請直接回傳 JSON 物件，每個 key 的 value 都是陣列。"""
-
-    raw = await asyncio.to_thread(
-        claude_client.ask_with_files, prompt, [file_path], 240, engine
-    )
-    data = _json_object(raw)
+def _vision_result_from_data(data: dict, source: str) -> dict:
     result: dict[str, list[dict[str, str]]] = {k: [] for k in _EXTRACT_KEYS}
     for key in _EXTRACT_KEYS:
         items = data.get(key, [])
@@ -399,9 +423,136 @@ async def _extract_evidence_from_file(company_name: str, file_path: str, engine:
                 "fact": fact,
                 "quote": str(item.get("quote") or "").strip(),
                 "timestamp": str(item.get("timestamp") or "").strip(),
-                "source": "vision_extraction",
+                "source": source,
             })
     return result
+
+
+async def _extract_evidence_from_file(company_name: str, file_paths: list[str], engine: str) -> dict:
+    """讓模型原生讀取原始檔案（PDF 頁面圖片或圖片檔），補足 get_text() 抓不到的設計
+    排版頁內容（封面、經營團隊、組織圖等常見版面）。無逐字稿原文可比對，故無法套用
+    _validated_evidence 的引用比對防幻覺機制，改以 vision_extraction 標記讓稽核
+    可區分來源可信度，並在 prompt 內強調只能回報實際看到的內容。"""
+    fields_desc = "\n".join(
+        f'  "{key}": "{label}（{desc}）"'
+        for key, label, desc in _EXTRACT_FIELDS
+    )
+    prompt = f"""你是投資文件事實抽取器。附件是與「{company_name}」相關的補充資料原始檔案，
+可能包含設計排版頁面（封面、經營團隊介紹、組織圖等），也可能有純文字或表格頁面。
+請完整讀取每一頁／每張圖片後再回答，不要只看檔名。
+
+請為每個欄位找出所有明確事實，以 JSON 回傳：
+- 每項格式為 {{"fact":"繁體中文事實", "quote":"檔案中可見的原文文字或數字（找不到就留空字串）", "timestamp":""}}。
+- fact 只能表達你在檔案中實際看到的內容，不得加入常識、推測、評價或外部資訊。
+- 同一事實可放入多個真正相關的欄位，以免後續漏掉重要內容。
+- 這是高召回率抽取，不是摘要；寧可多列也不可只挑幾個重點。
+{_LIST_RECALL_RULE}
+{_ACCURACY_RULE}
+- 檔案中未出現的欄位回傳空陣列 []。
+- 回傳純 JSON，不要加 markdown code block 或說明。
+
+需提取的欄位：
+{{
+{fields_desc}
+}}
+
+請直接回傳 JSON 物件，每個 key 的 value 都是陣列。"""
+
+    raw = await asyncio.to_thread(
+        claude_client.ask_with_files, prompt, file_paths, 240, engine
+    )
+    data = _json_object(raw)
+    return _vision_result_from_data(data, "vision_extraction")
+
+
+async def _extract_material_facts_from_file(company_name: str, file_paths: list[str], engine: str) -> dict:
+    """跟 _extract_evidence_from_file 獨立、互補的第二條讀圖抽取——比照文字管線
+    的 _extract_chunk_dual 雙抽取設計：單一 pass 讀密集名冊/清單頁容易漏，兩條
+    獨立 pass 用不同的提問角度各自掃一次、結果合併，任一條漏掉的另一條有機會補上。"""
+    field_choices = "\n".join(
+        f'- {key}: {label}' for key, label, _ in _EXTRACT_FIELDS
+    )
+    prompt = f"""你是投資文件的高召回率事實稽核員。附件是與「{company_name}」相關的補充資料原始
+檔案，請完整讀取每一頁／每張圖片，按頁面出現順序，掃描每一個投資重要事實。
+
+這不是摘要。特別不可漏掉：
+- 金額、比例、人數、年份、時程與成長率
+- 經營團隊、董監事、關鍵人員：每個人的姓名、學歷、職稱、經歷都要各自列一條，不可只列幾位代表
+- 客戶地區與類型、訂單變化、收入模式與海外布局
+- 核心能力、組織變化、經營原則與明確不做的事
+- 募資、併購、股權、表決權、IPO 動機與資金用途
+{_LIST_RECALL_RULE}
+{_ACCURACY_RULE}
+
+每筆事實指定一個最適合的 field，格式：
+{{"facts":[{{"field":"field_key","fact":"繁體中文事實","quote":"檔案中可見的原文文字（找不到就留空字串）","timestamp":""}}]}}
+
+field 只能從以下選擇：
+{field_choices}
+
+只回傳純 JSON，不要加 markdown code block 或說明。"""
+
+    raw = await asyncio.to_thread(
+        claude_client.ask_with_files, prompt, file_paths, 240, engine
+    )
+    data = _json_object(raw)
+    grouped: dict[str, list[dict]] = {key: [] for key in _EXTRACT_KEYS}
+    for item in data.get("facts", []):
+        if isinstance(item, dict) and item.get("field") in grouped:
+            grouped[item["field"]].append(item)
+    return _vision_result_from_data(grouped, "vision_extraction")
+
+
+def _prepare_vision_files(native_file_path: str) -> tuple[list[str], list[str]]:
+    """回傳 (要交給模型讀的檔案路徑清單, 用完要清掉的暫存檔清單)。
+
+    直接把整份 PDF 交給 CLI 自己的 Read tool 讀，遇到超長版面（例如整頁截圖式
+    排版）CLI 內部轉圖片這一步畫質常常被壓得比原始內嵌圖片差，模型會把相似字形
+    猜成別的字（幻覺人名/學校，而不是單純漏抓）。改成我們自己用
+    file_parser.extract_pdf_image_only_pages 把「沒有文字層的那幾頁」內嵌的原始
+    圖片直接抓出來，原封不動交給模型——畫質等於人眼直接看到的版面。
+    非 PDF（單張圖片檔）或抓不到任何圖片頁的 PDF，直接交回原始路徑。"""
+    if Path(native_file_path).suffix.lower() != ".pdf":
+        return [native_file_path], []
+    from services import file_parser
+    try:
+        content = Path(native_file_path).read_bytes()
+    except OSError:
+        return [native_file_path], []
+    page_images = file_parser.extract_pdf_image_only_pages(content)
+    if not page_images:
+        return [native_file_path], []
+    tmp_paths: list[str] = []
+    for i, (ext, img_bytes) in enumerate(page_images):
+        suffix = f"_p{i + 1}.{ext or 'png'}"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(img_bytes)
+        tmp.close()
+        tmp_paths.append(tmp.name)
+    return tmp_paths, tmp_paths
+
+
+async def _extract_evidence_dual_from_file(company_name: str, native_file_path: str, engine: str) -> list[dict]:
+    """比照 _extract_chunk_dual：兩條獨立讀圖 pass 一起跑，其中一條失敗或漏抓
+    不影響另一條，結果都合併進同一個 evidence pool。"""
+    file_paths, tmp_paths = _prepare_vision_files(native_file_path)
+    try:
+        results = await asyncio.gather(
+            _extract_evidence_from_file(company_name, file_paths, engine),
+            _extract_material_facts_from_file(company_name, file_paths, engine),
+            return_exceptions=True,
+        )
+        successful = [result for result in results if isinstance(result, dict)]
+        for result in results:
+            if isinstance(result, Exception):
+                log.warning("原始檔案 vision 抽取其中一條 pass 失敗（%s）：%s", native_file_path, result)
+        return successful
+    finally:
+        for p in tmp_paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 async def _extract_material_facts_once(
@@ -530,6 +681,7 @@ async def _synthesize_fields_from_evidence(
     at least one valid evidence ID. Raw evidence remains in the audit payload.
     """
     fields = {key: "" for key in _EXTRACT_KEYS}
+    fields.update({key: "" for key in FINANCIAL_TABLE_KEYS})
     coverage: dict[str, dict] = {}
     fields["interview_date"] = _interview_date_from_evidence(
         evidence["interview_date"]
@@ -540,10 +692,15 @@ async def _synthesize_fields_from_evidence(
         "synthesized": False,
     }
 
-    results = await asyncio.gather(*(
-        _synthesize_field_group(company_name, group, evidence, engine)
-        for group in _SYNTHESIS_GROUPS
-    ), return_exceptions=True)
+    group_results, financials_table = await asyncio.gather(
+        asyncio.gather(*(
+            _synthesize_field_group(company_name, group, evidence, engine)
+            for group in _SYNTHESIS_GROUPS
+        ), return_exceptions=True),
+        _synthesize_financials_table(company_name, evidence["financials"], engine),
+    )
+    fields.update(financials_table)
+    results = group_results
 
     for group, result in zip(_SYNTHESIS_GROUPS, results):
         parsed = result if isinstance(result, dict) else {}
@@ -571,6 +728,91 @@ async def _synthesize_fields_from_evidence(
                 "synthesized": bool(text and used_ids),
             }
     return fields, coverage
+
+
+_CURRENCY_UNIT_SUFFIX_RE = re.compile(r"元$")
+
+
+def _strip_currency_unit(value: str) -> str:
+    """表格是數字欄位，不需要「元」這種單位字樣（單位在表頭/欄位名稱已經講明）。
+    只去掉結尾的「元」，不動百分號（毛利率(%) 那格需要保留 %）、不重新換算
+    金額大小——萬元/億元換算成基本元是 prompt 裡就要求 AI 做的事，這裡只是防呆，
+    去掉結尾「元」已經同時涵蓋「萬元」「億元」這類複合單位。"""
+    return _CURRENCY_UNIT_SUFFIX_RE.sub("", value.strip()).strip()
+
+
+async def _synthesize_financials_table(
+    company_name: str,
+    financials_evidence: list[dict[str, str]],
+    engine: str,
+) -> dict[str, str]:
+    """從 financials 欄位已驗證的事實裡，挑出能對應到多期財務表格（年度 x
+    Now/Now+1/Now+2/Now+3）的數字，自動填進 FINANCIAL_TABLE_KEYS，並嘗試判斷
+    每期實際代表的財報期間（FINANCIAL_PERIOD_LABEL_KEYS，例如「114/8/31」）。
+    不確定或補充資料未提供的期別/指標留空，讓使用者在 UI 手動補（大多數上傳
+    資料只有當期實際數字，Now+1~+3 通常是未來預測，本來就不是能從公司資料
+    抽出來的東西）。抽取失敗時整表留空，不影響其他欄位的統整結果。"""
+    result = {key: "" for key in FINANCIAL_TABLE_KEYS}
+    result.update({key: "" for key in FINANCIAL_PERIOD_LABEL_KEYS})
+    facts = _deduplicated_facts(financials_evidence)
+    if not facts:
+        return result
+
+    metrics_desc = "\n".join(
+        f'- {key}: {label}（常見措辭：{hint}）' if hint else f'- {key}: {label}'
+        for key, label, hint in FINANCIAL_TABLE_METRICS
+    )
+    periods_desc = "\n".join(f'- {key}: {label}' for key, label in FINANCIAL_TABLE_PERIODS)
+    payload = [{"fact": item["fact"]} for item in facts]
+
+    prompt = f"""你是台灣私募股權團隊的財務數字整理員。請從下方「{company_name}」已驗證的財務
+事實中，挑出能對應到多期財務預測表格的數字，填進對應的期別與指標。
+
+期別（period）只能從：
+{periods_desc}
+
+指標（metric）只能從（括號內是補充資料可能出現的會計科目措辭，看到這些字眼就對應到該 metric）：
+{metrics_desc}
+
+規則：
+1. 只填 evidence 明確支持的期別與指標；不確定、要推算或未提及的一律不要輸出該項。
+2. 大多數 evidence 只會對應到「Now」（目前/最近一期實際數字），這是正常情況；
+   Now+1、Now+2、Now+3 只有在 evidence 明確標示為未來預測/目標時才填。
+3. 數字只能輸出純數字（可含千分位逗號），不要加「元」「新台幣」等單位文字；
+   如果原文是萬元、億元等大單位，換算成基本元的數字再輸出（例如「1.2億元」寫成
+   "120,000,000"）；毛利率(%) 這類本身就是百分比的欄位，維持含 % 的寫法。
+4. 每個有填數字的期別，額外用 period_label 標出這期實際代表的財報期間或截止
+   日期，格式跟 evidence 原文一致（例如「114/8/31」或「114年1-8月」），
+   找不到明確期間就整個省略 period_label，不要用「Now」這種代稱敷衍。
+5. 只輸出 JSON，格式如下，缺的期別或指標整個省略：
+{{"now":{{"period_label":"114/8/31","revenue":"14,452,108"}}, "now1":{{}}}}
+
+已驗證財務事實：
+{json.dumps(payload, ensure_ascii=False)}
+"""
+    try:
+        raw = await asyncio.to_thread(claude_client.ask, prompt, 120, None, engine)
+        data = _json_object(raw)
+    except Exception as e:
+        log.warning("財務表格統整失敗，整表留空：%s", e)
+        return result
+
+    metric_keys = {key for key, _, _ in FINANCIAL_TABLE_METRICS}
+    for period_key, _ in FINANCIAL_TABLE_PERIODS:
+        period_data = data.get(period_key)
+        if not isinstance(period_data, dict):
+            continue
+        period_label = str(period_data.get("period_label") or "").strip()
+        if period_label:
+            result[f"fin_period_label_{period_key}"] = period_label
+        for metric_key, value in period_data.items():
+            if metric_key not in metric_keys or not value:
+                continue
+            cleaned = str(value).strip()
+            if metric_key != "gross_margin_pct":
+                cleaned = _strip_currency_unit(cleaned)
+            result[f"fin_{period_key}_{metric_key}"] = cleaned
+    return result
 
 
 async def _synthesize_field_group(
@@ -697,6 +939,48 @@ def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:
             new_p = cell.add_paragraph()
             new_p.add_run(line)
 
+    # ── 財務狀況儲存格裡的巢狀表格（年度 x Now/Now+1/Now+2/Now+3）─────────────────
+    _fin_metric_by_label = {label: key for key, label, _ in FINANCIAL_TABLE_METRICS}
+    _fin_period_by_label = {label: key for key, label in FINANCIAL_TABLE_PERIODS}
+
+    def _set_cell_text(target, value: str):
+        for p in target.paragraphs[1:]:
+            target._tc.remove(p._p)
+        first_p = target.paragraphs[0] if target.paragraphs else target.add_paragraph()
+        for run in list(first_p.runs):
+            first_p._p.remove(run._r)
+        if value:
+            first_p.add_run(value)
+
+    def _fill_financials_table(cell):
+        if not cell.tables:
+            return
+        fin_table = cell.tables[0]
+        if not fin_table.rows:
+            return
+        period_by_col: dict[int, str] = {}
+        header_cells = fin_table.rows[0].cells
+        for col_idx, header_cell in enumerate(header_cells):
+            period_key = _fin_period_by_label.get(header_cell.text.strip())
+            if period_key:
+                period_by_col[col_idx] = period_key
+        # 表頭預設是 Now/Now+1/Now+2/Now+3；有實際財報期間（例如 114/8/31）時換成
+        # 真正的期間文字，讓表格反映補充資料本身的期別，不是永遠顯示通用代稱。
+        for col_idx, period_key in period_by_col.items():
+            period_label = memo.get(f"fin_period_label_{period_key}", "")
+            if period_label:
+                _set_cell_text(header_cells[col_idx], period_label)
+        for row in fin_table.rows[1:]:
+            cells = row.cells
+            metric_key = _fin_metric_by_label.get(cells[0].text.strip())
+            if not metric_key:
+                continue
+            for col_idx, period_key in period_by_col.items():
+                if col_idx >= len(cells):
+                    continue
+                value = memo.get(f"fin_{period_key}_{metric_key}", "")
+                _set_cell_text(cells[col_idx], value)
+
     # ── Iterate table cells ───────────────────────────────────────────────────
     if doc.tables:
         table = doc.tables[0]
@@ -712,6 +996,8 @@ def fill_template(company: dict, memo: dict, interview_date: str = "") -> bytes:
                         break
                 if matched_key:
                     _fill_cell(cell, _get_value(matched_key))
+                    if matched_key == "financials":
+                        _fill_financials_table(cell)
 
     buf = io.BytesIO()
     doc.save(buf)
