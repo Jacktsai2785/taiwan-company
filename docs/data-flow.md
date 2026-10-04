@@ -1,7 +1,7 @@
 ---
 title: 資料流
 status: living
-last_updated: 2026-08-05
+last_updated: 2026-10-04
 source_repo: ~/taiwan-company
 ---
 
@@ -43,7 +43,7 @@ source_repo: ~/taiwan-company
 
 - 大股東段比照 modal `_renderShareholderSection`：董監事持股合計 < 99.9% 才顯示，列出未揭露比例提醒；並即時串 `mops_investee` 反查哪些公發公司揭露持有本公司股份（查不到不阻擋匯出）
 - 專利段把 `company.patents` 列成表（專利號 / 名稱 / 申請日 / 狀態 / 發明人）
-- **補充來源 callout**：公司簡介裡的「（簡報補充）／（訪談補充）／（介紹補充）／（筆記補充）」比照 modal `_supCallout` 渲染成來源著色的方塊（左側色條 + 底色 tint + 色標題），DOCX 用單格表格、PDF 用 filled rect；行內補充則著色文字。配色與 `style.css` 的 `.sup-*` 一致
+- **補充來源 callout**：公司簡介裡的「（簡報補充）／（訪談補充）／（介紹補充）／（筆記補充）」比照 modal `_supCallout` 渲染成來源著色的方塊（左側色條 + 底色 tint + 色標題），DOCX 用單格表格、PDF 用 filled rect；行內補充則著色文字。配色與 `static/style-*.css` 裡的 `.sup-*` 一致
 - endpoint 為 async，匯出前先 await holders 反查再交給 exporter
 
 ## 母子公司關係圖
@@ -66,9 +66,31 @@ source_repo: ~/taiwan-company
 
 Memo 欄位（從 `MemoSave` model 得知）：訪談日期、案源、受訪人、實收資本、地址、設立日、承銷商、簽證會計師、董事長、總經理、員工數、IPO 時程、投資條件、業務 / 營收、財務、經營團隊、董監持股、近期發展、主要客戶 / 供應商、產能、競爭者、產業趨勢、風險追蹤、結論。
 
+## 競業關係
+
+`routers/competitors.py`（邏輯在 `services/competitor_service.py`）維護公司之間的競業連結：
+
+- `GET /{id}/competitor-graph` 取競業圖；`POST /{id}/competitors/add|remove` 手動增刪
+- `POST /symmetrize-competitors`、`/relink-competitors`、`/backfill-competitors` 是批次維護（補成雙向、依名稱重連 id、補回缺漏），不經 UI 排程
+- 簡介生成時 `gather_competitor_context` 會把已知競業併進 prompt
+
+## 公司登記每股金額（findbiz）
+
+`routers/findbiz.py` 用 Playwright 開真實瀏覽器（非 headless，需 DISPLAY）抓 findbiz.nat.gov.tw 的每股金額：`POST /api/findbiz/scrape` 啟動並回 `session_id` → 使用者手動通過 Cloudflare 後 `POST /confirm/{session_id}` → `GET /stream/{session_id}` 以 SSE 回報進度，結果寫回 `par_value` / `total_shares`。
+
+## 產業地圖
+
+`routers/industry_map.py` 依產業別呼叫 AI 生成產業鏈地圖（`GET /api/industry-map/{industry}/generate`，SSE），結果存 `data/industry_maps.json`。另有細分（`subdivide/propose` → `subdivide`）與合併（`merge`）：細分會改寫 `companies.json` 的產業標籤，寫入前先備份。`industry_maps.json` 由使用者手動觸發生成，排程器不會重生，所以納入每日備份。
+
+## 新聞黑名單
+
+`routers/news_blacklist.py`：前端新聞卡片的「不要這則」呼叫 `POST /api/news/dismiss`，每累積 5 筆自動請 AI 歸納過濾規則（`services/blacklist.py`，存 `data/blacklist.json`）。`GET /api/news/blacklist` 與 `POST /api/news/analyze` 是手動維運端點，刻意不接 UI。
+
 ## 每日新聞 digest
 
-- 啟動時 lifespan 起兩個排程：08:00 跑 `refresh_all_digests`、08:05 跑 `refresh_all_trends`
+- 啟動時 lifespan 起一個排程 task：每天 08:00（台灣時間）之後依序跑 `refresh_all_digests`、`refresh_all_trends`
+- **漏跑會補跑**：以 `data/scheduler_state.json` 的 `last_daily_run` 判斷今天是否已跑；機器在 08:00 關機，開機後（最久 1 小時內）自動補跑。跑完才記日期，中途被關掉下次會重跑
+- 啟動時另有對帳：`reset_interrupted_jobs` 把上次中斷殘留的 `enrich_status: generating`、`materials_generating` 清掉
 - 每個產業別獨立快取在 `daily_digest.json` / `industry_trends.json`，過 90 天自動 prune
 - 新聞源：Google News RSS（`feedparser`），用產業同義詞擴展查詢；過濾中國媒體（人民日報、新華社等）
 - AI 整理成「每日 digest」與「本季趨勢」，前端側欄按產業別呈現
@@ -107,8 +129,15 @@ materials_summary: 由上傳簡報用 Opus（最新）生成的簡報版簡介�
 materials_blurb: 簡報簡介的一句話
 materials_generated_at: 簡報簡介生成時間 ISO timestamp
 materials_applied_headings: [頂層段落標題]（summary 中含簡報內容的頂層段落，通常是「營運綜覽」與被取代的「業務概況」，前端據此標「簡報」chip；整份重新生成 summary 時會清空）
+enrich_status: "" / ok / failed / generating（generating 只會出現在任務執行中，啟動時殘留的會被清掉）
+enrich_error: 失敗原因（enrich_status 為 failed 時）
+enrich_warning: 簡介生成成功、但政府登記資料查無或失敗時的提示（卡片顯示「登記資料未更新」）；成功時為空字串
 last_updated: ISO timestamp
 ```
+
+## 備份
+
+`taiwan-company-backup.timer` 每天 03:30 打包 `companies.json`、`config.json`、`industry_keywords.json`、`blacklist.json`、`industry_maps.json` 與 `uploads/`、`memo_runs/`；純快取（digest、trends、`listing_cache.json`）不備份。
 
 ## 相關
 

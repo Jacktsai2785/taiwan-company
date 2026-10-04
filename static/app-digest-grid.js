@@ -442,13 +442,16 @@ function companyCardHtml(c) {
 
   const isWatched = c.watched === true;
   const cardClass = (isEnriching ? " enriching" : isDone ? " enriching-done" : isFailed ? " enrich-failed" : "") + (!(c.industries || []).length ? " no-industry" : "") + (isWatched ? " watched" : "");
+  const warnBadge = c.enrich_warning
+    ? `<span class="warn-badge" title="${escHtml(c.enrich_warning)}">⚠ 登記資料未更新</span>`
+    : "";
   const statusBadge = isEnriching
     ? '<span class="enriching-badge">● 生成中</span>'
     : isFailed
     ? `<button class="retry-badge" onclick="event.stopPropagation();retryEnrich('${c.id}')" title="重新生成公司簡介">⚠ 生成失敗 · 重試</button>`
     : isDone
-    ? '<span class="done-badge">✓ 已完成</span>'
-    : "";
+    ? '<span class="done-badge">✓ 已完成</span>' + warnBadge
+    : warnBadge;
 
   const groupBadge = c.group ? `<span class="group-badge">${escHtml(c.group)}</span>` : "";
   const labelChips = (c.labels || []).map(l =>

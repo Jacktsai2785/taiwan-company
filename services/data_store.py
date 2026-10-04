@@ -941,6 +941,31 @@ def merge_children_into(parent: str, descendants: list[str]) -> dict:
     return {"removed": list(desc_set), "retagged": retagged}
 
 
+def reset_interrupted_jobs() -> dict:
+    """啟動對帳：把上次關機/crash 時還在跑的背景任務殘留狀態清掉。
+
+    服務剛啟動時記憶體裡不可能有執行中的任務，所以任何 enrich_status == "generating"
+    或 materials_generating == True 都是孤兒。有簡介的公司歸回「無狀態」（資料本身完好），
+    沒簡介的標 failed，讓卡片出現「重試」入口，而不是永遠停在生成中。"""
+    with _LOCK:
+        store = _read(COMPANIES_FILE, DEFAULT_COMPANIES)
+        enrich = materials = 0
+        for c in store["companies"]:
+            if c.get("enrich_status") == "generating":
+                enrich += 1
+                if c.get("summary"):
+                    c["enrich_status"] = ""
+                else:
+                    c["enrich_status"] = "failed"
+                    c["enrich_error"] = "上次生成被中斷，請按『重試』重新生成"
+            if c.get("materials_generating"):
+                materials += 1
+                c["materials_generating"] = False
+        if enrich or materials:
+            _write(COMPANIES_FILE, store)
+        return {"enrich": enrich, "materials": materials}
+
+
 def reconcile_industries() -> dict:
     """啟動對帳（非破壞）：把公司掛著、但 config.industries 已無的產業補回 config。
     rename/delete/subdivision/merge 是 config+companies 兩段寫，中途被 kill 會留下

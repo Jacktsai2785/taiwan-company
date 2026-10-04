@@ -546,6 +546,9 @@ async def _enrich_company(company_id: str, engine: str = "") -> None:
 
         name = company["name"]
         stored_tax_id = company.get("tax_id", "")
+        # 登記資料這步失敗不擋簡介生成，但要留下痕跡：否則最後 enrich_status 照樣是 ok，
+        # 使用者事後無從分辨「簡介有了、登記資料卻沒更新」。
+        gcis_warning = ""
         ev.progress(f"步驟 1/2：查詢政府登記資料（{name}）…")
 
         try:
@@ -572,9 +575,11 @@ async def _enrich_company(company_id: str, engine: str = "") -> None:
                 if clean.get("name"):
                     ev.progress(f"公司名稱更新為：{clean['name']}")
             else:
+                gcis_warning = "政府登記資料查無，保留既有資料"
                 ev.progress("政府登記資料暫時查無，保留既有資料")
         except Exception as e:
             log.warning("GCIS enrichment failed for %s: %s", name, e)
+            gcis_warning = "政府登記資料查詢失敗，資料未更新"
             ev.progress("政府登記資料查詢暫時失敗，將僅生成簡介")
 
         ev.progress("步驟 2/2：生成公司簡介（約 3–7 分鐘）…")
@@ -593,6 +598,7 @@ async def _enrich_company(company_id: str, engine: str = "") -> None:
                 "enrich_status": "ok",
                 "enriched_at": datetime.now(timezone.utc).isoformat(),
                 "enrich_error": "",
+                "enrich_warning": gcis_warning,
             })
             ev.data({"summary": saved["summary"], "blurb": saved["blurb"]})
             ev.progress("公司簡介已生成完成")
@@ -604,6 +610,7 @@ async def _enrich_company(company_id: str, engine: str = "") -> None:
             data_store.update_company(company_id, {
                 "enrich_status": "failed",
                 "enrich_error": "公司簡介生成失敗，可在卡片點『重試』重新生成",
+                "enrich_warning": gcis_warning,
             })
             ev.error("公司簡介生成失敗，可在卡片點『重試』重新生成", code=claude_client.classify_ai_error(e))
 

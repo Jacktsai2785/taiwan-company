@@ -31,25 +31,46 @@ BASE_DIR = Path(__file__).parent
 VERSION = (BASE_DIR / "VERSION").read_text().strip()
 
 
+_SCHEDULER_STATE = BASE_DIR / "data" / "scheduler_state.json"
+_DAILY_RUN_HOUR = 8
+
+
+def _daily_run_due(now: datetime, last_run: str) -> bool:
+    """今天 08:00 已過、且今天還沒成功跑過就該跑。
+
+    以「上次跑的日期」判斷而非「睡到下一個 08:00」：機器（WSL）在 08:00 關機或休眠時，
+    開機後會立刻補跑，而不是整天沒有 digest 也沒有任何錯誤。"""
+    return now.hour >= _DAILY_RUN_HOUR and last_run != now.strftime("%Y-%m-%d")
+
+
+def _seconds_until_next_check(now: datetime) -> float:
+    """睡到下一個 08:00，但最長 1 小時就醒來重判一次（睡眠期間時鐘跳動、休眠喚醒都會被接住）。"""
+    target = now.replace(hour=_DAILY_RUN_HOUR, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    return min((target - now).total_seconds() + 1, 3600)
+
+
 async def _daily_scheduler() -> None:
-    """每天 08:00 台灣時間依序跑 digests → trends（不是兩個各自獨立、只靠固定
-    時間差錯開的 task——trends 讀的是累積的歷史快取，跟正在寫入當天 digest 的
-    檔案交錯執行沒有幫助，依序執行更乾淨）。
+    """每天 08:00（台灣時間）之後依序跑 digests → trends，漏跑會補跑。
+
+    先 digests 再 trends 是因為 trends 讀累積的歷史快取，跟正在寫入當天 digest 的
+    檔案交錯執行沒有幫助，依序執行更乾淨。
 
     refresh_all_digests/refresh_all_trends 內部仍會逐產業 try/except（單一產業
     失敗不影響其他產業），並回傳失敗清單；這裡只對失敗的產業做一次 1 小時後的
-    有界重試，仍失敗才等到隔天——不再是「log 說 1 小時後重試、實際上因為例外
-    早被內層吞掉而要等到隔天」的落差。"""
+    有界重試，仍失敗才等到隔天。跑完才記下當天日期，中途被關掉下次啟動會重跑。"""
+    from services import data_store
     from services.daily_digest import refresh_all_digests, refresh_all_trends
     while True:
         try:
             now = datetime.now(TAIWAN_TZ)
-            today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
-            next_8am = today_8am if now < today_8am else today_8am + timedelta(days=1)
-            wait = (next_8am - now).total_seconds()
-            log.info("Daily scheduler: next run in %.0f s", wait)
-            await asyncio.sleep(wait)
+            state = data_store.read_json(_SCHEDULER_STATE, {})
+            if not _daily_run_due(now, state.get("last_daily_run", "")):
+                await asyncio.sleep(_seconds_until_next_check(now))
+                continue
 
+            log.info("Daily scheduler: running digests/trends for %s", now.strftime("%Y-%m-%d"))
             failed_digests = await refresh_all_digests()
             failed_trends = await refresh_all_trends()
 
@@ -66,6 +87,7 @@ async def _daily_scheduler() -> None:
                         "Daily scheduler: retry still failing for digests=%s trends=%s — giving up until tomorrow 08:00",
                         still_failed_digests, still_failed_trends,
                     )
+            data_store.write_json(_SCHEDULER_STATE, {"last_daily_run": now.strftime("%Y-%m-%d")})
         except asyncio.CancelledError:
             raise  # 正常關機路徑，讓它往上傳遞
         except Exception:
@@ -85,6 +107,13 @@ async def lifespan(app: FastAPI):
             log.info("啟動對帳：補回 %d 個殭屍產業標籤到 config", len(r["readded_industries"]))
     except Exception:
         log.exception("啟動產業對帳失敗（非致命）")
+    try:
+        from services.data_store import reset_interrupted_jobs
+        r = reset_interrupted_jobs()
+        if r["enrich"] or r["materials"]:
+            log.info("啟動對帳：清掉上次中斷的背景任務殘留狀態（簡介 %d、簡報 %d）", r["enrich"], r["materials"])
+    except Exception:
+        log.exception("啟動任務狀態對帳失敗（非致命）")
     t1 = asyncio.create_task(_daily_scheduler())
     yield
     for t in (t1,):

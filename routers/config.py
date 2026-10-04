@@ -65,21 +65,6 @@ def get_labels():
     return data_store.get_config()["labels"]
 
 
-@router.get("/groups")
-def get_groups():
-    """Return {industry: [group, ...]} derived from company data."""
-    companies = data_store.get_all_companies()
-    groups: dict[str, list[str]] = {}
-    for c in companies:
-        for ind in data_store.company_industries(c):
-            grp = c.get("group") or ""
-            if ind not in groups:
-                groups[ind] = []
-            if grp and grp not in groups[ind]:
-                groups[ind].append(grp)
-    return groups
-
-
 @router.post("/industries/suggest")
 async def suggest_industry_match(req: IndustrySuggest, ai: dict = Depends(ai_from_headers)):
     """Ask Claude which existing companies fit the new industry name."""

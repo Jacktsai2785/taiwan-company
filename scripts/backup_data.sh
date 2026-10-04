@@ -18,9 +18,10 @@ DATA_DIR="$REPO_ROOT/data"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/taiwan-company-backups}"
 KEEP="${BACKUP_KEEP:-30}"
 
-# 要備份的「使用者資料」（手工累積、無法重建）。快取類（daily_digest / industry_trends /
-# industry_maps / migrate_progress）不備份——排程器會重生。
-FILES=(companies.json config.json industry_keywords.json blacklist.json)
+# 要備份的「使用者資料」（手工累積、無法重建）。industry_maps.json 由使用者手動觸發 AI
+# 生成（排程器不會重生，重做要花額度），所以要備份。純快取（daily_digest / industry_trends /
+# listing_cache / migrate_progress）不備份——排程器會重生。
+FILES=(companies.json config.json industry_keywords.json blacklist.json industry_maps.json)
 # These are irreplaceable user records too: source decks, transcripts, audio,
 # and memo evidence.  Restoring JSON alone would otherwise leave dead URLs.
 DIRS=(uploads memo_runs)
