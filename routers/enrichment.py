@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import claude_client, company_extractor, competitor_service, data_store, gcis_client, report_generator
+from services import claude_client, company_extractor, competitor_service, data_store, gcis_client, google_search, report_generator
 from services.ai_deps import ai_from_headers, ai_from_query
 from services.task_progress import ProgressChannel, spawn_background as _spawn
 
@@ -78,6 +78,24 @@ def _is_homepage_url(url: str) -> bool:
     return path in ("", "/") or not _LONG_DIGIT_RUN.search(path)
 
 
+# 名錄/人力銀行/工商資料站的搜尋結果標題或摘要幾乎必帶這些欄位；官網不會。
+# 用內容特徵取代不斷增長的網域黑名單（biz.now.to、ec66.tw、opengovtw.com…）。
+_REGISTRY_TEXT_HINTS = (
+    "統編", "統一編號", "負責人", "資本額", "公司登記", "登記地址", "登記資料",
+    "工商登記", "徵才", "人力銀行", "公司資訊", "詢價官網", "工廠資訊",
+    "公司情報", "董監事", "公司查詢",
+)
+_TAX_ID_HOST = re.compile(r"(^|[.-])\d{8}([.-]|$)")
+
+
+def _looks_like_registry_listing(url: str, title: str, snippet: str) -> bool:
+    host = urlsplit(url).hostname or ""
+    if _TAX_ID_HOST.search(host):
+        return True
+    text = f"{title} {snippet}"
+    return any(hint in text for hint in _REGISTRY_TEXT_HINTS)
+
+
 def _mentions_company(text: str, short_name: str, full_name: str) -> bool:
     if short_name in text or full_name in text:
         return True
@@ -118,24 +136,32 @@ async def _search_duckduckgo(query: str, *, limit: int = 10) -> list[dict[str, s
 
 
 async def _find_website_via_search(name: str, short_name: str, full_name: str) -> dict | None:
-    """模仿人類直接把公司名丟進搜尋引擎：一次 HTTP 查詢，套聚合器/首頁過濾，
-    取代動輒 60 秒的多輪 AI 搜尋。找不到夠有把握的結果時回 None，交給 AI 補搜，
-    所以只會影響速度、不會降低涵蓋率。"""
-    try:
-        results = await _search_duckduckgo(full_name)
-    except httpx.HTTPError:
-        return None
-    for result in results:
-        url = result["url"]
-        if _is_aggregator_domain(url):
+    """模仿人類直接把公司名丟進搜尋引擎：Google（Playwright）優先，被擋或沒結果才用
+    DuckDuckGo，套聚合器/名錄/首頁過濾，取代動輒 60 秒的多輪 AI 搜尋。找不到夠有把握的
+    結果時回 None，交給 AI 補搜，所以只會影響速度、不會降低涵蓋率。"""
+    # 人在 Google 打的是品牌簡稱（「冠青能源」），全名搜尋會被名錄站塞滿。
+    queries = [(google_search.search_google, short_name), (google_search.search_google, full_name)]
+    if not google_search.is_available():
+        queries = []
+    queries.append((_search_duckduckgo, full_name))
+    for search, query in queries:
+        try:
+            results = await search(query)
+        except httpx.HTTPError:
             continue
-        if not _is_homepage_url(url):
-            continue
-        if not _mentions_company(f"{result['title']} {result['snippet']}", short_name, full_name):
-            continue
-        if not await _ssrf_safe_reachable(url):
-            continue
-        return {"website": url, "status": "found"}
+        for result in results:
+            url = result["url"]
+            if _is_aggregator_domain(url):
+                continue
+            if not _is_homepage_url(url):
+                continue
+            if _looks_like_registry_listing(url, result["title"], result["snippet"]):
+                continue
+            if not _mentions_company(f"{result['title']} {result['snippet']}", short_name, full_name):
+                continue
+            if not await _ssrf_safe_reachable(url):
+                continue
+            return {"website": url, "status": "found"}
     return None
 
 
